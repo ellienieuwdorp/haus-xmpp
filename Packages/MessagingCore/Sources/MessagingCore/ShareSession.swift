@@ -4,16 +4,13 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// How one shared message stands, read from the store. Only the server's stream-management acknowledgement counts as
-/// sent; a written stanza or a finished PUT does not.
+/// Only the server's stream-management acknowledgement counts as sent; a written stanza or a finished PUT does not.
 public enum ShareItemState: Sendable, Equatable {
-    /// Durably queued; the app sends it on its next connection unless this session gets there first.
     case queued
     /// Written to the stream, waiting for the server's acknowledgement.
     case sending
-    /// The server acknowledged it.
     case sent
-    /// The server refused it, or its file could not be uploaded: the chat shows it as not sent, with Retry.
+    /// Refused by the server, or its file could not be uploaded.
     case failed
 
     public init(_ message: StoredMessage?) {
@@ -26,18 +23,13 @@ public enum ShareItemState: Sendable, Equatable {
     }
 }
 
-/// A short connection a share extension opens to send what it just queued, while its sheet is on screen. It works
-/// only under the store's transport lease, taken without ever stealing it: a lease held elsewhere (the app, a
-/// notification run) means the share stays queued for whoever holds it. Under the lease it does what a notification
-/// Reply in the background does: recover interrupted submissions, connect with the installation's resource and the
-/// saved stream state, persist everything that arrives before acknowledging it, upload the shared files, run one
-/// outbox pass and wait for the server's acknowledgement. `end()` always follows: it closes the stream, joins every
-/// task and gives the lease back, which marks a stanza still in flight as unconfirmed for the archive to reconcile.
-///
-/// The PUTs run in this process, so the deadline or ending the session cancels them; the rows stay pending and the app
-/// requests new slots for them on its next connection. Nothing here changes trust or sends plaintext.
+/// The share extension's short connection. Works only under the transport lease, never stolen: a lease held
+/// elsewhere leaves the share queued for its holder. Persists everything that arrives before acknowledging it. Always
+/// follow with `end()`, which closes the stream, joins every task and releases the lease; a stanza still in flight
+/// stays unconfirmed for the archive to reconcile. Cancelled PUTs leave their rows pending for the app to request
+/// new slots. Never changes trust or sends plaintext.
 public actor ShareSession {
-    /// Puts the staged ciphertext at the slot; true for a 2xx answer. Injectable for tests.
+    /// True for a 2xx answer.
     public typealias Upload = @Sendable (_ file: URL, _ slot: XMPPUploadSlot, _ size: Int) async throws -> Bool
 
     private let store: MessageStore
@@ -59,21 +51,20 @@ public actor ShareSession {
         self.uploadService = uploadService; self.upload = upload
     }
 
-    /// Polls the non-blocking lease for at most `wait`. False when another process kept it (or the session ended).
+    /// False when another process kept the lease or the session ended.
     public func acquireLease(waitingUpTo wait: Duration = .seconds(3)) async -> Bool {
         guard !ended, !holdsLease else { return holdsLease }
         do { _ = try await acquireTransportOwnership(store, waitingUpTo: wait) }
         catch { return false }
-        // `end()` may have run while the wait slept; the lease it could not release goes back now.
+        // `end()` may have run during the wait and could not release this lease.
         if ended { try? await store.releaseTransportOwnership(); return false }
         holdsLease = true
         return true
     }
 
-    /// Connects, uploads `messageIDs`' files, joins `rooms` and runs one outbox pass, then waits until `deadline` for the
-    /// server to acknowledge every one of them. `progress` hears each message's state as it changes. The deadline, or
-    /// cancelling the calling task, cancels the whole send: the stream closes, and a slot request or a PUT in flight is
-    /// cancelled with it, so this returns promptly and `end()` can give the lease back. Returns the last states read.
+    /// Waits until `deadline` for the server to acknowledge every message. The deadline or cancelling the caller closes
+    /// the stream and cancels any slot request or PUT in flight, so this returns promptly and `end()` can release the
+    /// lease.
     public func send(messageIDs: [String], rooms: Set<String>, until deadline: ContinuousClock.Instant,
                      progress: @escaping @Sendable ([String: ShareItemState]) async -> Void = { _ in }) async -> [String: ShareItemState] {
         guard holdsLease, !ended else { return await states(messageIDs) }
@@ -122,9 +113,8 @@ public actor ShareSession {
         }
     }
 
-    /// Ends the session: closes the stream, joins the consumer and the post-bind duties, runs `presentation` while the
-    /// lease is still held (what arrived on this connection alerts as the notification extension would show it), then
-    /// releases the lease. Safe to call more than once and without a lease.
+    /// Runs `presentation` while the lease is still held, then releases it. Safe to call more than once and without
+    /// a lease.
     public func end(presentation: (@Sendable (MessageStore) async -> Void)? = nil) async {
         guard !ended else { return }
         ended = true
@@ -142,7 +132,6 @@ public actor ShareSession {
         holdsLease = false
     }
 
-    /// The states of `messageIDs` as stored.
     public func states(_ messageIDs: [String]) async -> [String: ShareItemState] {
         var result: [String: ShareItemState] = [:]
         for id in messageIDs { result[id] = ShareItemState(try? await store.message(accountID: account.accountID, messageID: id)) }
@@ -158,13 +147,12 @@ public actor ShareSession {
         try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
         if let resource = account.resource { try await client.configureResource(resource) }
         let preferences = try await store.accountPreferences(accountID: accountID)
-        // The user is in another app: this session must not make them look online.
+        // The user is in another app, so this session must not make them look online.
         try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: account.leftForeground),
                                          clientActive: false)
         self.client = client
-        // Everything that arrives is persisted before it is acknowledged, exactly as the notification extension does. The
-        // processor refuses the next acknowledgement after a stanza it could not store and closes the stream itself, so
-        // no unhandled gap is ever acknowledged.
+        // The processor refuses the next acknowledgement after a stanza it could not store and closes the stream, so no
+        // unhandled gap is ever acknowledged.
         let processor = InboundProcessor(encryption: encryption, client: client, account: accountID)
         consumer = Task {
             for await event in client.events {
@@ -177,11 +165,10 @@ public actor ShareSession {
                                  password: account.password, requireSCRAM: account.requiresSCRAM)
         let resumed = await client.sessionResumed
         Self.log.notice("share session online resumed=\(resumed, privacy: .public)")
-        // As before the app's `.ready`: an identity mismatch fails closed before anything can be sealed.
+        // An identity mismatch fails closed before anything can be sealed.
         try await encryption.initialize(account: accountID, transport: client)
         guard !resumed else { return }
-        // A fresh bind replaced the session the app left hibernating, with its push registration and room occupancy:
-        // restore both alongside the send, as a notification Reply does. `end()` waits for it.
+        // A fresh bind replaced the hibernated session with its push registration and room occupancy; restore both.
         let push = account.push, encryption = encryption, store = store
         let limit = max(.zero, min(.seconds(5), deadline - .now))
         restoration = Task {
@@ -192,7 +179,7 @@ public actor ShareSession {
         }
     }
 
-    /// The rooms a shared text goes to must confirm the join first: the drain sends only to joined rooms.
+    // The drain sends only to joined rooms.
     private func joinedRooms(_ rooms: Set<String>, client: XMPPClient) async -> Set<String> {
         guard !rooms.isEmpty else { return [] }
         let fallback = String(account.accountID.prefix { $0 != "@" })
@@ -204,11 +191,8 @@ public actor ShareSession {
         return joined
     }
 
-    /// One slot and one PUT per file waiting in the shared chats, in queue order: a chat's messages are claimable only
-    /// once every earlier file in it is uploaded, so a file queued before (by an earlier share, or the app while
-    /// offline) would otherwise hold this share back. A file the app's background session carries (it has a task) is
-    /// left to the app. A refusal leaves the file pending for the app, which retries it within its own budget; nothing
-    /// here fails a message.
+    // Uploads every waiting file in the shared chats: a chat's messages are claimable only once every earlier file in
+    // it is uploaded. Files with an app upload task, and refusals, are left to the app; nothing here fails a message.
     private func uploadFiles(inChatsOf messageIDs: Set<String>) async throws {
         let accountID = account.accountID
         let waiting = try await store.attachmentsAwaitingUpload(accountID: accountID)
@@ -235,7 +219,6 @@ public actor ShareSession {
         }
     }
 
-    /// The PUT on an ephemeral session of this process, with the slot's permitted headers.
     public static let urlSessionUpload: Upload = { file, slot, size in
         var request = URLRequest(url: slot.put)
         request.httpMethod = "PUT"

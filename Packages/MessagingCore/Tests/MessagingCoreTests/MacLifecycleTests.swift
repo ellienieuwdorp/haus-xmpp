@@ -8,8 +8,7 @@ private func signals(transport: Bool = true, window: Bool = true, reading: Bool 
     LifecycleSignals(transportWanted: transport, windowVisible: window, readsOpenChat: reading, present: present)
 }
 
-/// The attention-dependent guards. On iOS each must decide exactly as the `foreground` flag did; on the Mac each
-/// follows its own signal.
+// The attention-dependent guards. On iOS each follows the transport; on the Mac each follows its own signal.
 struct AttentionRulesTests {
     private let chat = "bob@example.org"
 
@@ -58,14 +57,14 @@ struct AttentionRulesTests {
     }
 }
 
-/// Runs the Mac driver as the glue does: one event at a time with the input clock read alongside.
+// Runs the Mac driver as the glue does: one event at a time with the input clock read alongside.
 private struct MacHarness {
     var driver = MacLifecycleDriver()
     var now = Date(timeIntervalSince1970: 1_790_000_000)
     var applied = LifecycleSignals.inFront
     var transitions: [LifecycleTransition] = []
 
-    /// The updates for `change`, applying each `.change` the way `AppModel` does.
+    // Applies each `.change` as the app does.
     mutating func step(_ change: MacLifecycleDriver.Change, idle seconds: TimeInterval = 1) -> [LifecycleUpdate] {
         let updates = driver.updates(for: .init(change, now: now, secondsSinceInput: seconds))
         transitions = []
@@ -82,7 +81,7 @@ private struct MacHarness {
         return updates
     }
 
-    /// Launched and brought to the front with the chat window key.
+    // Launched and brought to the front with the chat window key.
     static func reading() -> MacHarness {
         var harness = MacHarness()
         _ = harness.step(.launched(.none))
@@ -92,7 +91,7 @@ private struct MacHarness {
 }
 
 struct MacLifecycleDriverTests {
-    /// What the stream then binds with is LifecycleTests' `aNewStreamBindsWithTheCurrentSignals`.
+    // What the stream then binds with is LifecycleTests' `aNewStreamBindsWithTheCurrentSignals`.
     @Test func aLaunchWithNoWindowConnectsUnseen() {
         var harness = MacHarness()
         #expect(harness.step(.launched(.none)) == [.start(signals(window: false, reading: false))])

@@ -2,13 +2,12 @@ import Foundation
 import CryptoKit
 import MessageStore
 
-/// Local notification navigation contains no address, URL, sender name or message body.
-/// This is a lookup hint, never authorization to load another account or connect a server.
+/// Holds no address, URL, sender name or message body. A lookup hint, never authorization to load another account
+/// or connect a server.
 public struct NotificationDestination: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_destination"
-    /// What `messageID` names: an incoming message (every message notification), or this account's own message that
-    /// someone reacted to. Only `.message` stands for something unread; read-state cleanup and message
-    /// actions ignore `.reaction`.
+    /// `.reaction` names this account's own message someone reacted to; read-state cleanup and message actions
+    /// ignore it.
     public enum Kind: String, Sendable { case message, reaction }
     public let accountScope: String
     public let messageID: String
@@ -21,7 +20,6 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
         self.kind = kind
     }
 
-    /// The message payload is unchanged from the single-preview design; a reaction adds `kind`.
     public init?(payload: [String: String]) {
         let kind: Kind
         switch Set(payload.keys) {
@@ -43,8 +41,7 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
     }
     public var description: String { "NotificationDestination(<redacted>)" }
 
-    /// The stored message a tap may open the chat of: an incoming encrypted message, or for a reaction this account's
-    /// own message in the same account. Never another account's.
+    /// An incoming encrypted message, or for a reaction this account's own message. Never another account's.
     public func resolve(accountID: String, store: MessageStore) async throws -> StoredMessage? {
         guard !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
               let message = try await store.message(accountID: accountID, messageID: messageID),
@@ -59,7 +56,7 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
         return message
     }
 
-    /// Whether this destination was issued for `accountID`; says nothing about the message itself.
+    /// Says nothing about the message itself.
     public func belongs(to accountID: String) -> Bool { !accountID.isEmpty && Self.scope(for: accountID) == accountScope }
 
     static func scope(for account: String) -> String {
@@ -68,16 +65,13 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
     }
 }
 
-/// Cleanup-only marker for a notification that has no tap destination: an unreadable placeholder, which
-/// is named by its opaque `unreadable-<digest>` row ID, retained ciphertext, which carries no ID at all (cleanup
-/// recomputes the identifiers of what is still retained), or a reaction to one of this account's messages,
-/// named by the reacted-to message's local UUID. It never routes a tap and holds no address or content.
+/// Cleanup-only marker for a notification with no tap destination. Retained ciphertext carries no ID: cleanup
+/// recomputes the identifiers of what is still retained. Never routes a tap; holds no address or content.
 public struct NotificationReference: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_reference"
     public enum Kind: String, Sendable { case placeholder, retained, reaction }
     public let accountScope: String
     public let kind: Kind
-    /// The placeholder's message row ID, or a reaction's target message ID; nil for retained ciphertext.
     public let messageID: String?
 
     public static func placeholder(accountID: String, messageID: String) -> NotificationReference? {
@@ -128,7 +122,7 @@ public struct NotificationReference: Sendable, Equatable, CustomStringConvertibl
     public func belongs(to accountID: String) -> Bool { !accountID.isEmpty && NotificationDestination.scope(for: accountID) == accountScope }
     public var description: String { "NotificationReference(<redacted>)" }
 
-    /// `unreadable-` and 64 lowercase hex digits: the store's placeholder ID, a digest that names no address.
+    // The store's placeholder ID: a digest that names no address.
     private static func isPlaceholderID(_ id: String) -> Bool {
         let prefix = "unreadable-"
         guard id.hasPrefix(prefix) else { return false }

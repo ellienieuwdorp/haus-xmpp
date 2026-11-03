@@ -5,18 +5,15 @@ import MessageStore
 import os
 import UserNotifications
 
-/// Turns a planned request into a communication notification (Apple, "Implementing communication notifications",
-/// accessed 2026-09-28): an incoming `INSendMessageIntent` whose sender carries the contact's name and pre-scaled
-/// avatar, donated as an `INInteraction`, then applied with `UNNotificationContent.updating(from:)`. Every failure falls
-/// back to the plain request built from the same content, never to the gateway's generic alert.
+/// An incoming `INSendMessageIntent`, donated as an `INInteraction` and applied with
+/// `UNNotificationContent.updating(from:)`. Every failure falls back to the plain request built from the same
+/// content, never to the gateway's generic alert.
 public enum CommunicationNotification {
-    /// Pure mapping from local state to the intent. `avatar` returns the bytes of a pre-scaled image for a verified
-    /// avatar hash (the app writes them into the App Group); nothing here decodes an image.
+    /// `avatar` returns pre-scaled image bytes for a verified avatar hash; nothing here decodes an image.
     public static func intent(_ communication: NotificationCommunication, avatar: (String) -> Data?) -> INSendMessageIntent {
         func person(_ value: NotificationCommunication.Person, isMe: Bool = false) -> INPerson {
             CommunicationPerson.person(value, accountID: communication.account.handle, isMe: isMe, image: value.avatarHash.flatMap(avatar))
         }
-        // A group names everyone who received it, the account included; a direct chat needs no recipients.
         let recipients = communication.isGroup ? [person(communication.account, isMe: true)] + communication.otherRecipients.map { person($0) } : nil
         let intent = INSendMessageIntent(recipients: recipients, outgoingMessageType: .outgoingMessageText, content: nil,
                                          speakableGroupName: communication.groupName.map { INSpeakableString(spokenPhrase: $0) },
@@ -33,10 +30,8 @@ public enum CommunicationNotification {
         return intent
     }
 
-    /// Donates one interaction; injectable for tests.
     public typealias Donate = @Sendable (INInteraction) async throws -> Void
 
-    /// The system donation, through its completion handler.
     public static let systemDonate: Donate = { interaction in
         let box = Unchecked(interaction)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -46,8 +41,7 @@ public enum CommunicationNotification {
         }
     }
 
-    /// The incoming interaction donated for one request. Its group identifier is the conversation identifier
-    /// (`NotificationIdentity.thread`), so a conversation's donations can be deleted together (`CommunicationHistory`).
+    /// The group identifier is the conversation identifier, so a conversation's donations can be deleted together.
     public static func interaction(for intent: INSendMessageIntent) -> INInteraction {
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
@@ -55,10 +49,8 @@ public enum CommunicationNotification {
         return interaction
     }
 
-    /// Donates the incoming interaction (bounded by `donationTimeout`), then returns the content updated from the
-    /// intent, or nil when the update fails; the caller then posts `content` as it is. The result is not mutated further.
-    /// The update does not depend on the donation: a donation that fails or times out (a cold Intents service) is logged
-    /// and the communication style is still applied.
+    /// Nil when the update fails; the caller then posts `content` unchanged. Do not mutate the result. A donation that
+    /// fails or times out (a cold Intents service) is logged and the communication style is still applied.
     public static func content(_ content: UNNotificationContent, intent: INSendMessageIntent,
                                donate: Donate? = systemDonate,
                                donationTimeout: Duration = .milliseconds(1500),
@@ -74,22 +66,18 @@ public enum CommunicationNotification {
     }
 }
 
-/// Deletes donated interactions (Apple, "INInteraction.deleteAll(completion:)", accessed 2026-09-28). Each donation
-/// holds a contact's address, name and avatar and the conversation identifier; they feed system suggestions. Signing
-/// out, turning previews off and turning share suggestions off delete them all: the app has one account, and previews
-/// off means no name or avatar should stay with the system. Blocking, unlinking or relinking a contact deletes that
+/// Each donation holds a contact's address, name and avatar. Signing out, turning previews off and turning share
+/// suggestions off delete them all (the app has one account); blocking, unlinking or relinking a contact deletes that
 /// conversation's.
 public enum CommunicationHistory {
-    /// The deletion the app runs, injectable for tests.
     public typealias DeleteAll = @Sendable () async throws -> Void
 
-    /// Whether a preferences change must delete the donations: previews went from shown to hidden.
     public static func purgesDonations(from old: AccountPreferences, to new: AccountPreferences) -> Bool {
         old.notificationPreviews && !new.notificationPreviews
     }
 
-    /// Best effort: a failure is logged (domain and code only) and never blocks sign-out or the setting. False when the
-    /// system reported a failure, so turning share suggestions off can stay on until the deletion went through.
+    /// Best effort: never blocks sign-out or the setting. False on failure, so turning share suggestions off can wait
+    /// until the deletion went through.
     @discardableResult
     public static func deleteAll(_ delete: DeleteAll = { try await INInteraction.deleteAll() }) async -> Bool {
         do { try await delete(); return true }
@@ -99,12 +87,10 @@ public enum CommunicationHistory {
         }
     }
 
-    /// Deletes one conversation's donations, in both directions (`groupIdentifier` is its conversation identifier,
-    /// `NotificationIdentity.thread`).
+    /// Deletes one conversation's donations in both directions.
     public typealias DeleteConversation = @Sendable (_ conversationIdentifier: String) async throws -> Void
 
-    /// Best effort, like `deleteAll`: blocking a contact, leaving a room or unlinking a contact must not wait on the
-    /// system.
+    /// Best effort: blocking, leaving a room or unlinking must not wait on the system.
     public static func deleteConversations(_ conversationIdentifiers: [String],
                                            delete: @escaping DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
         for identifier in conversationIdentifiers {
@@ -113,9 +99,7 @@ public enum CommunicationHistory {
         }
     }
 
-    /// The person as the store links them now, for a donation about to be made: the contact of a link the app can read
-    /// (`ContactLink.usableContactIdentifier`), or none once it is unlinked, relinked or unreadable. A person named by
-    /// no contact stays so.
+    /// Re-reads the contact link before a donation: none once it is unlinked, relinked or unreadable.
     public static func linkedNow(_ person: NotificationCommunication.Person, accountID: String,
                                  store: MessageStore) async -> NotificationCommunication.Person {
         guard person.contactIdentifier != nil else { return person }
@@ -124,10 +108,9 @@ public enum CommunicationHistory {
                                                 contactIdentifier: stored)
     }
 
-    /// Runs after every donation that named `people`, incoming or outgoing: when one of their links changed while it
-    /// was in flight, deletes the conversation's donations. Unlinking and relinking delete them after their commit and
-    /// this reads after the donation, so whichever runs last deletes the old association, in this process or another.
-    /// (A donation that outlived its own limit can still land after both.)
+    /// Run after every donation that named `people`. Unlinking deletes after its commit and this reads after the
+    /// donation, so whichever runs last deletes the old association, in any process. A donation that outlived its
+    /// own time limit can still land after both.
     public static func withdrawIfRelinked(_ people: [NotificationCommunication.Person], conversation: String, accountID: String,
                                           store: MessageStore,
                                           withdraw: @Sendable (String) async -> Void = { await deleteConversations([$0]) }) async {
@@ -140,7 +123,7 @@ public enum CommunicationHistory {
 private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
 
 extension CommunicationNotification {
-    /// Domain and code only: never a name, handle or body.
+    // Domain and code only: never a name, handle or body.
     static func describe(_ error: any Error) -> String {
         if error is NotificationRunError { return "timeout" }
         let error = error as NSError
@@ -148,6 +131,6 @@ extension CommunicationNotification {
     }
 }
 
-/// `INInteraction` is not Sendable; it is created, donated and dropped by one call.
+// `INInteraction` is not Sendable; it is created, donated and dropped by one call.
 private struct Unchecked<Value>: @unchecked Sendable { let value: Value; init(_ value: Value) { self.value = value } }
 #endif

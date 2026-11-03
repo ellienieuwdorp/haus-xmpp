@@ -19,7 +19,7 @@ struct InboundProcessorTests {
         return (store, InboundProcessor(encryption: encryption, client: client, account: account))
     }
 
-    /// The extension's loop hands every event to the shared processor and ends only on disconnect.
+    // The extension's loop hands every event to the shared processor and ends only on disconnect.
     @Test func backgroundEventsFeedTheProcessorAndEndOnDisconnect() async throws {
         let xml = try XMPPClient.reactionXML(to: peer, targetID: "w", reactions: ["👍"], id: "r1")
         let reaction = try #require(XMPPClient.decodeOutgoingReactionXML(xml, from: account))
@@ -37,7 +37,7 @@ struct InboundProcessorTests {
         #expect(try await store.events(accountID: account, chatID: peer, messageID: "t").map(\.kind) == [.reaction])
     }
 
-    /// A plain receipt from the peer projects onto our own message; one for the peer's own message is refused.
+    // A plain receipt from the peer projects onto our own message; one for the peer's own message is refused.
     @Test func peerReceiptsProjectOntoOwnMessagesOnly() async throws {
         let (store, processor) = try await fixture()
         try await store.insertMessage(StoredMessage(id: "mine", accountID: account, chatID: peer, senderID: account, body: "sent", isOutgoing: true, encryptionProfile: "legacy", wireID: "mine"))
@@ -59,8 +59,8 @@ struct InboundProcessorTests {
         return (store, encryption, InboundProcessor(encryption: encryption, client: XMPPClient(labCertificateAuthority: nil), account: account))
     }
 
-    /// Another device's message without a key for this one is a placeholder, not retained work: the chat needs no
-    /// review, the barrier stays acknowledgeable, and a redelivery adds nothing.
+    // Another device's message without a key for this one is a placeholder, not retained work: the chat needs no
+    // review, the barrier stays acknowledgeable, and a redelivery adds nothing.
     @Test func excludedMessageReturnsExcludedAndKeepsTheBarrierAcknowledgeable() async throws {
         let (store, _, processor) = try await initializedFixture()
         let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([1, 2, 3]))
@@ -79,8 +79,8 @@ struct InboundProcessorTests {
         #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 2))) == .acknowledged)
     }
 
-    /// A stanza our server held for this session (offline storage, a hibernated stream's queue) is placed at the time
-    /// the server stamped, not when the resumed stream delivered it.
+    // A stanza our server held for this session (offline storage, a hibernated stream's queue) is placed at the time
+    // the server stamped, not when the resumed stream delivered it.
     @Test func ourServersStampIsTheTimeOfALiveMessage() async throws {
         let (store, _, processor) = try await initializedFixture()
         let held = Date(timeIntervalSince1970: 1_790_000_000), room = "room@conference.localhost"
@@ -96,9 +96,9 @@ struct InboundProcessorTests {
         #expect(try await store.messages(accountID: account, chatID: room).map(\.sentAt) == [held.addingTimeInterval(60)])
     }
 
-    /// Only a bounce from the address we sent to fails the send; an error one of the peer's resources wrote does not,
-    /// nor does `recipient-unavailable`, which Prosody's mod_smacks sends from the peer's bare JID when one of its
-    /// sessions dies with the message unacknowledged, though the peer's other sessions may have it.
+    // Only a bounce from the address we sent to fails the send; an error one of the peer's resources wrote does not,
+    // nor does `recipient-unavailable`, which Prosody's mod_smacks sends from the peer's bare JID when one of its
+    // sessions dies with the message unacknowledged, though the peer's other sessions may have it.
     @Test func aBounceFromTheRecipientsAddressFailsTheSend() async throws {
         let (store, processor) = try await fixture()
         try await store.enqueueOutgoing(StoredMessage(id: "s1", accountID: account, chatID: peer, senderID: account, body: "hi", isOutgoing: true))
@@ -119,8 +119,8 @@ struct InboundProcessorTests {
                 .encryptedGroupMessage(try XMPPEncryptedGroupMessage(id: "k2", room: room, occupant: room + "/bob", sender: peer, envelope: group))]
     }
 
-    /// Ciphertext that cannot be decrypted yet (the sender's keys are unreachable offline) is retained for later keys or
-    /// trust. That is a durable disposition, so the barrier stays acknowledgeable.
+    // Ciphertext that cannot be decrypted yet (the sender's keys are unreachable offline) is retained for later keys or
+    // trust. That is a durable disposition, so the barrier stays acknowledgeable.
     @Test func retainedCiphertextKeepsTheBarrierAcknowledgeable() async throws {
         let (store, encryption, processor) = try await initializedFixture()
         for (sequence, event) in try await addressedCiphertext(encryption).enumerated() {
@@ -131,8 +131,8 @@ struct InboundProcessorTests {
         #expect(try await store.pendingEncryptedIncoming(accountID: account).count == 2)
     }
 
-    /// A stanza without a durable disposition (a plain update not saved, ciphertext neither decrypted nor retained)
-    /// withholds the next barrier and ends the stream.
+    // A stanza without a durable disposition (a plain update not saved, ciphertext neither decrypted nor retained)
+    // withholds the next barrier and ends the stream.
     @Test func undisposedInboundRefusesTheBarrier() async throws {
         let xml = try XMPPClient.reactionXML(to: peer, targetID: "w", reactions: ["👍"], id: "r2")
         let reaction = try #require(XMPPClient.decodeOutgoingReactionXML(xml, from: account))

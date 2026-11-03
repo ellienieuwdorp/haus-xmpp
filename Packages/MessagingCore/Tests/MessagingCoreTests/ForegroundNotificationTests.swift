@@ -13,8 +13,8 @@ private func candidate(_ chat: String, at: TimeInterval) -> NotificationCandidat
 }
 
 struct ForegroundNotificationTests {
-    /// Ten minutes: tolerant of a sender clock that runs behind and of a short server queue, while history the
-    /// connection caught up on stays silent.
+    // Ten minutes: tolerant of a sender clock that runs behind and of a short server queue, while history the
+    // connection caught up on stays silent.
     @Test func theWindowIsTenMinutesInclusive() {
         let now = Date(timeIntervalSince1970: 10_000)
         #expect(NotificationPlanner.foregroundWindow == 600)
@@ -53,8 +53,8 @@ struct ForegroundNotificationTests {
         }
     }
 
-    /// A banner batch planned before the user unlinked: a request posted after the unlink names no contact, and the
-    /// one whose donation was in flight has its conversation's donations withdrawn after it.
+    // A banner batch planned before the user unlinked: a request posted after the unlink names no contact, and the
+    // one whose donation was in flight has its conversation's donations withdrawn after it.
     @Test func anUnlinkDuringABatchNeverLeavesTheOldContactDonated() async throws {
         try await withStore { store in
             let now = Date()
@@ -78,8 +78,8 @@ struct ForegroundNotificationTests {
         }
     }
 
-    /// Plan D8 in front of the app: another person's reaction to our message banners like the extension would post it,
-    /// but not in the open chat and not when it is old; either way it is claimed.
+    // In front of the app, another person's reaction to our message banners like the extension would post it,
+    // but not in the open chat and not when it is old; either way it is claimed.
     @Test func reactionsInOtherChatsBannerAsTheExtensionWould() async throws {
         try await withStore { store in
             let now = Date()
@@ -134,7 +134,7 @@ struct ForegroundNotificationTests {
             try await store.markRead(accountID: account, chatID: "carol@example.org", throughMessageID: read.id)
             try await receive(store, chat: "erin@example.org", at: Date().timeIntervalSince1970)
             let posting = FakePosting()
-            // Catching up (or no permission): dismissed, as the foreground always did.
+            // Catching up (or no permission): dismissed.
             #expect(try await NotificationPresenter(posting: posting).presentForeground(store: store, accountID: account, readingChatID: nil, presents: false) == 0)
             #expect(await posting.added.isEmpty)
             #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
@@ -150,7 +150,7 @@ private func reaction(_ chat: String, sequence: Int, at: TimeInterval) -> Reacti
                                          reactions: ["👍"], reactedAt: Date(timeIntervalSince1970: at))
 }
 
-/// What a desktop app caught up on after waking or launching: one banner per chat, held until the catch-up is in.
+// What a desktop app caught up on after waking or launching: one banner per chat, held until the catch-up is in.
 struct CaughtUpNotificationTests {
     @Test func oneBannerPerChatWhateverItsAgeButNotForTheChatBeingRead() async throws {
         try await withStore { store in
@@ -185,7 +185,7 @@ struct CaughtUpNotificationTests {
         }
     }
 
-    /// The caught-up batch is rebuilt for the planner: the device's preview setting must come through.
+    // The caught-up batch is rebuilt for the planner: the device's preview setting must come through.
     @Test func previewsOffHideTitleAndText() {
         let hidden = NotificationPlanner.caughtUp(
             MessageNotification(candidates: [candidate("carol@example.org", at: 1)], claimed: [], previewsEnabled: false),

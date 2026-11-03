@@ -2,19 +2,14 @@ import Foundation
 import MessageStore
 import XMPPProtocol
 
-/// Foreground banners. While the app is in front and holds the transport lease it claims every
-/// candidate its own connection committed, exactly as it always dismissed them, but first posts the extension's own
-/// requests for the ones that are news somewhere else: same identifiers, threads, categories and text, so a banner and
-/// a later extension run can never both show one message. Mute and read state need no rule here: a muted chat or a
-/// message at or below the read pointer never became a candidate.
+// The foreground claim posts the extension's own requests (same identifiers, threads, categories and text), so a
+// banner and a later extension run never both show one message. Muted chats and read messages never become candidates.
 extension NotificationPlanner {
-    /// How old a message may be and still show a banner. Older candidates are history the connection caught up on.
+    /// Older candidates are history the connection caught up on.
     public static let foregroundWindow: TimeInterval = 600
 
-    /// The extension's plan for the candidates a foreground banner may show, messages and reactions alike:
-    /// not the chat the user is reading (`LifecycleSignals.readingChat`: it is on screen), and nothing older than
-    /// `window`. Claims the whole batch; what is not posted is dismissed. There is no deferred-chats summary in front
-    /// of the app.
+    /// Skips the chat being read and anything older than `window`, and claims the whole batch: what is not posted is
+    /// dismissed. No deferred-chats summary.
     public static func foreground(_ batch: MessageNotification, accountID: String, readingChatID: String?, now: Date,
                                   window: TimeInterval = foregroundWindow) -> NotificationPlan {
         let shown = batch.candidates.filter { $0.chatID != readingChatID && now.timeIntervalSince($0.sentAt) <= window }
@@ -24,12 +19,9 @@ extension NotificationPlanner {
         return NotificationPlan(requests: plan.requests, claimed: batch.claimed, summarizesDeferredChats: false)
     }
 
-    /// What a desktop app caught up on after waking or launching (`AttentionRules.holdsCatchUpBanners`): the batch
-    /// holds one candidate per chat (`MessageStore.pendingNotifications(perChat: 1)`), its newest with "and N more",
-    /// and each becomes one request whatever its age, so a night's messages are one banner per chat and not one per
-    /// message. Not the chat the user is reading. A chat's reactions alert only when none of its messages does, and
-    /// then only the newest. Chats past the run's cap get the deferred-chats summary, as an extension run's would.
-    /// Claims the whole batch.
+    /// Expects one candidate per chat (`pendingNotifications(perChat: 1)`) and posts each whatever its age: one
+    /// banner per chat, not per message. Skips the chat being read. A chat's reactions alert only when none of its
+    /// messages does, and then only the newest. Chats past the cap get the deferred-chats summary. Claims the batch.
     public static func caughtUp(_ batch: MessageNotification, accountID: String, readingChatID: String?) -> NotificationPlan {
         let shown = batch.candidates.filter { $0.chatID != readingChatID }
         let alerting = Set(shown.map(\.chatID))
@@ -45,10 +37,9 @@ extension NotificationPlanner {
 }
 
 extension NotificationPresenter {
-    /// The app's foreground claim, under its transport lease. With `presents` false (catching up, no notification
-    /// permission) every candidate is dismissed without a banner. Otherwise the foreground plan is posted, best effort,
-    /// and then exactly the claimed rows are deleted; a burst beyond the per-run cap dismisses the rest. Returns how
-    /// many requests were posted. Nothing from an address in `blocklist` gets a banner.
+    /// Call under the transport lease. With `presents` false every candidate is dismissed. Posts best effort, then
+    /// deletes exactly the claimed rows; a burst beyond the per-run cap dismisses the rest. Nothing from `blocklist`
+    /// gets a banner. Returns the number posted.
     @discardableResult
     public func presentForeground(store: MessageStore, accountID: String, readingChatID: String?, presents: Bool,
                                   blocklist: XMPPBlocklist = XMPPBlocklist(), now: Date = Date()) async throws -> Int {
@@ -62,9 +53,8 @@ extension NotificationPresenter {
         return try await post(plan, batch: batch, store: store, accountID: accountID)
     }
 
-    /// A desktop app's claim once a connection's catch-up and read-state sync are in: one banner per chat for
-    /// everything held meanwhile (`NotificationPlanner.caughtUp`), under the transport lease. With `presents` false (no
-    /// notification permission) every candidate is dismissed. Returns how many requests were posted.
+    /// Call under the transport lease once catch-up and read-state sync are in. With `presents` false every candidate
+    /// is dismissed. Returns the number posted.
     @discardableResult
     public func presentCaughtUp(store: MessageStore, accountID: String, readingChatID: String?, presents: Bool) async throws -> Int {
         guard presents else {
@@ -77,12 +67,10 @@ extension NotificationPresenter {
         return try await post(plan, batch: batch, store: store, accountID: accountID)
     }
 
-    /// Posts a claim's plan, best effort, then deletes exactly the claimed rows; anything the batch deferred is
-    /// dismissed.
     private func post(_ plan: NotificationPlan, batch: MessageNotification, store: MessageStore, accountID: String) async throws -> Int {
         var posted = 0
         for request in plan.requests {
-            // The message is in the app already: a banner that fails to post is not worth keeping the candidate for.
+            // The message is in the app already, so a failed banner does not keep its candidate.
             if (try? await add(request, store: store, accountID: accountID, { request in
                 try await withTimeout(addTimeout) { try await posting.add(request) }
             })) != nil { posted += 1 }

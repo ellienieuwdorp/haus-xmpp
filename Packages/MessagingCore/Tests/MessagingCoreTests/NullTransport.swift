@@ -2,8 +2,8 @@ import Foundation
 import OMEMO
 import XMPPProtocol
 
-/// Initializes an OMEMO account without a server: it remembers only what this account publishes, and no other
-/// account has devices. Enough for paths that never need a peer session.
+// Initializes an OMEMO account without a server: it remembers only what this account publishes, and no other
+// account has devices. Enough for paths that never need a peer session.
 struct NullTransport: OMEMOTransport {
     private actor Published {
         var devices: [XMPPOMEMOProfile: [UInt32]] = [:]
@@ -27,8 +27,8 @@ struct NullTransport: OMEMOTransport {
     func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { await published.setBundle(bundle) }
 }
 
-/// A direct (legacy) and a group (modern) envelope, each with the one key for this device, from a sender device the
-/// account does not know. Without a server the sender's keys cannot be fetched, so both can only be retained.
+// A direct (legacy) and a group (modern) envelope, each with the one key for this device, from a sender device the
+// account does not know. Without a server the sender's keys cannot be fetched, so both can only be retained.
 func unknownSenderEnvelopes(account: String, encryption: OMEMOService) async throws -> (direct: XMPPOMEMOEnvelope, group: XMPPOMEMOEnvelope) {
     let legacy = try await encryption.localIdentity(account: account, profile: .legacy)
     let modern = try await encryption.localIdentity(account: account, profile: .modern)

@@ -3,7 +3,7 @@ import MessageStore
 import Testing
 @testable import MessagingCore
 
-/// Records every call instead of touching the operating system's notification store.
+// Records every call instead of touching the operating system's notification store.
 actor FakePosting: NotificationPosting {
     enum Failure: Error { case rejected }
     private(set) var added: [PlannedNotification] = []
@@ -11,11 +11,11 @@ actor FakePosting: NotificationPosting {
     private(set) var removed: [String] = []
     var failAtIndex: Int?
     var hang = false
-    /// Time each add spends preparing (an intent donation) before the system add, and the system add itself.
+    // Time each add spends preparing (an intent donation) before the system add, and the system add itself.
     var preparation: Duration = .zero
     var systemAdd: Duration = .zero
     nonisolated let allowance: Duration
-    /// Runs inside each add before it completes: what happens while a donation is in flight.
+    // Runs inside each add before it completes: what happens while a donation is in flight.
     private var during: (@Sendable (PlannedNotification) async -> Void)?
 
     init(delivered: [DeliveredNotification] = [], allowance: Duration = .zero) { self.delivered = delivered; self.allowance = allowance }
@@ -47,7 +47,7 @@ actor FakePosting: NotificationPosting {
 
 private let account = "alice@example.org"
 
-/// Suspends for `duration` without observing cancellation, as a completion-handler bridge does.
+// Suspends for `duration` without observing cancellation, as a completion-handler bridge does.
 func ignoringCancellation(for duration: Duration) async {
     let (seconds, attoseconds) = duration.components
     let delay = Double(seconds) + Double(attoseconds) / 1e18
@@ -77,7 +77,7 @@ func receive(_ store: MessageStore, chat: String = "bob@example.org", body: Stri
     return message
 }
 
-/// The conversations whose donations a presenter withdrew.
+// The conversations whose donations a presenter withdrew.
 actor WithdrawnDonations {
     private(set) var conversations: [String] = []
     func add(_ conversation: String) { conversations.append(conversation) }
@@ -89,8 +89,8 @@ func linkContact(_ store: MessageStore, chat: String, identifier: String) async 
 }
 
 struct NotificationPresenterTests {
-    /// An extension run names the contact linked when each request posts, and a relink while one is posted (its
-    /// donation in flight) withdraws that conversation's donations once it is done, also when the add fails.
+    // An extension run names the contact linked when each request posts, and a relink while one is posted (its
+    // donation in flight) withdraws that conversation's donations once it is done, also when the add fails.
     @Test func aRelinkDuringAnAddWithdrawsTheConversationsDonations() async throws {
         try await withStore { store in
             try await linkContact(store, chat: "bob@example.org", identifier: "contact-1")
@@ -226,8 +226,8 @@ struct NotificationPresenterTests {
         }
     }
 
-    /// The app's cleanup asks the same question without a run: only this account's review notifications whose
-    /// ciphertext is gone are stale.
+    // The app's cleanup asks the same question without a run: only this account's review notifications whose
+    // ciphertext is gone are stale.
     @Test func retainedCleanupKeepsPendingReviewsAndOtherAccounts() async throws {
         try await withStore { store in
             let revision = try #require(try await store.encryptionStateRevision(accountID: account))
@@ -316,7 +316,7 @@ struct NotificationPresenterTests {
     }
 }
 
-/// A run whose steps the test releases one at a time.
+// A run whose steps the test releases one at a time.
 private actor Gate {
     private var open = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -523,7 +523,7 @@ struct NotificationBadgeAndReactionDeliveryTests {
             let progress = NotificationRunProgress()
             try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: progress)
             #expect(progress.isCommitted && progress.report.posted == 1)
-            // Without the allowance the same timings fall back, which is what the donation used to cause.
+            // Without the allowance the same timings fall back.
             try await receive(store, at: 2)
             let unallowed = FakePosting()
             await unallowed.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))

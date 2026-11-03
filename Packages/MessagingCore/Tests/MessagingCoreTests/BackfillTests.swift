@@ -4,7 +4,7 @@ import MessageStore
 @testable import XMPPProtocol
 @testable import MessagingCore
 
-/// Every test starts from a first sync that already happened: checkpoint `n9`, backfill cursor `n1` (incomplete).
+// Every test starts from a first sync that already happened: checkpoint `n9`, backfill cursor `n1` (incomplete).
 struct BackfillTests {
     private let account = "alice@localhost"
     private let room = "test@rooms.localhost"
@@ -227,8 +227,8 @@ struct BackfillTests {
         }
     }
 
-    /// Backfill runs on a live connection after catch-up: a query the server never answers must not tear it down. The
-    /// same error from a lost connection still ends the run.
+    // Backfill runs on a live connection after catch-up: a query the server never answers must not tear it down. The
+    // same error from a lost connection still ends the run.
     @Test func anUnansweredQueryStopsWithoutDisconnectingALiveConnection() async throws {
         try await fixture { store async throws in
             let trace = BackfillTrace()

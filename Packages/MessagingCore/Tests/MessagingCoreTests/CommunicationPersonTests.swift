@@ -8,7 +8,7 @@ import Intents
 
 private let account = "me@example.org"
 
-/// A direct chat's incoming message with its link state as the store reports it: the contact only while reachable.
+// A direct chat's incoming message with its link state as the store reports it: the contact only while reachable.
 private func candidate(chatTitle: String? = "peer@example.org", contact: String? = nil) -> NotificationCandidate {
     let message = StoredMessage(id: "m1", accountID: account, chatID: "peer@example.org", senderID: "peer@example.org", body: "Hi",
                                 sentAt: Date(timeIntervalSince1970: 1), encryptionProfile: "modern")
@@ -30,8 +30,8 @@ private func communication(_ candidate: NotificationCandidate, previews: Bool = 
     #expect(first != CommunicationPerson.identifier(accountID: account, jid: "other@example.org"))
 }
 
-/// Every link state the store can report, with previews on and off. The store already folds the app's Contacts access
-/// into `isReachable` (full access, or limited access that includes the contact); the builder only passes it on.
+// Every link state the store can report, with previews on and off. The store already folds the app's Contacts access
+// into `isReachable` (full access, or limited access that includes the contact); the builder only passes it on.
 @Test func theContactIdentifierReachesTheSystemOnlyForAReachableLinkWithPreviewsOn() throws {
     // No link: the JID as an IM-address handle, nothing about Contacts.
     var fields = CommunicationPerson.fields(try #require(communication(candidate())).sender, accountID: account)

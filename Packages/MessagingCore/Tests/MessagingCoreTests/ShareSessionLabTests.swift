@@ -6,10 +6,10 @@ import Testing
 import XMPPProtocol
 @testable import MessagingCore
 
-/// A share's send against the local lab Prosody, with a PUT whose server accepts the connection and never answers.
-/// Runs only when configured:
-///   HAUS_LAB_SHARE_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
-///   HAUS_LAB_CA             the lab CA (PEM)
+// A share's send against the local lab Prosody, with a PUT whose server accepts the connection and never answers.
+// Runs only when configured:
+//   HAUS_LAB_SHARE_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
+//   HAUS_LAB_CA             the lab CA (PEM)
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_SHARE_ACCOUNT"] != nil))
 struct ShareSessionLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -80,7 +80,7 @@ private final class Flag: @unchecked Sendable {
     func set() { lock.withLock { raised = true } }
 }
 
-/// An HTTP server on the loopback that accepts every connection and never reads or answers.
+// An HTTP server on the loopback that accepts every connection and never reads or answers.
 private final class BlackHole: @unchecked Sendable {
     private let listener: NWListener
     private let lock = NSLock()

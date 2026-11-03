@@ -102,8 +102,8 @@ struct BackgroundSynchronizerTests {
         #expect(await probe.events.contains("transport stopped"))
     }
 
-    /// The XEP-0490 pull after catch-up is best effort: a connection lost during it (the consumer sees the disconnect
-    /// first) still ends the run successfully once the walk committed; before the walk it fails the run as always.
+    // The XEP-0490 pull after catch-up is best effort: a connection lost during it (the consumer sees the disconnect
+    // first) still ends the run successfully once the walk committed; before the walk it fails the run.
     @Test func connectionLostAfterCatchUpStillSucceeds() async throws {
         let caughtUp = CatchUpMark()
         try await runBackgroundWork(timeBudget: .seconds(20), operation: {
@@ -125,11 +125,11 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// A room that never answers, a connection lost during the room walk, or a room page that cannot be
-    /// processed, once the own archive committed. The direct message is posted at once and the run ends as a success,
-    /// the stalled room cut short soon after the post (the app may be waiting for the lease); with nothing direct to
-    /// post, what the push was about is unknown and the run fails with what cut the rooms short, so the extension shows
-    /// the fallback.
+    // A room that never answers, a connection lost during the room walk, or a room page that cannot be
+    // processed, once the own archive committed. The direct message is posted at once and the run ends as a success,
+    // the stalled room cut short soon after the post (the app may be waiting for the lease); with nothing direct to
+    // post, what the push was about is unknown and the run fails with what cut the rooms short, so the extension shows
+    // the fallback.
     @Test(arguments: [RoomTrouble.stalls, .losesConnection, .breaks])
     func aStuckRoomNeverHidesCommittedDirectMessages(_ trouble: RoomTrouble) async throws {
         for direct in [true, false] {
@@ -157,8 +157,8 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// The early presentation claims what it posted, so the final one adds only what the rooms brought, after a second
-    /// read-state pull, and the run plays one sound.
+    // The early presentation claims what it posted, so the final one adds only what the rooms brought, after a second
+    // read-state pull, and the run plays one sound.
     @Test func roomMessagesFollowTheDirectOnesWithoutRepeatingThem() async throws {
         try await withStore { store in
             let run = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: true, trouble: nil)
@@ -171,8 +171,8 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// The early presentation's last add (the one with the sound) fails: the final presentation posts both again and
-    /// plays the run's one sound, and the report counts every add that completed.
+    // The early presentation's last add (the one with the sound) fails: the final presentation posts both again and
+    // plays the run's one sound, and the report counts every add that completed.
     @Test func aDirectPresentationThatFailsPartWayLeavesTheSoundToTheFinalOne() async throws {
         try await withStore { store in
             let run = try await CatchUpFixture(store: store, ownMessages: 2, roomMessage: false, trouble: nil)
@@ -185,8 +185,8 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// The deadline cancels the early presentation while the system is still adding its sound-carrying request: that add
-    /// may still land, so the final presentation posts the message again without a sound. The run plays one sound.
+    // The deadline cancels the early presentation while the system is still adding its sound-carrying request: that add
+    // may still land, so the final presentation posts the message again without a sound. The run plays one sound.
     @Test func aDeadlineDuringTheDirectPresentationNeverPlaysASecondSound() async throws {
         try await withStore { store in
             let run = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: false, trouble: nil)
@@ -200,9 +200,9 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// A push that arrives while the rooms are walked, after the direct message was posted, joins the run (its message
-    /// comes in over the same connection) instead of queueing a second full run that would hold the lease again. Until
-    /// the final presentation commits, an expiring request is not settled: its message may not be posted yet.
+    // A push that arrives while the rooms are walked, after the direct message was posted, joins the run (its message
+    // comes in over the same connection) instead of queueing a second full run that would hold the lease again. Until
+    // the final presentation commits, an expiring request is not settled: its message may not be posted yet.
     @Test func aPushDuringTheRoomWalkJoinsTheRunThatPostedEarly() async throws {
         try await withStore { store in
             let run = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: false, trouble: .stalls)
@@ -270,8 +270,8 @@ struct BackgroundSynchronizerTests {
         try FileManager.default.removeItem(at: directory)
     }
 
-    /// The notification extension's entry point finds a store the previous build wrote: it neither migrates nor
-    /// connects, leaves the file byte for byte as it was, and the run falls back to the generic notification.
+    // The notification extension's entry point finds a store the previous build wrote: it neither migrates nor
+    // connects, leaves the file byte for byte as it was, and the run falls back to the generic notification.
     @Test func neverMigratesAStoreAnOlderBuildWrote() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "background-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -301,11 +301,11 @@ struct BackgroundSynchronizerTests {
 }
 
 enum RoomTrouble: Sendable, CustomStringConvertible {
-    /// The room never answers its membership read, as an unreachable MUC component holds an IQ.
+    // The room never answers its membership read, as an unreachable MUC component holds an IQ.
     case stalls
-    /// The connection is lost during the room walk.
+    // The connection is lost during the room walk.
     case losesConnection
-    /// The room's page cannot be processed.
+    // The room's page cannot be processed.
     case breaks
     enum Unreadable: Error { case page }
     var description: String {
@@ -313,9 +313,9 @@ enum RoomTrouble: Sendable, CustomStringConvertible {
     }
 }
 
-/// One run through `BackgroundCatchUp` with the real archive walk, store and presenter: only the server is fake. The
-/// own archive holds `ownMessages` new direct messages (from two contacts at most); one room follows, which holds one
-/// new message when `roomMessage` or `trouble` is `.breaks`, or misbehaves as `trouble` says.
+// One run through `BackgroundCatchUp` with the real archive walk, store and presenter: only the server is fake. The
+// own archive holds `ownMessages` new direct messages (from two contacts at most); one room follows, which holds one
+// new message when `roomMessage` or `trouble` is `.breaks`, or misbehaves as `trouble` says.
 private struct CatchUpFixture {
     let store: MessageStore
     let ownMessages: Int, roomMessage: Bool, trouble: RoomTrouble?
@@ -337,7 +337,7 @@ private struct CatchUpFixture {
                         complete: true, firstID: ids.first, lastID: ids.last, handledTokens: [])
     }
 
-    /// `progress` replaces the fixture's own (a coordinator's run).
+    // `progress` replaces the fixture's own (a coordinator's run).
     func run(budget: Duration, roomsAfterPost: Duration = .seconds(5), progress: NotificationRunProgress? = nil) async throws {
         let (store, account, room, trace, trouble) = (store, account, room, trace, trouble)
         let (ownMessages, roomMessage, progress, posting) = (ownMessages, roomMessage, progress ?? self.progress, posting)
@@ -385,7 +385,7 @@ private struct CatchUpFixture {
     }
 }
 
-/// `FakePosting` that also notes each add in the run's trace, and can reject one add once.
+// `FakePosting` that also notes each add in the run's trace, and can reject one add once.
 private actor TracingPosting: NotificationPosting {
     enum Failure: Error { case rejected }
     let trace: BackgroundProbe
@@ -393,7 +393,7 @@ private actor TracingPosting: NotificationPosting {
     private var failingAt: Int?, firstDelay: Duration?
     init(trace: BackgroundProbe) { self.trace = trace }
     func failOnce(at index: Int) { failingAt = index }
-    /// The first add takes `delay` and, like the system's, is not stopped by cancellation.
+    // The first add takes `delay` and, like the system's, is not stopped by cancellation.
     func delayFirstAdd(by delay: Duration) { firstDelay = delay }
     func add(_ request: PlannedNotification) async throws {
         if failingAt == added.count { failingAt = nil; throw Failure.rejected }

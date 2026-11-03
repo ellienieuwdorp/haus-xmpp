@@ -32,8 +32,8 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 1)
     }
 
-    /// A session saved while the account kept its typed capitals loads, resumes and saves again once the account is
-    /// named in normal form; the address migration already moved its row to the normal key.
+    // A session saved under the typed capitals loads, resumes and saves under the normal form, as the address
+    // migration moved its row to the normal key.
     @Test func sessionSavedUnderTheTypedSpellingStillBelongsToTheAccount() async throws {
         let (store, adapter) = try await fixture()
         let typed = snapshot(account: "Alice@LocalHost")
@@ -44,9 +44,8 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 2)
     }
 
-    /// A saved session that cannot be decoded (corrupt bytes, an inner revision that disagrees with its row, or contents
-    /// naming another account under this account's key) is never resumed, and the fresh bind replaces it. Failing the
-    /// connect instead repeated on every connect.
+    // An undecodable session (corrupt bytes, a disagreeing inner revision, another account's contents) is never
+    // resumed, and the fresh bind replaces it rather than failing every connect.
     @Test func unreadableSessionBindsFreshAndIsReplaced() async throws {
         for data in [Data("{".utf8), try JSONEncoder().encode(snapshot(revision: 90)),
                      try JSONEncoder().encode(snapshot(account: "mallory@localhost"))] {
@@ -60,8 +59,8 @@ struct StreamPersistenceTests {
         }
     }
 
-    /// A chat state is a hint, not a message we must deliver: it never asks the replay policy (which can vouch only
-    /// for durable rows) and is never replayed. One typing notification used to turn the next connect into a bind.
+    // A chat state is a hint: it never asks the replay policy (which vouches only for durable rows), is never
+    // replayed, and so cannot turn the next connect into a fresh bind.
     @Test func chatStatesNeverRefuseResumption() async throws {
         let (store, adapter) = try await fixture()
         let state = try XMPPChatState.xml(.composing, to: "bob@localhost", id: "typing")
@@ -71,7 +70,7 @@ struct StreamPersistenceTests {
         try await sm.record(state)
         #expect(try await StreamManagement(adapter).restore(accountID: "alice@localhost") != nil)
 
-        // A session saved before hint slots journaled the same state as a message with an ID.
+        // A journal entry for the same state carrying a message ID.
         let current = try #require(try await store.streamManagementState(accountID: "alice@localhost")).revision
         let legacy = snapshot(revision: current + 1, journal: [.init(sequence: 1, xml: state, messageID: "typing")])
         _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: current, data: JSONEncoder().encode(legacy))
