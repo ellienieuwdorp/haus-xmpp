@@ -6,7 +6,7 @@ import XMPPProtocol
 
 /// Loaded from protected local account storage, never from an untrusted push payload.
 public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    /// The endpoint the app last connected through; discovery runs only if it fails and the route allows it.
+    /// Discovery runs only if this route fails and allows it.
     public let route: XMPPRoute
     public let domain: String
     public let username: String
@@ -14,11 +14,11 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     /// PLAIN is refused once the account has authenticated with SCRAM.
     public let requiresSCRAM: Bool
     public let labCertificateAuthority: Data?
-    /// This installation's resource for the account; nil keeps a random one for this run.
+    /// Nil keeps a random one for this run.
     public let resource: String?
-    /// The subscription a fresh session re-enables (`BackgroundSession.enablePush`); nil when push is not settled.
+    /// Re-enabled on a fresh session; nil when push is not settled.
     public let push: XMPPPushConfiguration?
-    /// The last time the app was in front, announced as XEP-0319 idle when the account shares last seen.
+    /// Announced as XEP-0319 idle when the account shares last seen.
     public let leftForeground: Date?
     public var accountID: String { username + "@" + domain }
 
@@ -36,24 +36,23 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
 
 public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
     case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
-    /// The server refused or did not answer a query on the account's own archive: the run cannot claim catch-up.
+    /// The own archive query was refused or unanswered, so the run cannot claim catch-up.
     case ownArchiveIncomplete
-    /// The app holds the lease and answered the liveness handshake in time: it presents what the push was about.
+    /// The app answered the liveness handshake and presents the push itself.
     case handedOff
 }
 
-/// An extension performs one bounded catch-up under the same kernel lease as the app.
-/// Success means durable archive completion. It does not claim a particular notification
-/// represents a new message; notification previews require a separate privacy-aware projection.
+/// One bounded catch-up under the same kernel lease as the app. Success means durable archive completion, not that a
+/// particular notification represents a new message.
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
-    /// Presents what a run committed, under the lease.
+    /// Runs under the lease.
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
-    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease. With `liveness`, a
-    /// busy lease first asks a running app (`LivenessHandshake`); an answer in time throws `handedOff`.
-    /// `presentation` runs early once the own archive committed and rooms follow (`.direct`), and once at the end.
+    /// `leaseWait` is spent inside `timeBudget`. With `liveness`, a busy lease first asks a running app; an answer in
+    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed and rooms follow, and
+    /// once at the end.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
                             timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
                             liveness: (any LivenessChannel)? = nil,
@@ -66,10 +65,10 @@ public struct BackgroundSynchronizer: Sendable {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw BackgroundSynchronizationError.identityUnavailable
         }
-        // Never migrates: a store an older build wrote waits, untouched, for the app to snapshot and upgrade it.
+        // Never migrates: an older store waits, untouched, for the app to snapshot and upgrade it.
         let store = try MessageStore(url: databaseURL, schema: .currentOnly)
         do {
-            // Busy means wait a bounded time, then defer: never expire another process's lock or reset its attempts.
+            // Busy means a bounded wait, then defer: never expire another process's lock or reset its attempts.
             progress?.enter(.leaseWait)
             let clock = ContinuousClock(), waitStarted = clock.now
             let waited: Duration
@@ -93,7 +92,7 @@ public struct BackgroundSynchronizer: Sendable {
                                                                             leftForeground: account.leftForeground),
                                              clientActive: false)
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
-            // Taken before the timer starts, so it is never later than the real deadline.
+            // Taken before the timer starts, so never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
             try await BackgroundCatchUp(
                 connect: {
@@ -101,12 +100,11 @@ public struct BackgroundSynchronizer: Sendable {
                                              password: account.password, requireSCRAM: account.requiresSCRAM)
                 },
                 sessionDuties: { ownArchiveWalked in
-                    // A fresh bind replaced the session the server pushed for: it must push again and receive room traffic.
+                    // A fresh bind replaced the session the server pushed for, so re-enable push and rejoin rooms.
                     let fresh = await !client.sessionResumed
                     BackgroundSession.log.notice("background session resumed=\(!fresh, privacy: .public)")
                     async let pushEnabled: Void = fresh ? BackgroundSession.enablePush(account.push, client: client) : ()
-                    // Direct messages first: the rejoins start once the own archive is walked, so a long room walk cannot
-                    // use up their time. Best effort: they never fail the run.
+                    // Rejoins wait for the own archive, so they cannot use up the direct messages' time. Never fail the run.
                     @Sendable func rejoin() async -> Set<String> {
                         while await !ownArchiveWalked.reached {
                             guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
@@ -117,8 +115,8 @@ public struct BackgroundSynchronizer: Sendable {
                     async let joined = fresh ? rejoin() : []
                     _ = await (pushEnabled, joined)
                 },
-                // No identity initialization, trust acceptance, queued-message preparation or
-                // outbox drain. Resumption may replay only previously authorized exact bytes.
+                // No identity initialization, trust acceptance, queued-message preparation or outbox drain. Resumption
+                // may replay only previously authorized exact bytes.
                 walk: { walkProgress, ownArchiveWalked in
                     try await ArchiveSynchronizer(store: store).synchronize(account: account.accountID, client: client, encryption: encryption,
                                                                             progress: walkProgress, ownArchiveWalked: ownArchiveWalked)
@@ -132,66 +130,50 @@ public struct BackgroundSynchronizer: Sendable {
                 stop: { await client.disconnectAndWait() }
             ).run(store: store, timeBudget: timeBudget - waited, deadline: deadline, progress: progress, presentation: presentation)
         } catch {
-            // runBackgroundWork joins crypto, archive and reader work before reaching here.
-            // close releases ownership only if this instance acquired it.
+            // runBackgroundWork has joined crypto, archive and reader work. close releases ownership only if this
+            // instance acquired it.
             try await store.close()
             throw error
         }
     }
 }
 
-/// One run's network work and presentations once the lease is held. The client sits behind these closures, so
-/// the order can be checked without a server.
-///
-/// Direct messages first: once the own archive committed, the run pulls read state and presents what it has, then walks
-/// the rooms. From then on the deadline only ends the best-effort work (rooms, pull, rejoins, push enable): a slow or
-/// unreachable room can no longer turn committed direct messages into the fallback. The final presentation posts what
-/// the rooms and the live stream committed meanwhile.
-///
-/// Once the early presentation added something, the user may open the app from it, and the app waits for this run's
-/// lease: the rooms then get `roomsAfterPost` more rather than the rest of the budget. Until the final presentation the
-/// run stays joinable, so pushes that arrive meanwhile wait for it instead of queueing a second run.
+// After the own archive commits, the deadline only ends best-effort work, so a slow room cannot turn committed direct
+// messages into the fallback. After an early post the user may open the app, which waits for this lease, so rooms get
+// only `roomsAfterPost` more.
 struct BackgroundCatchUp: Sendable {
     let connect: @Sendable () async throws -> Void
-    /// Best-effort work beside the walk (push enable, rejoins once the own archive is walked); never fails the run.
     let sessionDuties: @Sendable (_ ownArchiveWalked: CatchUpMark) async -> Void
-    /// `ArchiveSynchronizer.synchronize` with its `progress` and `ownArchiveWalked` hooks.
     let walk: @Sendable (_ progress: @escaping @Sendable (ArchiveSyncProgress) async -> Void,
                          _ ownArchiveWalked: @escaping @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void) async throws -> Void
-    /// The XEP-0490 pull, bounded by its argument.
     let pull: @Sendable (Duration) async throws -> Void
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
-    /// How long rooms may still be walked after the early presentation added something (letting the app ask for the
-    /// lease instead would remove this limit).
     var roomsAfterPost: Duration = .seconds(5)
 
     func run(store: MessageStore, timeBudget: Duration, deadline: ContinuousClock.Instant, progress: NotificationRunProgress?,
              presentation: BackgroundSynchronizer.Presentation?) async throws {
         let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
-        // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
+        // A slow or lost server leaves the run a success.
         @Sendable func pullReadState() async throws {
             if let timeout = readSyncTimeout(until: deadline) { try await pull(timeout) }
             await ledger.notePull()
         }
-        // The own archive, the early presentation, then the rooms.
         @Sendable func walkArchives() async throws {
             try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
                 await ownArchiveWalked.reach()
-                // The own archive holds the direct messages a push is about; without its newest entry the run shows
-                // the fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
+                // The own archive holds the direct messages a push is about; without it the run shows the fallback.
                 guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
                 await caughtUp.reach()
                 guard rooms > 0 else { return }
-                // Before the claim: chats read on another device have their pointers moved, which removes their
-                // candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
+                // Before the claim, so chats read on another device lose their candidates.
                 try await pullReadState()
                 guard let presentation else { return }
                 do { try await presentation(store, .direct) }
                 catch is CancellationError { throw CancellationError() }
-                // The final presentation tries again with everything still pending.
+                // The final presentation retries everything still pending.
                 catch { BackgroundSession.log.notice("direct presentation failed: \(String(describing: type(of: error)), privacy: .public)") }
-                // Adds are counted as they complete, so one that failed part-way still counts as showing.
+                // A presentation that failed part-way still counts as showing.
                 if (progress?.report.posted ?? 0) > 0 { await ledger.notePostedEarly() }
             })
         }
@@ -200,7 +182,6 @@ struct BackgroundCatchUp: Sendable {
             try Task.checkCancellation()
             async let duties: Void = sessionDuties(ownArchiveWalked)
             do {
-                // Once a notification is showing, the rooms get `roomsAfterPost` more: the app may be waiting for the lease.
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { try await walkArchives() }
                     group.addTask {
@@ -213,20 +194,18 @@ struct BackgroundCatchUp: Sendable {
                 }
                 await ledger.noteRoomsWalked()
             } catch {
-                // Rooms are best effort once the own archive committed: their checkpoints stand for the next run. A
-                // storage failure or cancellation still ends the run.
+                // Rooms are best effort once the own archive committed; a storage failure or cancellation still ends the run.
                 guard await caughtUp.reached, !(error is CancellationError), !(error is MessageStoreError) else { throw error }
                 BackgroundSession.log.notice("room walk ended early: \(String(describing: type(of: error)), privacy: .public)")
                 await ledger.noteRoomWalkFailed(error)
             }
-            // After the rooms, another pull for what their pages brought; with no rooms, the only one.
             if await ledger.needsPull { try await pullReadState() }
             await duties
         }, consume: {
             try await consumeUntilDisconnect(after: caughtUp) { try await consume() }
         }, stop: stop)
         try Task.checkCancellation()
-        // From here a new push starts the next run: this one's network work is over.
+        // From here a new push starts the next run.
         progress?.enter(.presenting)
         let stage = await ledger.finalStage(pastDeadline: ContinuousClock.now >= deadline)
         var final: (@Sendable (MessageStore) async throws -> Void)?
@@ -235,9 +214,7 @@ struct BackgroundCatchUp: Sendable {
     }
 }
 
-/// What one run's catch-up got through, for its final presentation.
 actor CatchUpLedger {
-    /// The early presentation added something: a notification is showing.
     private(set) var postedEarly = false
     private var roomsWalked = false, pulled = false, roomMessages = false
     private var roomError: (any Error)?
@@ -247,8 +224,7 @@ actor CatchUpLedger {
     func notePull() { pulled = true }
     func noteRoomMessages() { roomMessages = true }
     var needsPull: Bool { !pulled || roomMessages }
-    /// Why the rooms were cut short: the deadline, a lost connection (a transport error, or no error when the stream
-    /// ended first), or what the room walk raised (a page that could not be processed).
+    // No room error means the stream ended first.
     func finalStage(pastDeadline: Bool) -> PresentationStage {
         guard !roomsWalked else { return .complete }
         if pastDeadline { return PresentationStage(isFinal: true, unfinished: BackgroundSynchronizationError.deadlineExceeded) }
@@ -259,31 +235,25 @@ actor CatchUpLedger {
     }
 }
 
-/// What a session opened away from the foreground (this extension, a notification action) owes the server. After a
-/// fresh bind the new session replaced the one the app set up: that one had push enabled and sat in the rooms.
+/// A fresh bind away from the foreground replaced the app's session, which had push enabled and sat in the rooms.
 public enum BackgroundSession {
-    /// Rooms joined at once; the rest wait for a slot, all inside one deadline.
     static let concurrentJoins = 8
 
-    /// Away since the app was last in front, without the timestamp for an account that does not share last seen or
-    /// when that time was never recorded. Stable across runs: a changed value is announced to every contact, and a
-    /// value that moved with each run would make every resumed run broadcast presence.
+    /// Stable across runs: a changed value is announced to every contact, so a moving one would make every resumed
+    /// run broadcast presence.
     public static func availability(sharesLastSeen: Bool, leftForeground: Date?, now: Date = Date()) -> XMPPAvailability {
         .away(since: sharesLastSeen ? leftForeground.map { min($0, now) } : nil)
     }
 
-    /// XEP-0357 enable of the saved subscription on the new session. Registration with the gateway stays the app's
-    /// job; this only tells the account server where to push. A failure leaves the next app connection to repair it.
+    /// XEP-0357 enable only; gateway registration stays the app's job. A failure is left for the next app connection.
     public static func enablePush(_ push: XMPPPushConfiguration?, client: XMPPClient) async {
         guard let push else { return }
         do { try await client.enablePush(push) }
         catch { log.notice("push re-enable failed: \(String(describing: type(of: error)), privacy: .public)") }
     }
 
-    /// Joins every stored room but `skipping` (`<history maxstanzas='0'/>`: the room archive walk covers history) so the
-    /// server routes and pushes room traffic to this session again. Concurrent and bounded by `within`; a room that
-    /// refuses, fails or has not confirmed the join by the deadline is left to the next app connection. Returns the rooms
-    /// that confirmed.
+    /// Joins with `<history maxstanzas='0'/>` (the archive walk covers history) so room traffic is routed and pushed to
+    /// this session. A room not confirmed by the deadline is left to the next app connection. Returns those confirmed.
     @discardableResult
     public static func joinRooms(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
                                  skipping: Set<String> = [], within limit: Duration?) async -> Set<String> {
@@ -293,7 +263,7 @@ public enum BackgroundSession {
         let fallback = String(account.prefix { $0 != "@" })
         var nicknames: [String: String] = [:]
         for room in rooms { nicknames[room] = (try? await store.groupNickname(accountID: account, room: room)) ?? fallback }
-        // Each child answers with its room when joined, "" when it failed, and nil for the deadline.
+        // Each child returns its room when joined, "" when it failed, and nil for the deadline.
         return await withTaskGroup(of: String?.self) { group in
             group.addTask { try? await Task.sleep(for: limit); return nil }
             var pending = rooms[...], joined: Set<String> = [], running = 0
@@ -316,8 +286,8 @@ public enum BackgroundSession {
         }
     }
 
-    /// Joins `room` and waits until it confirms (it reflects our own presence with status 110), refuses, or `limit`
-    /// passes. A new connection's room state starts unjoined, even when a resumed session is still in the room.
+    /// Confirmation is the room reflecting our presence with status 110. A new connection's room state starts unjoined,
+    /// even when a resumed session is still in the room.
     public static func join(_ room: String, nickname: String, client: XMPPClient, within limit: Duration) async -> Bool {
         let deadline = ContinuousClock.now + limit
         guard (try? await client.joinGroupRoom(room, nickname: nickname)) != nil else { return false }
@@ -332,22 +302,20 @@ public enum BackgroundSession {
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
 }
 
-/// Set once the own archive's walk has committed: from then on the run's outcome no longer depends on the connection.
+// Once reached, the run's outcome no longer depends on the connection.
 actor CatchUpMark {
     private(set) var reached = false
     func reach() { reached = true }
 }
 
-/// How long the post-catch-up XEP-0490 pull may take: at most 5 s, ending 1 s before the run's deadline so the pull
-/// can never turn a finished catch-up into `deadlineExceeded`. nil when too little is left to try.
+// Ends 1 s before the deadline so the pull can never turn a finished catch-up into `deadlineExceeded`.
 func readSyncTimeout(until deadline: ContinuousClock.Instant, now: ContinuousClock.Instant = .now) -> Duration? {
     let left = deadline - now - .seconds(1)
     guard left >= .milliseconds(500) else { return nil }
     return min(.seconds(5), left)
 }
 
-/// A connection that ends after the own archive committed (while rooms or the best-effort pull run) ends the run
-/// successfully, with the candidates it committed. Before that, a lost connection fails the run as always.
+// A connection lost after the own archive committed ends the run successfully; before that, it fails the run.
 func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws -> Void) async throws {
     do { try await consume() }
     catch BackgroundSynchronizationError.connectionEnded {
@@ -355,11 +323,8 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
     }
 }
 
-/// Polls the non-blocking kernel lease until it is free or `limit` passes; cancellable. Returns the time spent waiting.
-/// With `liveness`, the first busy answer also asks a running app, once per wait (`LivenessHandshake`). While its
-/// answer window is open the wait reads the answer every `answerPoll`, and an accepted one ends the wait with
-/// `BackgroundSynchronizationError.handedOff`. The lease is still tried first on every round, and without an
-/// accepted answer the wait ends exactly as it did without the handshake.
+// Polls the non-blocking kernel lease; returns the time spent waiting. With `liveness`, the first busy answer asks a
+// running app once; an accepted answer throws `handedOff`. The lease is still tried first on every round.
 func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
                                liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50)) async throws -> Duration {
     let clock = ContinuousClock(), start = clock.now
@@ -372,9 +337,8 @@ func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duratio
             guard clock.now - start + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
             if let liveness, !asked {
                 asked = true
-                // The window also runs on this process's monotonic clock: a wall clock set back meanwhile cannot stretch it.
+                // Also on the monotonic clock, so a wall clock set back cannot stretch the window.
                 let request = LivenessRequest(), listensUntil = clock.now + .seconds(LivenessHandshake.answerWindow)
-                // A request that could not be saved can never be answered: the wait goes on as without the handshake.
                 if (try? liveness.ask(request)) != nil { question = (request, listensUntil) }
             }
             let wake = clock.now + interval
@@ -390,9 +354,8 @@ func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duratio
     }
 }
 
-/// Keep the cross-process lease through authorization, posting and the candidate delete. The caller must still
-/// revalidate its current protected credentials; this cannot make local state and the operating system's
-/// presentation atomic, which is why posting replaces by stable identifier.
+// Holds the lease through authorization, posting and the candidate delete. Local state and the OS presentation cannot
+// be atomic, which is why posting replaces by stable identifier. The caller must still revalidate its credentials.
 func finishBackgroundPresentation(store: MessageStore,
                                   presentation: (@Sendable (MessageStore) async throws -> Void)?) async throws {
     do {
@@ -405,9 +368,8 @@ func finishBackgroundPresentation(store: MessageStore,
     }
 }
 
-/// The extension persists exactly what the app would: the processor decides, this loop only
-/// ends on disconnect. No automatic trust changes, no outbox, no plaintext (the processor
-/// ignores `.message`); a storage failure propagates so the sync stops before the next barrier.
+// No automatic trust changes, no outbox, no plaintext (the processor ignores `.message`). A storage failure propagates
+// so the sync stops before the next barrier.
 func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: InboundProcessor) async throws {
     for await event in events {
         try Task.checkCancellation()
@@ -418,9 +380,8 @@ func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: Inboun
     throw BackgroundSynchronizationError.connectionEnded
 }
 
-/// The seam tests lifetime ordering with suspended persistence instead of a fake crypto engine.
-/// Structured children cannot outlive ownership, including when the deadline wins the race. Once `caughtUp` is
-/// reached the deadline ends the work without failing it: what is left is best effort.
+// Structured children cannot outlive lease ownership, even when the deadline wins the race. Once `caughtUp` is
+// reached the deadline ends the work without failing it.
 func runBackgroundWork(timeBudget: Duration, caughtUp: CatchUpMark? = nil,
                        operation: @escaping @Sendable () async throws -> Void,
                        consume: @escaping @Sendable () async throws -> Void,

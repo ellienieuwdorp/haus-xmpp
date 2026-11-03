@@ -1,7 +1,7 @@
 import Foundation
 
-/// The node and publish options are opaque gateway credentials, not notification content.
-/// Keep them in protected storage. An APNs token need not be exposed to the account's XMPP server.
+/// The node and publish options are opaque gateway credentials: keep them in protected storage. An APNs token need
+/// not be exposed to the account's XMPP server.
 public struct XMPPPushConfiguration: Sendable, Equatable, Codable, CustomStringConvertible, CustomDebugStringConvertible {
     public let serviceJID: String
     public let node: String
@@ -41,8 +41,7 @@ enum PushNotifications {
                   (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 95].contains($0)
               }),
               let domain = parts.last, domain.utf8.count <= 253 else { throw XMPPNotificationError.invalidConfiguration }
-        // Gateway registration returns an ASCII DNS/IDNA domain. Full international JID preparation
-        // remains a separate stack requirement; never reinterpret a service credential here.
+        // Gateway registration returns an ASCII DNS/IDNA domain; never reinterpret a service credential here.
         let labels = domain.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.allSatisfy({ label in
             !label.isEmpty && label.utf8.count <= 63 && label.first != "-" && label.last != "-" &&

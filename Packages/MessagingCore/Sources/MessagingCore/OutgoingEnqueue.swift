@@ -4,9 +4,8 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// Where shared files live on disk. Plaintext bytes are keyed by their hash in an account-scoped
-/// cache; ciphertext waiting for a PUT is staged per message. Both are under the shared container
-/// with complete-until-first-unlock protection, never inside SQLite.
+/// Plaintext is cached by hash per account; ciphertext waiting for a PUT is staged per message. Both live in the
+/// shared container with complete-until-first-unlock protection, never inside SQLite.
 public struct AttachmentFiles: Sendable {
     public let root: URL
 
@@ -42,8 +41,8 @@ public struct AttachmentFiles: Sendable {
     }
 }
 
-/// A file chosen for sending, already reduced to what we are willing to upload. `data` may be memory-mapped from a
-/// file the preparer owns, so a large video is not copied onto the heap before it is sealed.
+/// Already reduced to what we are willing to upload. `data` may be memory-mapped, so a large video is not copied
+/// onto the heap before it is sealed.
 public struct PreparedAttachment: Sendable {
     public let data: Data
     public let name: String
@@ -56,19 +55,16 @@ public struct PreparedAttachment: Sendable {
     }
 }
 
-/// The composer's durable enqueue, shared by the app and the share extension. Nothing here needs the transport lease:
-/// each message is one `enqueueOutgoing` transaction, and the drain seals and sends it later under the lease. Text is
-/// queued unsealed; a file is sealed once with XEP-0454 here, and its ciphertext and key are stored before the row, so
-/// every later attempt sends the same bytes and nothing is regenerated.
+/// The composer's durable enqueue; needs no transport lease. Each message is one `enqueueOutgoing` transaction and
+/// the drain seals and sends it under the lease. A file is sealed once with XEP-0454 here and its ciphertext and key
+/// stored before the row, so every attempt sends the same bytes.
 public enum OutgoingEnqueue {
-    /// Bodies longer than this are refused, as by the composer.
     public static let maximumTextBytes = 16_384
 
     public enum Failure: Error, Equatable, Sendable { case emptyText, textTooLong, invalidRecipient, fileTooLarge }
 
-    /// Seals the file once, stores everything the send will ever need, then queues the message. It stays unsendable
-    /// until its PUT succeeds. Never with a caption: Conversations shows a file only when the body is exactly its link,
-    /// so a caption goes as its own message after the files (`text`).
+    /// The message stays unsendable until its PUT succeeds. Never with a caption: Conversations shows a file only when
+    /// the body is exactly its link, so a caption goes as its own message.
     @discardableResult
     public static func file(_ prepared: PreparedAttachment, id: String = UUID().uuidString, account: String, chatID: String,
                             reply: MessageReply? = nil, limit: Int, store: MessageStore, files: AttachmentFiles,
@@ -88,8 +84,7 @@ public enum OutgoingEnqueue {
         return message
     }
 
-    /// One queued, still unencrypted text row that only the drain seals. `linkPreview` is the composer's frozen own
-    /// preview, stored so every retry seals the same bytes.
+    /// `linkPreview` is frozen, so every retry seals the same bytes.
     @discardableResult
     public static func text(_ body: String, id: String = UUID().uuidString, account: String, chatID: String,
                             reply: MessageReply? = nil, linkPreview: StoredLinkPreview? = nil, store: MessageStore) async throws -> StoredMessage {
@@ -98,7 +93,7 @@ public enum OutgoingEnqueue {
         return message
     }
 
-    /// The row `text` queues, validated against what the wire accepts, so a refused body is never stored.
+    /// Validated against what the wire accepts, so a refused body is never stored.
     public static func textMessage(_ body: String, id: String, account: String, chatID: String, reply: MessageReply? = nil,
                                    linkPreview: StoredLinkPreview? = nil) throws -> StoredMessage {
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.emptyText }

@@ -19,7 +19,7 @@ public struct XMPPMessage: Sendable, Equatable {
     public let from: String
     public let to: String?
     public let body: String
-    /// Untrusted sender-provided identifier, scoped by the application to its provenance.
+    /// Untrusted sender-provided identifier.
     public let originID: String?
     public let type: String?
     public let provenance: XMPPMessageProvenance
@@ -54,9 +54,8 @@ public struct XMPPReceipt: Sendable, Equatable {
     }
 }
 
-/// A caller-resolved direct-chat reply target plus a bounded plaintext fallback snapshot.
-/// IDs must come from the original wire message, never a generated local database ID.
-/// A nil ID emits only the quoted body, without structured reply/fallback metadata.
+/// A direct-chat reply target plus a bounded plaintext fallback snapshot. IDs come from the original wire message,
+/// never a local database ID; a nil ID emits only the quoted body.
 public struct XMPPReply: Sendable, Equatable {
     public let id: String?
     public let to: String
@@ -85,41 +84,36 @@ public enum XMPPEvent: Sendable, Equatable {
     case reaction(XMPPReaction)
     case retraction(XMPPRetraction)
     case receipt(XMPPReceipt)
-    /// Emitted before the stanza's other event, so a state riding on a message is seen first.
+    /// Emitted before the stanza's other events.
     case chatState(XMPPChatState)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
     case omemoDevices(owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])
-    /// A contact's PEP avatar changed; nil means it was removed. The bytes are fetched lazily.
+    /// nil means the avatar was removed. The bytes are fetched lazily.
     case avatarMetadata(owner: String, metadata: XMPPAvatarMetadata?)
     case encryptionFailure(from: String, id: String?)
-    /// A server returned one of our stanzas. Routed before any content parsing; never decrypted.
+    /// A server bounced one of our stanzas. Routed before content parsing; never decrypted.
     case messageError(XMPPMessageError)
-    /// A contact resource became available, idle or unavailable. Never stored.
+    /// Never stored.
     case contactPresence(XMPPContactPresence)
-    /// A contact asked for, granted, withdrew or refused a presence subscription.
     case subscription(XMPPSubscriptionEvent)
     /// A roster fetch result (`replacesAll`) or one server push, in stream order.
     case rosterItems([XMPPRosterItem], replacesAll: Bool)
-    /// XEP-0490 items another device of this account published; the notification came from our own bare JID.
+    /// XEP-0490 items from our own bare JID's PEP node.
     case displayedSync([XMPPDisplayedItem])
     /// A XEP-0191 block list fetch result (`.replaceAll`) or one server push, in stream order.
     case blocklist(XMPPBlocklistChange)
-    /// Consume previous events durably before acknowledging this token.
+    /// Consume earlier events durably before acknowledging this token.
     case streamManagementBarrier(XMPPInboundToken)
     case streamAcknowledged
 }
 
-/// What the session's presence tells contacts about the user. XEP-0352 client state is separate
-/// (`setAvailability(_:clientActive:)`, `setClientActive(_:)`): a desktop can be away with a window on screen, or
-/// present with none.
+/// Presence as contacts see it. XEP-0352 client state is set separately, so a desktop can be away with a window on
+/// screen or present with none.
 public enum XMPPAvailability: Sendable, Equatable, Codable {
-    /// The user is here: plain available presence.
     case active
-    /// The user is away (the iPhone app in the background, the notification extension, a notification action, a
-    /// desktop left idle): XEP-0319 `<idle since/>` with the last time the user was here. nil omits the timestamp,
-    /// for an account that does not share last seen.
+    /// XEP-0319 `<idle since/>` with the last time the user was here; nil omits the timestamp.
     case away(since: Date?)
 }
 
@@ -146,9 +140,9 @@ public struct XMPPConnectedSession: Sendable, Equatable {
     }
 }
 
-/// Direct TLS or mandatory STARTTLS, reached through SRV discovery or a fixed endpoint, with SCRAM or PLAIN over SASL1,
-/// OMEMO PEP, durable stream management and bounded archive recovery. Every mechanism runs only inside validated TLS.
-/// Never use this API as an encryption fallback.
+/// Direct TLS or mandatory STARTTLS via SRV or a fixed endpoint, SCRAM or PLAIN over SASL1, OMEMO PEP, durable
+/// stream management and bounded archive recovery. Every mechanism runs only inside validated TLS; never use this
+/// API as an encryption fallback.
 public actor XMPPClient {
     public nonisolated let events: AsyncStream<XMPPEvent>
     private let continuation: AsyncStream<XMPPEvent>.Continuation
@@ -157,32 +151,26 @@ public actor XMPPClient {
     private var reader: Task<Void, Never>?
     private var deadline: Task<Void, Never>?
     private var liveness: Task<Void, Never>?
-    /// Counts inbound reads; a probe that does not move it means the socket is dead.
+    // A liveness probe that does not move this counter means the socket is dead.
     private var inboundActivity: UInt64 = 0
     #if DEBUG
-    /// The stream `silenceTransport()` cut off.
     private var silencedGeneration: UUID?
-    /// Until when the stream `holdAcknowledgements(for:)` named answers no `<r/>`, and the stream whose one answer at
-    /// the end is already scheduled.
+    // The stream that answers no `<r/>` until the deadline; its one answer at the end is already scheduled.
     private var heldAcknowledgements: (generation: UUID, until: ContinuousClock.Instant)?
     private var heldAcknowledgementScheduled: UUID?
     #endif
-    /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
+    // Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
     static let silenceInterval: Duration = .seconds(60)
     static let probeTimeout: Duration = .seconds(15)
-    /// Every inbound `<message/>` yields two events (content and barrier), and stream management already
-    /// ends the stream at 2,000 received-but-unhandled stanzas, so for message traffic that ceiling binds
-    /// first. Overflow still ends the connection (`eventConsumerTooSlow`); nothing dropped is acknowledged.
+    // Each inbound `<message/>` yields two events, and stream management ends the stream at 2,000 unhandled stanzas, so
+    // that ceiling binds first. Overflow ends the connection (`eventConsumerTooSlow`); nothing dropped is acknowledged.
     static let eventBufferLimit = 4096
-    /// The default reply deadline for a request.
     public static let iqTimeout: Duration = .seconds(15)
-    /// A MAM `<fin/>` arrives only after every result of the page was streamed: 100 results of a few KiB
-    /// take tens of seconds on a slow link. Still within one liveness interval, so a dead query stays bounded.
+    // A MAM `<fin/>` follows every streamed result of the page: 100 results of a few KiB take tens of seconds on a slow
+    // link. Still within one liveness interval.
     static let archiveQueryTimeout: Duration = .seconds(60)
-    /// A deliberate disconnect's last writes (away presence, final `<a/>`): a socket that cannot take a few hundred
-    /// bytes in this time is closed without them.
+    // A socket that cannot take the away presence and final `<a/>` in this time is closed without them.
     static let farewellWriteLimit: Duration = .milliseconds(500)
-    /// The round trip before a final `<a/>`; on a dead socket the disconnect gives up on it this quickly.
     static let farewellRoundTripLimit: Duration = .milliseconds(750)
     private var generation = UUID()
     private var phase: Phase = .idle
@@ -193,33 +181,31 @@ public actor XMPPClient {
     private var requireSCRAM = false
     private var sasl: SASLNegotiation?
     private var authenticatedWithSCRAM = false
-    /// One TCP/TLS attempt of a connect; a failed candidate is abandoned without ending the connect.
+    // One TCP/TLS attempt; a failed candidate is abandoned without ending the connect.
     private var attempt = UUID()
     private var abandonedError: Error?
-    /// Set on the first stream features inside TLS: from then on a failure ends the connect instead of moving on.
+    // Set at the first stream features inside TLS: from then on a failure ends the connect instead of moving on.
     private var committed = false
-    /// A candidate must reach TLS stream features within this; the whole login within `loginTimeout` of its start.
+    // A candidate must reach TLS stream features within this; the whole login within `loginTimeout`.
     static let candidateTimeout: Duration = .seconds(10)
     static let loginTimeout: Duration = .seconds(20)
-    /// No DNS query or further candidate starts after this; a candidate's own time is cut to what is left.
+    // No DNS query or further candidate starts after this; a candidate's own time is cut to what is left.
     static let connectTimeout: Duration = .seconds(30)
     static let discoveryTimeout: Duration = .seconds(5)
     private var bindID = ""
     private var boundJID = ""
-    /// Requested on every fresh bind, so a new session replaces this installation's previous one instead of
-    /// joining it as a second resource. The owner persists one per installation and account (`configureResource`).
+    // Requested on every fresh bind so a new session replaces this installation's previous one instead of joining it as
+    // a second resource. The owner persists one per installation and account.
     private var resource = XMPPClient.makeResource()
-    /// A bind the server refused (for example a resource conflict) is retried once with a server-assigned resource.
     private var bindRetried = false
     private var availability = XMPPAvailability.active
-    /// XEP-0352 state for this session: `<active/>` (a new stream's default, so nothing is sent for it when binding)
-    /// or `<inactive/>`. Restated with every announcement and on every resume.
+    // XEP-0352: `<active/>` is a new stream's default, so binding sends nothing for it. Restated on every
+    // announcement and resume.
     private var clientActive = true
-    /// What the server holds for this session: nil until initial presence; on a resume, what the snapshot recorded.
+    // nil until initial presence; on a resume, what the snapshot recorded.
     private var announced: XMPPAvailability?
-    /// The XEP-0352 state last announced on this stream.
     private var announcedClientActive = true
-    /// Counts emitted events, so the reader can tell whether a stanza produced any.
+    // Lets the reader tell whether a stanza produced any event.
     private var emittedEvents: UInt64 = 0
     private struct IQRequest {
         let scope: IQReplyScope
@@ -228,27 +214,26 @@ public actor XMPPClient {
     }
     private var iqRequests: [String: IQRequest] = [:]
     private var archiveQuery: ArchiveQuery?
-    /// Pending roster fetch IQ ids; their results are emitted in stream order, before any later push.
+    // Results are emitted in stream order, before any later push.
     private var rosterFetchIDs: Set<String> = []
-    /// RFC 6121 §2.1.6: pushes go only to resources that requested the roster in this session.
+    // RFC 6121 §2.1.6: pushes go only to resources that requested the roster in this session.
     private var rosterRequested = false
-    /// Pending XEP-0191 block list fetches, emitted in stream order like the roster's.
     private var blocklistFetchIDs: Set<String> = []
-    /// XEP-0191 §3.3: the server pushes block list changes only to sessions that fetched the list.
+    // XEP-0191 §3.3: the server pushes block list changes only to sessions that fetched the list.
     private var blocklistRequested = false
-    /// Whether an XEP-0012 query to our full JID is answered. Survives reconnects; the owner sets it.
+    // XEP-0012 answers to our full JID. Survives reconnects.
     private var sharesLastActivity = false
-    /// The current session continued an earlier one (XEP-0198 resume): no initial presence was sent, so the server
-    /// sent no probe answers and presence seen on the earlier stream still holds.
+    /// XEP-0198 resume: no initial presence was sent, so the server sent no probe answers and presence seen on the
+    /// earlier stream still holds.
     public private(set) var sessionResumed = false
     var groupRooms: [String: GroupRoomState] = [:]
-    /// In-flight membership validations by room and cache use, so concurrent refreshes of one room share one read.
+    // Concurrent refreshes of one room share one read.
     var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
-    /// The earliest server stamp this connection can carry (`ServerStampWindow.floor`), kept through a refused resume.
+    // Kept through a refused resume.
     private var stampFloor: Date?
-    /// Open from going online until the catch-up our server sends first is over; nil after that.
+    // Open from going online until the server's initial catch-up is over.
     private var stampWindow: ServerStampWindow?
     private var smOffered = false
     private var csiOffered = false
@@ -257,7 +242,7 @@ public actor XMPPClient {
     private let queue = DispatchQueue(label: "xmpp.transport")
     private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
-    /// A DER CA certificate is exclusively for the explicit local lab. System trust is the default.
+    /// A DER CA certificate for the explicit local lab only. System trust is the default.
     public init(labCertificateAuthority: Data? = nil) {
         self.labCertificateAuthority = labCertificateAuthority
         let pair = AsyncStream<XMPPEvent>.makeStream(bufferingPolicy: .bufferingOldest(XMPPClient.eventBufferLimit))
@@ -265,7 +250,7 @@ public actor XMPPClient {
         continuation = pair.continuation
     }
 
-    /// A fixed endpoint; the default is the lab's direct TLS on 5223.
+    /// A fixed endpoint; the default is direct TLS on 5223.
     @discardableResult
     public func connect(host: String, port: UInt16 = 5223, security: XMPPTransportSecurity = .directTLS, domain: String,
                         username: String, password: String, requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
@@ -273,9 +258,9 @@ public actor XMPPClient {
                           username: username, password: password, requireSCRAM: requireSCRAM)
     }
 
-    /// Tries the route's candidates in order. A candidate that cannot be reached, fails TLS or refuses STARTTLS is
-    /// skipped; the error is reported only after the last one. Once a candidate delivers stream features inside TLS the
-    /// connect is committed to it: authentication and binding failures end it. `requireSCRAM` refuses PLAIN.
+    /// Tries the route's candidates in order, skipping one that is unreachable, fails TLS or refuses STARTTLS. Once a
+    /// candidate delivers stream features inside TLS the connect commits to it: authentication and binding failures end
+    /// it. `requireSCRAM` refuses PLAIN.
     @discardableResult
     public func connect(route: XMPPRoute, domain: String, username: String, password: String,
                         requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
@@ -344,7 +329,6 @@ public actor XMPPClient {
         }
     }
 
-    /// One candidate, from TCP to online. A failure before commitment throws `CandidateFailure`.
     private func connect(to endpoint: XMPPEndpoint, token: UUID, within candidateTimeout: Duration) async throws {
         guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
         framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil
@@ -381,7 +365,7 @@ public actor XMPPClient {
         }
     }
 
-    /// Returns whether the attempt is still logging in (committed); an uncommitted one is abandoned.
+    // False abandons an uncommitted attempt.
     private func candidateDeadline(_ token: UUID, attempt attemptID: UUID) -> Bool {
         guard generation == token, attempt == attemptID else { return false }
         if committed { return true }
@@ -389,7 +373,7 @@ public actor XMPPClient {
         return false
     }
 
-    /// Drops one uncommitted candidate without ending the connect or emitting a disconnect.
+    // Without ending the connect or emitting a disconnect.
     private func abandonAttempt(_ attemptID: UUID, error: Error) {
         guard attempt == attemptID, !committed else { return }
         attempt = UUID(); abandonedError = error
@@ -403,33 +387,29 @@ public actor XMPPClient {
         finish(nil)
     }
 
-    /// External lifecycle boundary: cancel the connection and join its current reader before
-    /// releasing a shared database lease. Never call this from the reader/event parser itself.
-    /// Application event consumers and senders must also be cancelled and joined by their owner.
+    /// Cancels the connection and joins its reader; call before releasing a shared database lease, never from the
+    /// reader itself. The owner must also cancel and join event consumers and senders.
     public func disconnectAndWait() async {
         let previousReader = reader
-        // XEP-0198 recommends a last `<a/>` before a graceful close. Without it the server still counts what we
-        // handled since its last `<r/>` as unacknowledged, and Prosody's mod_cloud_notify pushes for that queue
-        // when the session starts hibernating. Bounded: a stuck write ends the connection instead.
+        // XEP-0198 recommends a last `<a/>` before a graceful close. Without it Prosody's mod_cloud_notify pushes for
+        // what we handled since its last `<r/>` once the session hibernates. A stuck write ends the connection instead.
         if phase == .online, smOffered, streamManagement != nil {
-            // One round trip first: what the server sent before its answer (our own presence reflected, a room's
-            // join answer) has then been read and, where it needs nothing durable, counted. The `<r/>` before it
-            // brings the server's `<a/>` back ahead of the answer, so the journal is trimmed too: the away presence
-            // and chat states just written are then not replayed (and pushed to every contact) on the next resume.
+            // One round trip first, with an `<r/>` ahead of it: everything the server sent before its answer is read
+            // and counted, and its `<a/>` trims the journal, so the away presence and chat states just written are not
+            // replayed to every contact on the next resume.
             try? await withFarewellDeadline { try await self.write("<r xmlns='urn:xmpp:sm:3'/>") }
             _ = try? await requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: Self.farewellRoundTripLimit)
             try? await withFarewellDeadline { try await self.writeAcknowledgement(detaching: true) }
         }
         finish(nil)
         await previousReader?.value
-        // Best effort, after the socket is gone so a held journal gate never delays the cancel: the
-        // next connection (app or extension) resumes with the highest durable h. A lagging counter
-        // only causes redelivery of stanzas whose dispositions are already saved.
+        // After the socket is gone, so a held journal gate never delays the cancel. A lagging counter only redelivers
+        // stanzas whose dispositions are already saved.
         _ = try? await streamManagement?.flushHandled()
     }
 
-    /// Completion means only that the local socket accepted the write, not server or peer delivery.
-    /// Retrying an uncertain write must preserve the same caller-supplied ID.
+    /// Completion means only that the local socket accepted the write, not server or peer delivery. Retry an uncertain
+    /// write with the same ID.
     @discardableResult public func sendMessage(to: String, body: String, id: String = UUID().uuidString, reply: XMPPReply? = nil) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
         try await write(Self.messageXML(to: to, body: body, id: id, reply: reply))
@@ -476,9 +456,8 @@ public actor XMPPClient {
         return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
     }
 
-    /// Why a message cannot be sent, so the caller can say which part is wrong.
     public enum MessageProblem: Sendable, Equatable {
-        /// The recipient, the message ID or the reply's target is not a valid address or identifier.
+        /// The recipient, message ID or reply target is not a valid address or identifier.
         case invalidAddressing
         case emptyBody, bodyTooLong, bodyUnsupportedCharacters
         case emptyQuote, quoteTooLong, quoteUnsupportedCharacters
@@ -486,7 +465,7 @@ public actor XMPPClient {
         case combinedTooLong
     }
 
-    /// Pure preflight for durable enqueueing; does not require a connected session. Nil when the message can be sent.
+    /// Preflight for durable enqueueing; needs no session. nil when the message can be sent.
     public static func messageProblem(to: String, body: String, id: String, reply: XMPPReply? = nil) -> MessageProblem? {
         guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { return .invalidAddressing }
         guard !body.isEmpty else { return .emptyBody }
@@ -519,7 +498,7 @@ public actor XMPPClient {
         return normalized.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n"
     }
 
-    /// Payload of an unencrypted direct stanza. Ambiguous extensions are dropped, never fatal.
+    // Ambiguous extensions are dropped, never fatal.
     private static func plainContent(_ node: XMLNode) -> (from: String, content: MessageContent)? {
         guard node.name == "message", node.namespace == "jabber:client",
               node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
@@ -553,8 +532,8 @@ public actor XMPPClient {
                             to: node.attributes["to"], targetID: reaction.targetID, reactions: reaction.reactions, provenance: provenance)
     }
 
-    /// Our own resources and our own room nickname are dropped; a group state needs a room we are in. A delayed copy
-    /// (offline storage, room history) is stale, and a room's private messages are not the room typing.
+    // Drops our own resources and room nickname, delayed copies (stale) and room private messages; a group state needs
+    // a room we are in.
     static func parsedChatState(_ node: XMLNode, account: String, rooms: [String: GroupRoomState]) -> XMPPChatState? {
         guard let state = XMPPChatState.state(of: node), let from = node.attributes["from"],
               let bare = OMEMOWire.bareJID(from), bare != account,
@@ -574,7 +553,7 @@ public actor XMPPClient {
         }
     }
 
-    /// A hint, not a message: nothing is stored or retried. Groups need a joined room.
+    /// A hint: nothing is stored or retried. Groups need a joined room.
     public func sendChatState(_ state: XMPPChatState.State, to: String, groupchat: Bool = false) async throws {
         guard phase == .online else { throw XMPPClientError.notConnected }
         if groupchat, groupRooms[to]?.joined != true { throw XMPPGroupError.notJoined }
@@ -649,7 +628,8 @@ public actor XMPPClient {
         case .binding:
             if node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
                node.attributes["type"] == "error", !bindRetried {
-                // RFC 6120 §7.7.2: a conflict or refused resource. Let the server pick one rather than fail the session.
+                // RFC 6120 §7.7.2: a conflict or refused resource. Let the server pick one rather than fail the
+                // session.
                 bindRetried = true
                 try await startBinding(resource: nil)
                 return
@@ -663,12 +643,12 @@ public actor XMPPClient {
             boundJID = bound.full
             if smOffered, streamManagement != nil {
                 phase = .enablingSM
-                // No `max`: the server's default applies (Prosody ignores the attribute; others cap it anyway).
+                // No `max`: Prosody ignores it and other servers cap it anyway.
                 try await write("<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
             } else { try await becomeOnline(token: token) }
         case .enablingSM:
-            // The resource is stable, so the server may route to it (or replay a replaced session's queue) before
-            // `<enabled/>`. Such stanzas are not counted by the server and are dropped here; archives cover them.
+            // The resource is stable, so the server may route to it before `<enabled/>`. Those stanzas are uncounted by
+            // the server and dropped here; archives cover them.
             if node.namespace == "jabber:client", ["message", "presence", "iq"].contains(node.name) { return }
             guard node.namespace == "urn:xmpp:sm:3", node.name == "enabled" else { throw XMPPClientError.unexpectedProtocol }
             let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")
@@ -700,7 +680,6 @@ public actor XMPPClient {
                 try await becomeOnline(token: token, resumed: true)
             }
         case .online:
-            // Parse addresses once: everything below compares `from`/`to` (also forwarded ones) in normal form.
             let node = JID.normalizingAddresses(node)
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
@@ -790,9 +769,9 @@ public actor XMPPClient {
                 }
             }
             if let inbound {
-                // A message that produced events is handled once the consumer made them durable. One that produced
-                // none (a room subject, a message from an unknown room) owes nothing: it counts at once, so a final
-                // `<a/>` can cover it; contiguity still keeps h below any earlier stanza the consumer holds.
+                // A message that produced events is handled once the consumer made them durable; one that produced none
+                // counts at once so a final `<a/>` covers it. Contiguity keeps h below any earlier stanza the consumer
+                // holds.
                 if node.name == "message", emittedEvents != emittedBefore { try emit(.streamManagementBarrier(inbound)) }
                 else { try await streamManagement?.handled(inbound) }
             }
@@ -805,14 +784,14 @@ public actor XMPPClient {
         streamManagement = StreamManagement(persistence)
     }
 
-    /// The resource every fresh bind requests. Without one a client keeps the random one it was created with.
+    /// The resource every fresh bind requests; otherwise the random one the client was created with.
     public func configureResource(_ resource: String) throws {
         guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
         guard Self.validResource(resource) else { throw XMPPClientError.invalidConfiguration }
         self.resource = resource
     }
 
-    /// `haus-` and 16 random hex digits: names the client, nothing about the user or the device.
+    /// `haus-` and 16 random hex digits: nothing about the user or device.
     public static func makeResource() -> String {
         "haus-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
     }
@@ -823,9 +802,8 @@ public actor XMPPClient {
         }
     }
 
-    /// Before connecting: the presence and XEP-0352 state the session announces once online (fresh or resumed).
-    /// Online: announces them now, presence only if it changed, bounded like a farewell, since the caller may be on
-    /// its way to the background. The iPhone always pairs `.active` with `clientActive: true` and `.away` with false.
+    /// Before connecting, records what the session announces once online (fresh or resumed). Online, announces it now,
+    /// presence only if changed, bounded like a farewell.
     public func setAvailability(_ availability: XMPPAvailability, clientActive: Bool) async throws {
         // Whole seconds, as the wire carries it: the same moment computed by two processes compares equal.
         if case .away(let since?) = availability {
@@ -850,8 +828,8 @@ public actor XMPPClient {
         try await write("<r xmlns='urn:xmpp:sm:3'/>")
     }
 
-    /// Caller must persist every result and its archive position before acknowledging handledTokens.
-    /// Only one bounded own-account query can be active; no arbitrary archive sender is trusted.
+    /// Persist every result and its archive position before acknowledging `handledTokens`. One bounded own-account
+    /// query at a time; no arbitrary archive sender is trusted.
     public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
@@ -869,21 +847,20 @@ public actor XMPPClient {
             guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
             return try query.finish(response)
         } catch {
-            // A discarded partial page must not leave a permanent inbound acknowledgement gap.
-            // Its unchanged durable cursor will refetch the page after reconnecting.
+            // A discarded partial page must not leave an acknowledgement gap; the unchanged cursor refetches it after
+            // reconnect.
             if !(archiveQuery?.handledTokens.isEmpty ?? true) {
                 finish("Archive synchronization interrupted", error: error)
                 if error is CancellationError { throw error }
-                // A room policy error after a partial page is no longer skippable:
-                // abandoning its unhandled tokens has terminated the transport.
+                // Abandoning the partial page's unhandled tokens has already ended the transport.
                 throw XMPPClientError.connectionClosed
             }
             throw error
         }
     }
 
-    /// False once the stream has ended. A query that failed with `timedOut` while this is still true hit its own
-    /// deadline; after a lost connection (liveness probe) every pending query fails with that same error.
+    /// After a lost connection every pending query fails with `timedOut`; a query that timed out while this is still
+    /// true hit its own deadline.
     public var isOnline: Bool { phase == .online }
 
     private static func smCount(_ value: String?) -> UInt32? {
@@ -891,7 +868,7 @@ public actor XMPPClient {
         return UInt32(value)
     }
 
-    /// nil asks the server to assign a resource.
+    // nil asks the server to assign a resource.
     private func startBinding(resource: String?) async throws {
         phase = .binding; bindID = UUID().uuidString
         try emit(.state(.binding))
@@ -903,8 +880,7 @@ public actor XMPPClient {
         // Presence from an earlier build carried other caps: announce once so contacts see the current features.
         announced = resumed && resumeSnapshot?.capabilities == EntityCapabilities.verification ? resumeSnapshot?.availability : nil
         try await announceAvailability(initial: !resumed)
-        // A change made while that announcement was being written found the stream not online yet, so it was only
-        // recorded: it goes out now, before anything else can see the stream online. Never runs when nothing changed.
+        // A change made during that announcement was only recorded; it goes out before anything sees the stream online.
         while generation == token, announced != availability || announcedClientActive != clientActive {
             try await announceAvailability(initial: false)
         }
@@ -917,14 +893,9 @@ public actor XMPPClient {
         handshake?.resume(); handshake = nil
     }
 
-    /// A fresh session always sends initial presence. Otherwise presence goes out only when it differs from what the
-    /// server holds: a resumed session keeps the presence an earlier process announced, and repeating it would reach
-    /// every contact and push their hibernating sessions, whose extensions would answer in kind. CSI is a nonza that
-    /// goes nowhere else, so it is always restated, except `<active/>` on a fresh stream, where it is the default.
-    /// `<active/>` goes before presence, so the server stops holding traffic back first; `<inactive/>` goes after it,
-    /// which would otherwise let the server hold the presence back.
-    /// The values are read once, before the first write: `announced` is what went out, even if a newer value was
-    /// recorded while it was being written.
+    // A resumed session repeats presence only when it changed: each one reaches every contact and wakes hibernating
+    // sessions. CSI is restated except `<active/>` on a fresh stream; `<active/>` precedes presence and `<inactive/>`
+    // follows it, so the server never holds presence back.
     private func announceAvailability(initial: Bool) async throws {
         let availability = availability, clientActive = clientActive
         let presence = initial || announced != availability
@@ -942,8 +913,8 @@ public actor XMPPClient {
         return "<presence>\(EntityCapabilities.presenceElement)<idle xmlns='\(PresenceWire.idleNamespace)' since='\(stamp)'/></presence>"
     }
 
-    /// Persists the handled count and writes it as `<a/>` under the write gate, so two acknowledgements can never
-    /// reach the server out of order. The advertised h is always the persisted value; a failed commit ends the stream.
+    // Persists the handled count, then writes `<a/>` under the write gate, so acknowledgements never reach the server
+    // out of order and h is always the persisted value. A failed commit ends the stream.
     private func writeAcknowledgement(detaching: Bool = false) async throws {
         guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
         let token = generation
@@ -956,8 +927,8 @@ public actor XMPPClient {
         } catch { await writeGate.leave(); throw error }
     }
 
-    /// A count above what we sent retires the session (`StreamManagement.acknowledge`) and ends the stream with the
-    /// XEP-0198 error, so the server drops its side too; the next connect binds fresh.
+    // A count above what we sent retires the session and ends the stream with the XEP-0198 error; the next connect
+    // binds fresh.
     private func acknowledge(_ h: UInt32, resumed: Bool = false, _ streamManagement: StreamManagement) async throws -> [XMPPStreamJournalEntry] {
         do { return try await streamManagement.acknowledge(h, resumed: resumed) }
         catch XMPPStreamManagementError.invalidAcknowledgement {
@@ -971,8 +942,7 @@ public actor XMPPClient {
         }
     }
 
-    /// Ends this connection if `work` has not finished within `farewellWriteLimit`; cancelling the socket also
-    /// completes a write it was still holding.
+    // Cancelling the socket also completes a write it was still holding.
     private func withFarewellDeadline(_ work: () async throws -> Void) async throws {
         let token = generation
         let watchdog = Task { [weak self] in
@@ -983,8 +953,8 @@ public actor XMPPClient {
         try await work()
     }
 
-    /// The socket can die without an error (NAT timeout, network change). After a silent
-    /// interval, ask the server for proof of life; any inbound bytes count as the answer.
+    // The socket can die silently (NAT timeout, network change). After a silent interval, ask for proof of life; any
+    // inbound bytes count as the answer.
     private func livenessLoop(token: UUID) async {
         while generation == token, phase == .online {
             let seen = inboundActivity
@@ -1000,15 +970,14 @@ public actor XMPPClient {
         }
     }
 
-    /// Asks the server for proof of life now rather than after `silenceInterval` of silence, for a caller with reason
-    /// to doubt the socket (the server pushed for this session, which it does when an acknowledgement is overdue). Any
-    /// inbound bytes within `limit` count as the answer, as in the liveness loop, and without one the stream ends the
-    /// same way, so the owner reconnects. True when the stream answered.
+    /// Asks the server for proof of life now, for a caller with reason to doubt the socket (a server push means an
+    /// overdue acknowledgement). Any inbound bytes within `limit` answer it; otherwise the stream ends so the owner
+    /// reconnects. True when the stream answered.
     public func probeLiveness(within limit: Duration) async -> Bool {
         guard phase == .online else { return false }
         let token = generation, seen = inboundActivity, deadline = ContinuousClock.now + limit
-        // Started before the write: a send stuck on a dead socket, or queued behind one, holds the probe no longer than
-        // `limit`. Ending the stream cancels the socket, which completes the stuck send.
+        // Started before the write: a send stuck on a dead socket holds the probe no longer than `limit`, and ending
+        // the stream cancels the socket, which completes the stuck send.
         let watchdog = Task { [weak self] in
             guard (try? await Task.sleep(until: deadline, clock: .continuous)) != nil else { return }
             await self?.endUnansweredProbe(token, seen: seen)
@@ -1034,19 +1003,16 @@ public actor XMPPClient {
     }
 
     #if DEBUG
-    /// Debug builds only: from now on the online stream reads and writes nothing, as when the network path dies without
-    /// an error. Writes still complete and nothing ends the stream: only the liveness loop or `probeLiveness(within:)`
-    /// notices, and the server sees an unresponsive session (overdue acknowledgements, then push). A new stream is not
-    /// affected. False when no stream is online.
+    /// Debug builds only: the online stream reads and writes nothing from now on, as when the network path dies without
+    /// an error. Only liveness probing notices. False when no stream is online.
     public func silenceTransport() -> Bool {
         guard phase == .online else { return false }
         silencedGeneration = generation
         return true
     }
 
-    /// Debug builds only: for `duration` the online stream answers the server's `<r/>` with nothing, then sends one
-    /// `<a/>` and goes on as before. Everything else flows, so a liveness probe is answered, but the server sees its
-    /// acknowledgement overdue (and pushes, if push is enabled) on a healthy session. False when no stream is online.
+    /// Debug builds only: for `duration` the online stream answers no `<r/>`, then sends one `<a/>`. The server sees
+    /// its acknowledgement overdue on a healthy session. False when no stream is online.
     public func holdAcknowledgements(for duration: Duration) -> Bool {
         guard phase == .online else { return false }
         heldAcknowledgements = (generation, ContinuousClock.now + duration)
@@ -1061,7 +1027,6 @@ public actor XMPPClient {
     }
     #endif
 
-    /// Ends the stream `token` unless bytes arrived since `seen`.
     private func endUnansweredProbe(_ token: UUID, seen: UInt64) {
         guard generation == token, phase == .online, inboundActivity == seen else { return }
         finish("Connection lost", error: XMPPClientError.timedOut)
@@ -1076,11 +1041,11 @@ public actor XMPPClient {
         try await write(xml, groupSnapshot: snapshot)
     }
 
-    /// `serverStamp` is our own server's delay on the stanza as it reached us (`ServerStamp`), nil when it had none.
+    // `serverStamp` is our own server's delay on the stanza (`ServerStamp`).
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance, serverStamp: Date? = nil) throws {
         if node.attributes["type"] == "error" {
-            // A bounce echoes what we sent (ciphertext included): it is never parsed as content or handed to OMEMO.
-            // Carbons never unwrap one, so only a direct error reaches here.
+            // A bounce echoes what we sent, ciphertext included: never parsed as content or handed to OMEMO. Carbons
+            // never unwrap one.
             guard provenance == .direct, let error = XMPPMessageError.parse(node) else { return }
             if error.meansNotInRoom, var state = groupRooms[error.from], state.joined {
                 // The room no longer counts us as an occupant: sends wait until a join succeeds again.
@@ -1145,10 +1110,8 @@ public actor XMPPClient {
 
     public var supportsClientStateIndication: Bool { phase == .online && csiOffered }
 
-    /// CSI is a hint, independent of presence. It is not a guarantee of suspended traffic or push.
-    /// Recorded for the session either way: a stream that is not online yet binds with it, and every later
-    /// announcement and resume restates it. Online, it is written now, bounded like a farewell (a background transition
-    /// queues behind it); a server without CSI throws `clientStateUnavailable`.
+    /// CSI is a hint, not a guarantee of suspended traffic or push. Recorded either way, so a stream not online yet
+    /// binds with it; online it is written now. A server without CSI throws `clientStateUnavailable`.
     public func setClientActive(_ active: Bool) async throws {
         clientActive = active
         guard phase == .online else { return }
@@ -1162,8 +1125,7 @@ public actor XMPPClient {
         return try await discoveryFeatures(for: ownBare).contains(PushNotifications.namespace)
     }
 
-    /// Confirms registration only after the authenticated account server returns an IQ result.
-    /// Provisioning the gateway/APNs registration is a separate application operation.
+    /// Returns only after the account server's IQ result. Provisioning the gateway registration is separate.
     public func enablePush(_ configuration: XMPPPushConfiguration) async throws {
         guard let ownBare = OMEMOWire.bareJID(boundJID), phase == .online else { throw XMPPClientError.notConnected }
         let token = generation
@@ -1182,9 +1144,8 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: ownBare, payload: payload)
     }
 
-    /// RFC 6121 §2.1.3. The result is also emitted as `.rosterItems(_, replacesAll: true)` in stream order,
-    /// ahead of any push that follows it; consumers should track the roster from events, not this return value.
-    /// Later pushes from the server are answered and emitted until the session ends.
+    /// RFC 6121 §2.1.3. The result is also emitted as `.rosterItems(_, replacesAll: true)` in stream order, ahead of
+    /// any later push; track the roster from events, not this return value.
     @discardableResult public func fetchRoster() async throws -> [XMPPRosterItem] {
         guard phase == .online, OMEMOWire.bareJID(boundJID) != nil else { throw XMPPClientError.notConnected }
         rosterRequested = true
@@ -1195,9 +1156,8 @@ public actor XMPPClient {
         return try PresenceWire.rosterResult(response)
     }
 
-    /// XEP-0191 §3.2. The result is also emitted as `.blocklist(.replaceAll)` in stream order, ahead of any push that
-    /// follows it, and later pushes are answered and emitted until the session ends: the server pushes only to sessions
-    /// that asked for the list. Ask only when the server advertises `urn:xmpp:blocking`.
+    /// XEP-0191 §3.2. The result is also emitted as `.blocklist(.replaceAll)` in stream order, and later pushes follow
+    /// until the session ends. Ask only when the server advertises `urn:xmpp:blocking`.
     @discardableResult public func fetchBlocklist() async throws -> XMPPBlocklist {
         guard phase == .online, OMEMOWire.bareJID(boundJID) != nil else { throw XMPPClientError.notConnected }
         blocklistRequested = true
@@ -1208,8 +1168,7 @@ public actor XMPPClient {
         return XMPPBlocklist(try BlockingWire.blocklistResult(response))
     }
 
-    /// XEP-0191 §3.3, with an optional XEP-0377 report. Returns once the server accepted the block; its push to every
-    /// session that fetched the list follows.
+    /// XEP-0191 §3.3, with an optional XEP-0377 report. Returns once the server accepted the block.
     public func block(_ address: String, report: XMPPBlockReport? = nil) async throws {
         guard phase == .online else { throw XMPPClientError.notConnected }
         _ = try await requestIQ(type: "set", to: nil, payload: BlockingWire.blockXML(address, report: report))
@@ -1221,14 +1180,13 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: nil, payload: BlockingWire.unblockXML(addresses))
     }
 
-    /// `<presence to='bare' type='…'/>`: ask for, grant, withdraw or refuse a presence subscription.
     public func sendSubscription(_ kind: XMPPSubscriptionRequest, to bare: String) async throws {
         guard phase == .online else { throw XMPPClientError.notConnected }
         try await write(PresenceWire.subscriptionXML(kind, to: bare))
     }
 
-    /// XEP-0012 seconds since the contact's last session ended, as its server reports it.
-    /// Only the queried bare address may answer. `forbidden` means we hold no subscription.
+    /// XEP-0012 seconds since the contact's last session ended. Only the queried bare address may answer; `forbidden`
+    /// means we hold no subscription.
     public func lastActivity(of bare: String) async throws -> Int {
         guard phase == .online else { throw XMPPClientError.notConnected }
         guard OMEMOWire.bareJID(bare) == bare else { throw XMPPClientError.invalidConfiguration }
@@ -1236,13 +1194,12 @@ public actor XMPPClient {
         return try PresenceWire.lastActivitySeconds(response)
     }
 
-    /// Decides the inline XEP-0012 answer to a query addressed to our full JID: `seconds='0'` when on,
-    /// `service-unavailable` when off (the default).
+    /// XEP-0012 answer to a query to our full JID: `seconds='0'` when on, `service-unavailable` when off (default).
     public func setSharesLastActivity(_ on: Bool) {
         sharesLastActivity = on
     }
 
-    /// The raw disco#info query node: features plus any data forms (XEP-0128) the entity publishes.
+    // Features plus any XEP-0128 data forms.
     func discoveryInfo(for jid: String? = nil) async throws -> XMLNode {
         let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#info'/>")
         return try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#info")
@@ -1263,7 +1220,7 @@ public actor XMPPClient {
         } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
     }
 
-    /// A node that exists but holds no item is an empty list, the same as a missing node.
+    // A node with no item is an empty list, like a missing node.
     static func decodeDeviceList(_ response: XMLNode, profile: XMPPOMEMOProfile) throws -> [UInt32] {
         let items = try pubsubItems(response, node: profile.devicesNode)
         if items.children.isEmpty { return [] }
@@ -1281,7 +1238,7 @@ public actor XMPPClient {
         return try Self.logged(response, "bundle \(deviceID) of \(jid)") { try Self.decodeBundle(response, deviceID: deviceID, profile: profile) }
     }
 
-    /// An existing bundle node with no item behaves like a missing one, so the caller can skip that device.
+    // A bundle node with no item behaves like a missing one, so the caller skips that device.
     static func decodeBundle(_ response: XMLNode, deviceID: UInt32, profile: XMPPOMEMOProfile) throws -> XMPPOMEMOBundle {
         let node = profile.bundlesNode(deviceID: deviceID)
         let items = try pubsubItems(response, node: node)
@@ -1292,7 +1249,7 @@ public actor XMPPClient {
         return try OMEMOWire.parseBundle(item.children[0], deviceID: deviceID, profile: profile)
     }
 
-    /// Records the element outline (names and attributes, never text) of a public PEP response that failed to decode.
+    // Logs the element outline (names and attributes, never text) of a public PEP response that failed to decode.
     private static func logged<T>(_ response: XMLNode, _ what: String, _ decode: () throws -> T) throws -> T {
         do { return try decode() }
         catch XMPPIQError.malformedResponse {
@@ -1310,8 +1267,7 @@ public actor XMPPClient {
         return "\(node.name)" + (attributes.isEmpty ? "" : "{\(attributes)}") + (node.children.isEmpty ? "" : "[\(children)]")
     }
 
-    /// XEP-0490: every chat's displayed state from our own PEP node. A missing node is no state. `timeout` bounds the
-    /// query for a caller with a budget (the notification extension).
+    /// XEP-0490: every chat's displayed state from our own PEP node; a missing node is no state.
     public func fetchDisplayedSync(timeout: Duration = XMPPClient.iqTimeout) async throws -> [XMPPDisplayedItem] {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         do {
@@ -1320,8 +1276,7 @@ public actor XMPPClient {
         } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
     }
 
-    /// For a private node (XEP-0490 item ids are contact and room JIDs): a decoding failure logs only element names and
-    /// child counts, never an attribute value or text, so nothing identifying reaches the unified log.
+    // XEP-0490 item ids are contact and room JIDs: a decoding failure logs only element names and child counts.
     private static func loggedPrivately<T>(_ response: XMLNode, _ what: String, _ decode: () throws -> T) throws -> T {
         do { return try decode() }
         catch XMPPIQError.malformedResponse {
@@ -1332,15 +1287,15 @@ public actor XMPPClient {
         }
     }
 
-    /// Element names and child counts only, 4 levels deep and 4 children wide.
+    // Element names and child counts only, 4 levels deep and 4 children wide.
     static func shape(_ node: XMLNode, depth: Int = 0) -> String {
         guard depth < 4 else { return "…" }
         let children = node.children.prefix(4).map { shape($0, depth: depth + 1) }.joined(separator: ",")
         return node.name + (node.children.isEmpty ? "" : "#\(node.children.count)[\(children)]")
     }
 
-    /// XEP-0490: publish one chat's displayed state with the node options the XEP requires. A node that exists with
-    /// other options is reconfigured once, then the publish is repeated.
+    /// XEP-0490: publishes one chat's displayed state with the required node options. A node with other options is
+    /// reconfigured once, then the publish is repeated.
     public func publishDisplayedSync(_ item: XMPPDisplayedItem) async throws {
         guard phase == .online else { throw XMPPClientError.notConnected }
         let payload = try DisplayedSync.publishXML(item)
@@ -1393,8 +1348,8 @@ public actor XMPPClient {
         return (owner, profile, devices)
     }
 
-    /// XEP-0084 metadata; nil when the contact publishes no avatar. `item-not-found` and a server
-    /// without PEP both throw so the caller can fall back to the vCard photo.
+    /// XEP-0084 metadata; nil when the contact publishes none. `item-not-found` and a server without PEP throw, so the
+    /// caller can fall back to the vCard photo.
     public func fetchAvatarMetadata(for jid: String) async throws -> XMPPAvatarMetadata? {
         guard OMEMOWire.bareJID(jid) == jid else { throw XMPPClientError.invalidConfiguration }
         let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(AvatarWire.metadataNode)' max_items='1'/></pubsub>")
@@ -1410,7 +1365,7 @@ public actor XMPPClient {
         return try AvatarWire.parseMetadata(item.children[0])
     }
 
-    /// The bytes behind a metadata id, verified against it before they are returned.
+    /// Verified against the metadata id before it is returned.
     public func fetchAvatarData(for jid: String, id: String) async throws -> Data {
         guard OMEMOWire.bareJID(jid) == jid, AvatarWire.validHash(id) else { throw XMPPClientError.invalidConfiguration }
         let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(AvatarWire.dataNode)'><item id='\(id)'/></items></pubsub>")
@@ -1504,8 +1459,8 @@ public actor XMPPClient {
         switch continuation.yield(event) {
         case .enqueued: break
         case .dropped: throw XMPPClientError.eventConsumerTooSlow
-        // Online, a finished stream means the owner stopped consuming on its way to `disconnectAndWait`, possibly
-        // before it: the connection stays for the farewell. A message's barrier then never counts it as handled.
+        // Online, a finished stream means the owner stopped consuming on its way to `disconnectAndWait`: the connection
+        // stays for the farewell, and the message's barrier never counts it as handled.
         case .terminated: if phase != .online { throw XMPPClientError.eventConsumerTooSlow }
         @unknown default: throw XMPPClientError.eventConsumerTooSlow
         }
@@ -1524,8 +1479,8 @@ public actor XMPPClient {
         boundJID = ""; stampWindow = nil
         handshake?.resume(throwing: error); handshake = nil
         connection?.cancel(); connection = nil
-        // Keep the task handle until the next connection so a later lifecycle join still
-        // sees work cancelled by an earlier error/disconnect (including an archive abort).
+        // Keep the handle until the next connection so a later lifecycle join still sees work an earlier error
+        // cancelled.
         reader?.cancel()
         deadline?.cancel(); deadline = nil
         liveness?.cancel(); liveness = nil
@@ -1581,9 +1536,9 @@ public actor XMPPClient {
                 switch state {
                 case .ready: result.finish(nil)
                 case .failed(let error): result.finish(error)
-                // Waiting is recoverable (for example the first local-network permission
-                // prompt). Keep the attempt alive until ready, cancellation or our deadline.
-                // A refused port, a failed TLS handshake or a missing name will not recover: move to the next candidate.
+                // Waiting is recoverable (for example the first local-network permission prompt) until ready,
+                // cancellation or our deadline. A refused port, failed TLS handshake or missing name is not: move to
+                // the next candidate.
                 case .waiting(let error): if definitive(error) { result.finish(error) }
                 case .cancelled: result.finish(XMPPClientError.connectionClosed)
                 default: break
@@ -1618,10 +1573,9 @@ public actor XMPPClient {
     }
 }
 
-/// A candidate endpoint failed before the connect committed to it; the next one is tried.
 private struct CandidateFailure: Error { let error: Error }
 
-/// NWConnection callbacks are serialized on their queue; the lock also protects cancellation delivery.
+// NWConnection callbacks are serialized on their queue; the lock also protects cancellation delivery.
 private final class ConnectionStart: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Error>?

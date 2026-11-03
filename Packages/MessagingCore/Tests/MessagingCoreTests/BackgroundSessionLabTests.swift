@@ -5,13 +5,13 @@ import OMEMO
 import XMPPProtocol
 @testable import MessagingCore
 
-/// The extension's fresh-bind path against the local lab Prosody. Runs only when configured:
-///   HAUS_LAB_BACKGROUND_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
-///   HAUS_LAB_BACKGROUND_ROOM     a members-only, non-anonymous room on rooms.localhost the account is a member of
-///   HAUS_LAB_CA                  the lab CA (PEM)
-///   HAUS_LAB_PROSODY_CONTAINER   the lab's Prosody container (default haus-xmpp-lab-prosody-1), whose shell reports
-///                                the server's sessions and occupants
-/// The run leaves its session hibernating, so it can also be inspected by hand afterwards.
+// The extension's fresh-bind path against the local lab Prosody. Runs only when configured:
+//   HAUS_LAB_BACKGROUND_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
+//   HAUS_LAB_BACKGROUND_ROOM     a members-only, non-anonymous room on rooms.localhost the account is a member of
+//   HAUS_LAB_CA                  the lab CA (PEM)
+//   HAUS_LAB_PROSODY_CONTAINER   the lab's Prosody container (default haus-xmpp-lab-prosody-1), whose shell reports
+//                                the server's sessions and occupants
+// The run leaves its session hibernating, so it can also be inspected by hand afterwards.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_BACKGROUND_ACCOUNT"] != nil), .serialized)
 struct BackgroundSessionLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -27,7 +27,7 @@ struct BackgroundSessionLabTests {
 
     private let env = ProcessInfo.processInfo.environment
 
-    /// `prosodyctl shell` in the lab container: the server's own view, which no client can query.
+    // `prosodyctl shell` in the lab container: the server's own view, which no client can query.
     private func prosody(_ arguments: String...) throws -> [Substring] {
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

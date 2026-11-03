@@ -5,8 +5,8 @@ import MessageStore
 import XMPPProtocol
 @testable import OMEMO
 
-/// Encryption state saved before addresses were normalised names owners as they were typed. It must read back in
-/// normal form without raising any trust decision, and an entry already in normal form wins a collision.
+// State naming owners as typed reads back in normal form without raising a trust decision; an entry already in
+// normal form wins a collision.
 @Test func savedOwnersAreReadInNormalFormWithoutRaisingTrust() throws {
     let key = Data(repeating: 5, count: 33), otherKey = Data(repeating: 6, count: 33)
     func device(_ jid: String, _ id: UInt32, _ identity: Data, _ trust: DeviceTrust) -> String {
@@ -29,9 +29,8 @@ import XMPPProtocol
     #expect(state.groupRooms == ["team@rooms.localhost": ["carol@localhost", "bob@localhost"]])
 }
 
-/// A base build sealed the identity and a file's key under the typed account (`Ellie@LocalHost`: the account is the
-/// sealing's associated data). After the v23 store rewrite renames those rows, both still open for the normal spelling
-/// and the identity is the same one: never a new identity, never an unreadable one.
+// Identity and file key sealed under the typed account (the associated data) still open after the store renames
+// the rows to the normal spelling, and the identity stays the same.
 @Test func stateAndFileKeysSealedUnderTheTypedSpellingOpenAfterTheStoreRewrite() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "sealed-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -46,7 +45,7 @@ import XMPPProtocol
     let oldService = OMEMOService(store: old, protection: protection)
     try await oldService.initialize(account: account, transport: TestTransport(account: account, server: server))
     let identity = try await oldService.load(account).1.engines
-    // Re-key the saved rows as the base build wrote them.
+    // Re-key the saved rows under the typed spelling.
     let plain = try protection.open(try #require(try await old.encryptionState(accountID: account)).data, account: account)
     try await old.saveEncryptionState(accountID: typed, expectedRevision: nil, data: protection.seal(plain, account: typed))
     try await old.upsertChat(accountID: typed, chatID: "Bob@LocalHost", title: "Bob")
@@ -75,8 +74,7 @@ import XMPPProtocol
     try await store.close()
 }
 
-/// State kept only under another spelling of the account (a store whose rewrite was rolled back) is still this
-/// account's identity: setting up encryption refuses rather than creating a second identity beside it.
+// State kept only under another spelling is still this account's identity: setup refuses to create a second one.
 @Test func setupNeverCreatesAnIdentityBesideOneSavedUnderAnotherSpelling() async throws {
     let url = FileManager.default.temporaryDirectory.appending(path: "spelling-\(UUID()).sqlite")
     defer { try? FileManager.default.removeItem(at: url) }

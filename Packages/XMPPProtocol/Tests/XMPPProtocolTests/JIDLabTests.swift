@@ -2,10 +2,9 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// An account signed in with capitals in its localpart, against the local lab Prosody (which binds the lowercase JID).
-/// Runs only when the lab is configured:
-///   HAUS_LAB_JID_ACCOUNT / HAUS_LAB_JID_PEER  credential JSON files ({"jid", "password"}) under work/, lowercase JIDs
-///   HAUS_LAB_CA                               the lab CA (PEM)
+// An account signed in with capitals in its localpart, against a lab Prosody (which binds the lowercase JID):
+//   HAUS_LAB_JID_ACCOUNT / HAUS_LAB_JID_PEER  credential JSON files ({"jid", "password"}), lowercase JIDs
+//   HAUS_LAB_CA                               the lab CA (PEM)
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_JID_ACCOUNT"] != nil), .serialized)
 struct JIDLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -35,7 +34,7 @@ struct JIDLabTests {
         return try #require(Data(base64Encoded: pem.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()))
     }
 
-    /// `p0-jid-a` becomes `P0-Jid-A`: what a password manager or a paste can deliver.
+    // `p0-jid-a` becomes `P0-Jid-A`: what a password manager or a paste can deliver.
     private func capitalised(_ localpart: Substring) -> String {
         localpart.split(separator: "-", omittingEmptySubsequences: false).map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: "-")
     }
@@ -73,7 +72,7 @@ struct JIDLabTests {
         #expect(online.map { $0.hasPrefix(account + "/") } == true)
         try await first.setCarbonsEnabled()
 
-        // A query addressed as typed is answered by the lowercase entity; before normalisation it timed out.
+        // A query addressed as typed is answered by the lowercase entity.
         do { _ = try await first.discoveryFeatures(for: typedPeer) }
         catch XMPPClientError.timedOut { Issue.record("reply to \(typedPeer) was not matched") }
         catch {}

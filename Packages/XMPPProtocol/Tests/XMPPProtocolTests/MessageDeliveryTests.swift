@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// Server delay stamps and returned stanzas, through `XMPPClient`'s own socket and parser against `LoopbackServer`.
+// Server delay stamps and returned stanzas, through `XMPPClient`'s own socket and parser against `LoopbackServer`.
 @Suite(.serialized)
 struct MessageDeliveryTests {
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
@@ -10,7 +10,7 @@ struct MessageDeliveryTests {
                                                     keys: [.init(recipientJID: "alice@localhost", deviceID: 9, keyExchange: false, data: Data([1]))],
                                                     payload: Data([2]))
 
-    /// An OMEMO message from `from` to our bound resource, with `extra` children.
+    // An OMEMO message from `from` to our bound resource, with `extra` children.
     private static func encrypted(_ id: String, from: String = "bob@localhost/phone", extra: String = "") throws -> String {
         try OMEMOWire.messageXML(to: "alice@localhost", envelope: envelope, id: id)
             .replacingOccurrences(of: "<message to='alice@localhost'", with: "<message from='\(from)' to='alice@localhost/r'")
@@ -19,13 +19,13 @@ struct MessageDeliveryTests {
 
     private static func delay(_ from: String, _ stamp: String) -> String { "<delay xmlns='urn:xmpp:delay' from='\(from)' stamp='\(stamp)'/>" }
 
-    /// `message` as a received carbon our server wrote, with `extra` on the wrapper.
+    // `message` as a received carbon our server wrote, with `extra` on the wrapper.
     private static func carbon(_ message: String, extra: String = "") -> String {
         "<message from='alice@localhost' to='alice@localhost/r'><received xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'>"
             + message.replacingOccurrences(of: "<message ", with: "<message xmlns='jabber:client' ") + "</forwarded></received>\(extra)</message>"
     }
 
-    /// Signed in as alice@localhost/r without stream management; the iterator has seen everything up to `.online`.
+    // Signed in as alice@localhost/r without stream management; the iterator has seen everything up to `.online`.
     private func online() async throws -> (LoopbackServer, XMPPClient, AsyncStream<XMPPEvent>.Iterator) {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -40,7 +40,7 @@ struct MessageDeliveryTests {
         return (server, client, events)
     }
 
-    /// Events up to (not including) the plaintext message with id `end`, which the caller sent last.
+    // Events up to (not including) the plaintext message with id `end`, which the caller sent last.
     private func collect(until end: String, from iterator: inout AsyncStream<XMPPEvent>.Iterator) async -> [XMPPEvent] {
         var seen: [XMPPEvent] = []
         while let event = await iterator.next() {
@@ -77,8 +77,8 @@ struct MessageDeliveryTests {
         await server.stop()
     }
 
-    /// Our server stamps only what it held while we were away and sends it first. Later, a delay naming our server was
-    /// written by the sender, who could otherwise date a live message into the past, below the read pointer.
+    // Our server stamps only what it held while we were away and sends it first. Later, a delay naming our server was
+    // written by the sender, who could otherwise date a live message into the past, below the read pointer.
     @Test func aDelayNamingOurServerAfterTheCatchUpIsTheSendersClaim() async throws {
         for ending in ["live message", "answer to our request"] {
             let (server, client, iterator) = try await online()
@@ -106,8 +106,8 @@ struct MessageDeliveryTests {
         }
     }
 
-    /// A hibernation queue holds only what arrived after the previous stream's last contact, so a replayed message
-    /// stamped earlier than that (less the margin) carries a delay its sender wrote.
+    // A hibernation queue holds only what arrived after the previous stream's last contact, so a replayed message
+    // stamped earlier than that (less the margin) carries a delay its sender wrote.
     @Test func aResumedStreamTakesNoStampOlderThanThePreviousStreamsLastContact() async throws {
         let lastContact = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3_600).rounded())
         var saved = XMPPStreamManagementSnapshot(revision: 1, accountID: "alice@localhost", fullJID: "alice@localhost/r", streamID: "s1",

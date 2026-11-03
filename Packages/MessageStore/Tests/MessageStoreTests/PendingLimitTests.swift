@@ -5,7 +5,7 @@ import Testing
 private let account = "alice@localhost"
 private let limits = MessageStore.pendingLimits
 
-/// A message in `chat` (created if needed), for the evidence that makes a sender known.
+// A message in `chat` (created if needed), for the evidence that makes a sender known.
 private func write(_ store: MessageStore, _ message: StoredMessage) async throws {
     try await store.upsertChat(accountID: account, chatID: message.chatID, title: message.chatID)
     _ = try await store.insertMessage(message)
@@ -25,8 +25,8 @@ private func overflow(_ sender: String, _ digest: String, chat: String? = nil, b
         sentAt: Date(timeIntervalSince1970: 1_000), reason: .retentionLimit, key: .ciphertext(sender: sender, digest: digest)) : nil, senderApproved: approved)
 }
 
-/// Offers `count` new ciphertexts from `sender` in `chat`, each waiting for review with an alert (or, `approved`, for a
-/// retry of an approved device's copy); returns how many were kept.
+// Offers `count` new ciphertexts from `sender` in `chat`, each waiting for review with an alert (or, `approved`, for a
+// retry of an approved device's copy); returns how many were kept.
 private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: String? = nil, tag: String = "", approved: Bool = false) async throws -> Int {
     var kept = 0
     for index in 0..<count {
@@ -38,10 +38,9 @@ private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: St
     return kept
 }
 
-/// Only durable evidence that the account knows the sender lifts the stranger quota: the account itself, a conversation or
-/// direct chat the account wrote in, or an authenticated message from the sender in their direct chat or (decrypted) in
-/// the room. A placeholder or a plaintext room line from them is no evidence. An approved device's copy, waiting for a
-/// retry rather than a review, is not held to a stranger's quota at all.
+// Only durable evidence that the account knows the sender lifts the stranger quota: the account itself, a chat the
+// account wrote in, or the sender's authenticated message in their direct chat or (decrypted) in the room; never a
+// placeholder or plaintext room line. An approved device's copy, waiting for a retry, has no stranger quota at all.
 @Test func strangerQuotaAppliesUntilTheAccountKnowsTheSender() async throws {
     let room = "room@conference.localhost"
     let cases: [(sender: String, chat: String?, approved: Bool, known: Bool, setUp: @Sendable (MessageStore, String) async throws -> Void)] = [
@@ -71,8 +70,8 @@ private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: St
     }
 }
 
-/// Each limit in turn: the ciphertext it refuses becomes a final outcome in the same transaction (a quiet placeholder for
-/// a would-be bubble, the consumed replay identity otherwise), never an error, never a pending row or an alert.
+// Each limit in turn: the ciphertext it refuses becomes a final outcome in the same transaction (a quiet placeholder for
+// a would-be bubble, the consumed replay identity otherwise), never an error, never a pending row or an alert.
 @Test func everyLimitTurnsOverflowIntoAQuietFinalOutcome() async throws {
     let (store, directory) = try await limitStore()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -113,8 +112,8 @@ private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: St
     try await store.close()
 }
 
-/// A quiet outcome stays quiet in the chat list too: a blocked device's or an over-limit placeholder never counts as
-/// unread (so never raises the app badge), while a placeholder that alerts still does.
+// A quiet outcome stays quiet in the chat list too: a blocked device's or an over-limit placeholder never counts as
+// unread (so never raises the app badge), while a placeholder that alerts still does.
 @Test func quietPlaceholdersDoNotCountAsUnread() async throws {
     let (store, directory) = try await limitStore()
     defer { try? FileManager.default.removeItem(at: directory) }

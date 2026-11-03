@@ -4,8 +4,8 @@ import Security
 import Testing
 @testable import XMPPProtocol
 
-/// RFC 6120 §7.7: the server chooses the resource and the canonical spelling of the account, never another account.
-/// A scripted TLS server (generated localhost CA, PLAIN, bind) answers the client's bind with a chosen JID.
+// RFC 6120 §7.7: the server chooses the resource and the canonical spelling of the account, never another account.
+// A scripted TLS server (generated localhost CA, PLAIN, bind) answers the client's bind with a chosen JID.
 @Suite(.serialized) struct BindIdentityTests {
     @Test(arguments: [("ellie@localhost/phone", true), ("mallory@localhost/phone", false), ("localhost/phone", false)])
     func boundAccountMustBeTheOneThatSignedIn(bound: String, accepted: Bool) async throws {
@@ -26,7 +26,7 @@ import Testing
     }
 }
 
-/// Just enough of a server for sign-in: stream features with PLAIN, success, bind. Identity generated per run.
+// Just enough of a server for sign-in: stream features with PLAIN, success, bind. Identity generated per run.
 private final class ScriptedServer: @unchecked Sendable {
     let certificateAuthority: Data
     private let identity: SecIdentity

@@ -5,13 +5,13 @@ import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
-/// The forward walk against the local lab Prosody when the server no longer holds a checkpoint's cursor, through the
-/// notification extension's entry point (`BackgroundSynchronizer`). Runs only when the lab is configured:
-///   HAUS_LAB_CURSOR_ACCOUNT / HAUS_LAB_CURSOR_PEER  fixture JSON files ({"jid", "password", "room"}) for two
-///   disposable accounts and a members-only room; the account owns the room and the peer is its other member.
-///   HAUS_LAB_CA (PEM)
-/// The peer sends OMEMO envelopes with no key for this account, so every archived entry becomes a durable
-/// "not for this device" outcome without a trust setup: the check is about archive positions, not decryption.
+// The forward walk against the local lab Prosody when the server no longer holds a checkpoint's cursor, through the
+// notification extension's entry point (`BackgroundSynchronizer`). Runs only when the lab is configured:
+//   HAUS_LAB_CURSOR_ACCOUNT / HAUS_LAB_CURSOR_PEER  fixture JSON files ({"jid", "password", "room"}) for two
+//   disposable accounts and a members-only room; the account owns the room and the peer is its other member.
+//   HAUS_LAB_CA (PEM)
+// The peer sends OMEMO envelopes with no key for this account, so every archived entry becomes a durable
+// "not for this device" outcome without a trust setup: the check is about archive positions, not decryption.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_CURSOR_ACCOUNT"] != nil), .serialized)
 struct ArchiveCursorLabTests {
     private let env = ProcessInfo.processInfo.environment
@@ -33,8 +33,8 @@ struct ArchiveCursorLabTests {
         return client
     }
 
-    /// One direct and one room entry from the peer, each with an envelope keyed only for a device the account does not have.
-    /// Replay identity is the ciphertext digest, so every envelope carries its own payload.
+    // One direct and one room entry from the peer, each with an envelope keyed only for a device the account does not have.
+    // Replay identity is the ciphertext digest, so every envelope carries its own payload.
     private func send(from peer: XMPPClient, to account: String, room: String, members: [String]) async throws {
         let envelope = { (profile: XMPPOMEMOProfile) in
             XMPPOMEMOEnvelope(profile: profile, senderDeviceID: 4242,
@@ -71,8 +71,8 @@ struct ArchiveCursorLabTests {
         #expect(direct.stamp != nil && roomCheckpoint.stamp != nil)
         await client.disconnectAndWait()
 
-        // As after a week of archive expiry: the server no longer holds either cursor. The room's checkpoint is one
-        // written before stamps existed.
+        // As after a week of archive expiry: the server no longer holds either cursor. The room's checkpoint has no
+        // stamp.
         let lost = "p0-lost-" + UUID().uuidString
         try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: direct.revision, cursor: lost, stamp: direct.stamp)
         try await store.saveArchiveCheckpoint(accountID: account, archiveID: room, expectedRevision: roomCheckpoint.revision, cursor: lost)

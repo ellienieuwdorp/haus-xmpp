@@ -8,10 +8,8 @@ public struct UnreadableEncryptionState: Sendable, Equatable {
     public let accountID: String
     /// The row's revision when it was assessed; `startOver` discards it only at this revision.
     public let revision: Int
-    /// The device ID the lost identity is published under, when a build recorded it; nil means it cannot be retired
-    /// automatically.
+    /// The device ID the lost identity is published under; nil means it cannot be retired automatically.
     public let deviceID: UInt32?
-    /// Plain-text counts of what depends on the lost key.
     public let loss: EncryptionLossCounts
 
     public init(accountID: String, revision: Int, deviceID: UInt32?, loss: EncryptionLossCounts) {
@@ -19,10 +17,10 @@ public struct UnreadableEncryptionState: Sendable, Equatable {
     }
 }
 
-/// Plain-text counts for the recovery screen: what of one account's data depends on the lost key.
+/// Plain-text counts of one account's data that depends on the lost key.
 public struct EncryptionLossCounts: Sendable, Equatable {
-    /// Retained ciphertext for the old device that would have been a message bubble: each becomes an unreadable
-    /// placeholder. Key transports and other non-bubble rows are only consumed and not counted.
+    /// Retained ciphertext that would have been a message bubble; each becomes an unreadable placeholder. Key
+    /// transports and other non-bubble rows are consumed and not counted.
     public let waitingMessages: Int
     /// Queued messages with a file and no prepared ciphertext: their key material was sealed, so they cannot be sent.
     public let unsendableFiles: Int
@@ -30,8 +28,8 @@ public struct EncryptionLossCounts: Sendable, Equatable {
 }
 
 extension OMEMOService {
-    /// Every state row `protection` cannot open; every row when there is no key at all. Only a failed AES-GCM open
-    /// counts: a row that opens but does not decode is not key loss and is left to the ordinary errors.
+    /// Every state row `protection` cannot open; every row when there is no key. Only a failed AES-GCM open counts:
+    /// a row that opens but does not decode is not key loss.
     public static func unreadableStates(store: MessageStore, protection: StateProtection?) async throws -> [UnreadableEncryptionState] {
         var result: [UnreadableEncryptionState] = []
         for accountID in try await store.encryptionStateAccountIDs().sorted() {
@@ -45,10 +43,8 @@ extension OMEMOService {
         return result
     }
 
-    /// Records the plain-text device ID of every row that has none yet, so a later key loss can still retire it.
-    /// Opens each such row once; rows already recorded are not read. Best effort per row: this runs at every launch for
-    /// every account, so a row that opens but does not decode is skipped and left to that account's own encryption
-    /// errors instead of keeping storage closed for all of them.
+    /// Records the plain-text device ID of every row without one, so a later key loss can still retire it. Best
+    /// effort per row: a row that does not decode is skipped rather than keeping storage closed for every account.
     public func recordLocalDeviceIDs() async throws {
         try await gate.run {
             for accountID in try await self.store.encryptionStateAccountIDs() {
@@ -61,13 +57,11 @@ extension OMEMOService {
         }
     }
 
-    /// The explicit, user-confirmed start over after the wrapping key was lost. Discards exactly `states` (each only if
-    /// it is unchanged and still cannot be opened with this service's key), decides every retained ciphertext of those
-    /// accounts, and, when `account` is among them, creates its new identity under a device ID none of its old or
-    /// retired devices used. Both profiles share the new identity, as `initialize` creates it. Nothing is published
-    /// here: the next `initialize` publishes the bundles and takes the retired IDs out of the device lists. Requires the
-    /// store's lease. Returns the new device ID, or nil when `account` had nothing to replace (it gets an identity from
-    /// `initialize`, like any account without state).
+    /// User-confirmed reset after the wrapping key was lost. Discards exactly `states`, each only while unchanged and
+    /// still unopenable, decides their retained ciphertext, and for `account` creates one identity shared by both
+    /// profiles under a device ID no old or retired device used. Publishes nothing: the next `initialize` publishes
+    /// bundles and drops retired IDs from the device lists. Requires the store's lease. Returns the new device ID, or
+    /// nil when `account` had nothing to replace.
     @discardableResult
     public func startOver(account: String?, discarding states: [UnreadableEncryptionState]) async throws -> UInt32? {
         try await gate.run { try await self.startOverLocked(account: account, discarding: states) }
@@ -79,7 +73,7 @@ extension OMEMOService {
         var oldIDs: Set<UInt32> = []
         for item in states {
             guard let row = try await store.encryptionState(accountID: item.accountID), row.revision == item.revision else { throw OMEMOError.concurrentChange }
-            // Never discard an identity this key can read: that would be the silent identity replacement the project forbids.
+            // Never discard an identity this key can read: that would silently replace it.
             guard (try? protection.open(row.data, account: item.accountID, sealedAs: row.sealedAccount)) == nil else { throw OMEMOError.stateReadable }
             if let id = row.deviceID { oldIDs.insert(id) }
             let outcomes = try await retainedOutcomes(account: item.accountID)
@@ -101,9 +95,8 @@ extension OMEMOService {
         return replacement?.deviceID
     }
 
-    /// The final outcome of each retained ciphertext of `account`, all encrypted for a device whose keys are gone: a
-    /// would-be bubble becomes an `encryptionReset` placeholder (decided as the retry pass decides a bubble), anything
-    /// else, including a row that does not decode, only consumes its replay identity. Nothing is decrypted.
+    // Keys are gone, so nothing is decrypted: a would-be bubble becomes an `encryptionReset` placeholder; anything
+    // else, including an undecodable row, only consumes its replay identity.
     private func retainedOutcomes(account: String) async throws -> (placeholders: [UnreadableMessage], consumed: [CiphertextIdentity]) {
         var placeholders: [UnreadableMessage] = []
         var consumed: [CiphertextIdentity] = []
@@ -126,8 +119,7 @@ extension OMEMOService {
         return (placeholders, consumed)
     }
 
-    /// Whether a retained ciphertext would have been a message bubble, decided as the retry pass decides one. A row that
-    /// does not decode would not. The recovery screen counts with it, and `retainedOutcomes` decides with it.
+    // Decides as the retry pass does, so the recovery screen's count matches `retainedOutcomes`.
     static func retainedWouldBeBubble(_ wire: Data) -> Bool {
         if let group = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: wire) {
             return !group.recordsBubbleHint || expectsBubble(group.message)
@@ -141,7 +133,6 @@ extension OMEMOService {
                              provenance: value.provenance, hasFallbackBody: value.expectsBubble ?? true, replaces: value.replaces)
     }
 
-    /// A device ID from `random` outside `avoiding`.
     static func newDeviceID(avoiding used: Set<UInt32>, random: () throws -> UInt32 = OMEMOEngine.randomDeviceID) throws -> UInt32 {
         while true {
             let id = try random()

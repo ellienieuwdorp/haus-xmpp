@@ -2,10 +2,8 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// The exact presence and XEP-0352 client-state text the iPhone app, its notification extension and its notification
-/// actions write, for every way they announce the user. The iOS cases were pinned byte for byte on the client from
-/// before client state was separated from presence (they passed unchanged there, with `.away` implying `<inactive/>`),
-/// so they show the iOS wire did not change. The desktop cases at the end pair the two the other ways.
+// The exact presence and XEP-0352 client-state text written for every way the user is announced: the iOS pairings
+// (`.away` with `<inactive/>`), then the desktop's other pairings.
 @Suite(.serialized)
 struct ClientStateWireTests {
     private actor Persistence: XMPPStreamManagementPersistence {
@@ -18,8 +16,8 @@ struct ClientStateWireTests {
         }
     }
 
-    /// Holds the commit that journals the first presence until released, so a test can act while the client is
-    /// inside its bind announcement.
+    // Holds the commit that journals the first presence until released, so a test can act while the client is
+    // inside its bind announcement.
     private actor HeldPersistence: XMPPStreamManagementPersistence {
         private var value: XMPPStreamManagementSnapshot?
         private var held = false
@@ -51,8 +49,8 @@ struct ClientStateWireTests {
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
     private static let smOnly = "<sm xmlns='urn:xmpp:sm:3'/>"
 
-    /// Binds fresh with stream management; returns the byte mark taken just before the server confirms it, so what
-    /// follows is the client's own announcement.
+    // Binds fresh with stream management; returns the byte mark taken just before the server confirms it, so what
+    // follows is the client's own announcement.
     private func bindFresh(_ client: XMPPClient, on server: LoopbackServer, features: String? = nil) async throws -> Int {
         try await client.configureStreamManagement(persistence: Persistence(nil))
         async let online: Void = server.connect(client)
@@ -67,7 +65,7 @@ struct ClientStateWireTests {
         return mark
     }
 
-    /// Resumes a saved session whose last announcement was `saved`; returns the mark taken before `<resumed/>`.
+    // Resumes a saved session whose last announcement was `saved`; returns the mark taken before `<resumed/>`.
     private func resume(_ client: XMPPClient, on server: LoopbackServer, saved: XMPPAvailability) async throws -> Int {
         var snapshot = XMPPStreamManagementSnapshot(revision: 1, accountID: "alice@localhost", fullJID: "alice@localhost/haus-r1",
                                                     streamID: "s1", expiresAt: nil, inboundHandled: 3, outboundSent: 0,
@@ -84,7 +82,7 @@ struct ClientStateWireTests {
         return mark
     }
 
-    /// Closes the connection and returns what the client wrote after `mark`, up to the farewell's `<r/>`.
+    // Closes the connection and returns what the client wrote after `mark`, up to the farewell's `<r/>`.
     private func announced(_ client: XMPPClient, on server: LoopbackServer, since mark: Int) async throws -> String {
         async let closed: Void = client.disconnectAndWait()
         _ = try await server.remainder()
@@ -94,7 +92,7 @@ struct ClientStateWireTests {
         return text.components(separatedBy: "<r xmlns='urn:xmpp:sm:3'/>").first ?? text
     }
 
-    /// Waits until `count` frames arrived, so a mark taken next starts after them.
+    // Waits until `count` frames arrived, so a mark taken next starts after them.
     private func drain(_ server: LoopbackServer, _ names: [String]) async throws {
         for name in names { #expect(try await server.next().name == name) }
     }
@@ -213,7 +211,7 @@ struct ClientStateWireTests {
         #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
     }
 
-    /// A Mac launched with no window binds inactive while the user is at the machine.
+    // A Mac launched with no window binds inactive while the user is at the machine.
     @Test func aFreshStreamWithNoWindowBindsAvailableThenInactive() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -222,7 +220,7 @@ struct ClientStateWireTests {
         #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
     }
 
-    /// The window hid while the stream was still binding: the new stream starts with it.
+    // The window hid while the stream was still binding: the new stream starts with it.
     @Test func clientStateSetBeforeBindingIsWhatTheStreamStartsWith() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -241,7 +239,7 @@ struct ClientStateWireTests {
 
     // MARK: Changes while the stream binds
 
-    /// What AppModel.connect() records before every iPhone connect: the defaults, so the bind is unchanged.
+    // The defaults recorded before every iPhone connect leave the bind unchanged.
     @Test func explicitDefaultsBeforeBindingSendPlainPresenceOnly() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -250,7 +248,7 @@ struct ClientStateWireTests {
         #expect(try await announced(client, on: server, since: mark) == Self.available)
     }
 
-    /// A Mac that woke with the screen locked reconnects away; the user unlocks before the bind completes.
+    // A Mac that woke with the screen locked reconnects away; the user unlocks before the bind completes.
     @Test func aChangeBeforeTheBindCompletesIsWhatTheStreamStartsWith() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -269,8 +267,8 @@ struct ClientStateWireTests {
         #expect(try await announced(client, on: server, since: mark) == Self.available)
     }
 
-    /// The unlock lands while the bind's own away announcement is being written, when the stream is not online yet
-    /// and the change is only recorded: it goes out right after, before the stream counts as online.
+    // The unlock lands while the bind's own away announcement is being written, when the stream is not online yet
+    // and the change is only recorded: it goes out right after, before the stream counts as online.
     @Test func aChangeDuringTheBindAnnouncementFollowsIt() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()

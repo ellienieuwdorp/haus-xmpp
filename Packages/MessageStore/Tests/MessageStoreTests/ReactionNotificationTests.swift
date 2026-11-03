@@ -2,13 +2,13 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-// Plan D8: another person's authenticated reaction to one of this account's messages alerts once per actor and target.
+// Another person's authenticated reaction to one of this account's messages alerts once per actor and target.
 
 private let account = "me@example.org"
 private let peer = "peer@example.org"
 private let room = "room@rooms.example.org"
 
-/// A message in `chat` with an authenticated wire ID equal to its id.
+// A message in `chat` with an authenticated wire ID equal to its id.
 private func insert(_ store: MessageStore, _ id: String, chat: String = peer, sender: String = account, body: String = "Lunch at noon?",
                     at second: Double = 0) async throws {
     try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chat, senderID: sender, body: body,
@@ -16,7 +16,7 @@ private func insert(_ store: MessageStore, _ id: String, chat: String = peer, se
                                                 encryptionProfile: "modern", wireID: id, wireIDAuthenticated: true))
 }
 
-/// One authenticated (SCE) reaction commit, as OMEMO makes it.
+// One authenticated (SCE) reaction commit, as OMEMO makes it.
 private func react(_ store: MessageStore, _ id: String, actor: String = peer, chat: String = peer, target: String, _ reactions: [String],
                    at second: Double = 100) async throws {
     let revision = try await store.encryptionStateRevision(accountID: account)!
@@ -98,7 +98,7 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
     }
 }
 
-/// Posts whatever waits, as a settled extension run does, and returns which (actor, target) notifications are current.
+// Posts whatever waits, as a settled extension run does, and returns which (actor, target) notifications are current.
 private func postAndCheck(_ store: MessageStore, targets: Set<String> = ["mine"]) async throws -> Set<String> {
     let batch = try await store.pendingNotifications(accountID: account)
     try await store.removeNotificationCandidates(accountID: account, keys: batch.claimed)

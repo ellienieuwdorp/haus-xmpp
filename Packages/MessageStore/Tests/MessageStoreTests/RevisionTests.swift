@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// Retractions and corrections are message events: queued with their optimistic projection, shown
-/// only when the actor is the message's sender, and folded into the message by `applying(_:)`.
+// Retractions and corrections are message events: queued with their optimistic projection, shown
+// only when the actor is the message's sender, and folded into the message by `applying(_:)`.
 private func revisionURL() throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

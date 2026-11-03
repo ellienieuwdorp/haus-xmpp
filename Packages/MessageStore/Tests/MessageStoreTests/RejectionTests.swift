@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// `rejectOutgoing`: a server returned one of our stanzas (`<message type='error'>`).
+// `rejectOutgoing`: a server returned one of our stanzas (`<message type='error'>`).
 private func withSentMessages(_ ids: [String], _ operation: (MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

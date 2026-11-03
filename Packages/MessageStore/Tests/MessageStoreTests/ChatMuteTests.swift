@@ -6,7 +6,7 @@ private let account = "me@example.org"
 private let room = "room@rooms.example.org"
 private let members = [account, "alice@example.org", "bob@example.org", "carol@example.org", "dave@example.org", "erin@example.org", "frank@example.org"]
 
-/// Commits one authenticated incoming message and returns whether it became a notification candidate.
+// Commits one authenticated incoming message and returns whether it became a notification candidate.
 private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@example.org", sender: String = "peer@example.org",
                      body: String = "Hello", group: Bool = false) async throws -> Bool {
     let revision = try await store.encryptionStateRevision(accountID: account)!

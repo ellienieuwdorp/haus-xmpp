@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// Resume, bind, presence and the final acknowledgement over a real socket, against `LoopbackServer`.
+// Resume, bind, presence and the final acknowledgement over a real socket, against `LoopbackServer`.
 @Suite(.serialized)
 struct SessionLifecycleTests {
     private actor Persistence: XMPPStreamManagementPersistence {
@@ -17,7 +17,7 @@ struct SessionLifecycleTests {
 
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
 
-    /// A hibernating session of `alice@localhost/haus-r1` that had handled three stanzas.
+    // A hibernating session of `alice@localhost/haus-r1` that had handled three stanzas.
     private static func saved(availability: XMPPAvailability?) -> XMPPStreamManagementSnapshot {
         var snapshot = XMPPStreamManagementSnapshot(revision: 1, accountID: "alice@localhost", fullJID: "alice@localhost/haus-r1",
                                                     streamID: "s1", expiresAt: nil, inboundHandled: 3, outboundSent: 0,
@@ -55,8 +55,8 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
-    /// Presence from a resumed session reaches every contact and the account's other resources, and the server pushes
-    /// their hibernating sessions for it; their extensions would then resume and answer in kind. Only a change is sent.
+    // Presence from a resumed session reaches every contact and the account's other resources, and the server pushes
+    // their hibernating sessions for it; their extensions would then resume and answer in kind. Only a change is sent.
     @Test func resumedSessionRepeatsPresenceOnlyWhenItChanged() async throws {
         let since = Date(timeIntervalSince1970: 1_790_000_000)
         let persistence = Persistence(Self.saved(availability: .away(since: since)))
@@ -72,8 +72,8 @@ struct SessionLifecycleTests {
         #expect(written.map(\.name) == ["active", "r", "iq", "a"])
     }
 
-    /// After an update that changed the feature list, contacts would keep the old caps until the next availability
-    /// change. The first resume repeats presence once with the new `ver`; later resumes stay quiet again.
+    // After an update that changed the feature list, contacts would keep the old caps until the next availability
+    // change. The first resume repeats presence once with the new `ver`; later resumes stay quiet again.
     @Test func resumeAfterAnUpdateAnnouncesTheNewCapabilitiesOnce() async throws {
         var older = Self.saved(availability: .active)
         older.capabilities = nil
@@ -87,7 +87,7 @@ struct SessionLifecycleTests {
         #expect(written.map(\.name) == ["active", "r", "iq", "a"])
     }
 
-    /// Resumes the saved session with `availability` and disconnects; returns what the client wrote after `<resume/>`.
+    // Resumes the saved session with `availability` and disconnects; returns what the client wrote after `<resume/>`.
     private func resume(_ persistence: Persistence, availability: XMPPAvailability) async throws -> [XMPPProtocol.XMLNode] {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -108,8 +108,8 @@ struct SessionLifecycleTests {
         return written
     }
 
-    /// The app's quiesce and the extension's stop cancel their event consumer before `disconnectAndWait`. What arrives
-    /// in between must not end the connection, or the final `<a/>` is lost and the server pushes for its queue again.
+    // The app's quiesce and the extension's stop cancel their event consumer before `disconnectAndWait`. What arrives
+    // in between must not end the connection, or the final `<a/>` is lost and the server pushes for its queue again.
     @Test func finalAcknowledgementSurvivesTheOwnerStoppingItsConsumerFirst() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -137,7 +137,7 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
-    /// Binds fresh and enables `s2`; returns once the client is online.
+    // Binds fresh and enables `s2`; returns once the client is online.
     private func bindFresh(_ client: XMPPClient, on server: LoopbackServer) async throws {
         async let online: Void = server.connect(client)
         try await server.authenticate()
@@ -150,8 +150,8 @@ struct SessionLifecycleTests {
         try await online
     }
 
-    /// The away presence and a chat state written on the way to the background are acknowledged by the farewell, so
-    /// the next resume replays nothing: replaying the presence would reach every contact and push their sessions.
+    // The away presence and a chat state written on the way to the background are acknowledged by the farewell, so
+    // the next resume replays nothing: replaying the presence would reach every contact and push their sessions.
     @Test func farewellRequestsAnAcknowledgementBeforeItsPing() async throws {
         let server = try await LoopbackServer.start()
         let persistence = Persistence(nil)
@@ -176,8 +176,8 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
-    /// A probe on demand (the app was told the server pushed for this session): an answer keeps the stream, silence
-    /// ends it so the owner reconnects.
+    // A probe on demand (the app was told the server pushed for this session): an answer keeps the stream, silence
+    // ends it so the owner reconnects.
     @Test func livenessProbeKeepsAnAnsweringStreamAndEndsASilentOne() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
@@ -195,8 +195,8 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
-    /// A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
-    /// connect binds instead of resuming into the same count for the rest of the 72 h window.
+    // A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
+    // connect binds instead of resuming into the same count for the rest of the 72 h window.
     @Test func acknowledgementAboveWhatWasSentRetiresTheSession() async throws {
         let persistence = Persistence(nil)
         do {
@@ -222,7 +222,7 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
-    /// The same count on `<resumed/>` ends that connect; the session is retired so the next one binds.
+    // The same count on `<resumed/>` ends that connect; the session is retired so the next one binds.
     @Test func resumedCountAboveWhatWasSentRetiresTheSession() async throws {
         let persistence = Persistence(Self.saved(availability: .active))
         let server = try await LoopbackServer.start()

@@ -2,7 +2,6 @@ import Foundation
 
 /// Which incoming messages of a chat may alert. Local only: never sent to the server.
 public enum ChatNotificationLevel: String, Sendable, Equatable, CaseIterable {
-    /// Every incoming message.
     case all
     /// Groups only: a message that mentions this account (see `Mention`).
     case mentions
@@ -27,11 +26,9 @@ public struct ChatNotificationSetting: Sendable, Equatable {
     public var isMutedAlways: Bool { mutedUntil.map { $0 >= Self.always } ?? false }
 }
 
-/// Mention detection over a decrypted body. Pure: no storage, no network.
-///
-/// The user is mentioned when the text names them (their room nickname, account localpart or bare JID),
-/// case-insensitively and on word boundaries. A text that names more than `massMentionLimit` room members
-/// (the user included) is a mass mention and does not count.
+/// The user is mentioned when the text names them (room nickname, account localpart or bare JID), case-insensitively
+/// on word boundaries. A text naming more than `massMentionLimit` room members, the user included, is a mass mention
+/// and does not count.
 public enum Mention {
     public static let massMentionLimit = 5
 
@@ -45,11 +42,8 @@ public enum Mention {
         return namedOthers(in: text, account: account, ownNames: own, members: members) + 1 <= massMentionLimit
     }
 
-    /// How many other members the text names, for the mass-mention tally.
-    ///
-    /// A text that names the user must not make other members look named: a name equal to one of the user's
-    /// own names (`me` for both me@a and me@b) is attributed to the user alone. A localpart shared by several
-    /// other members counts once, and not at all when one of those members is already named by full address.
+    // A name equal to one of the user's own (`me` for both me@a and me@b) counts for the user alone. A localpart shared
+    // by several other members counts once, and not at all when one of them is already named by full address.
     static func namedOthers(in text: String, account: String, ownNames: [String], members: [String]) -> Int {
         let own = Set(ownNames.map { $0.lowercased() })
         let others = Set(members.map { $0.lowercased() }).subtracting([account.lowercased()])
@@ -65,14 +59,12 @@ public enum Mention {
         return byAddress.count + byLocalpart.count
     }
 
-    /// A bare JID's names: its localpart and the whole address.
     static func names(jid: String) -> [String] {
         guard let at = jid.firstIndex(of: "@") else { return [jid] }
         return [String(jid[..<at]), jid]
     }
 
-    /// Whether `name` occurs in `text` with no letter, digit or underscore directly on either side.
-    /// Names shorter than two characters never match: a one-letter localpart would match ordinary words.
+    // Names shorter than two characters never match: a one-letter localpart would match ordinary words.
     static func names(_ name: String, in text: String) -> Bool {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.count >= 2 else { return false }

@@ -9,8 +9,8 @@ public struct XMPPAvatarMetadata: Sendable, Equatable {
     public init(id: String, type: String, bytes: Int) { self.id = id; self.type = type; self.bytes = bytes }
 }
 
-/// XEP-0084 (PEP) and XEP-0153/0054 (vCard) avatar payloads. Bytes are attacker-controlled: only
-/// raster types, a size cap and a hash that matches the advertised id get through.
+/// XEP-0084 (PEP) and XEP-0153/0054 (vCard) avatar payloads. Bytes are attacker-controlled: only raster types, a size
+/// cap and a hash matching the advertised id get through.
 public enum AvatarWire {
     public static let metadataNode = "urn:xmpp:avatar:metadata"
     public static let dataNode = "urn:xmpp:avatar:data"
@@ -18,7 +18,7 @@ public enum AvatarWire {
     public static let maximumBytes = 512 * 1_024
     public static let types: Set<String> = ["image/png", "image/jpeg", "image/gif"]
 
-    /// The first usable inline (`url`-less) info; nil for an empty `<metadata/>`, which means "no avatar".
+    // The first inline (`url`-less) info; nil for an empty `<metadata/>`, which means "no avatar".
     static func parseMetadata(_ metadata: XMLNode) throws -> XMPPAvatarMetadata? {
         guard metadata.name == "metadata", metadata.namespace == metadataNode else { throw XMPPIQError.malformedResponse }
         let infos = metadata.children.filter { $0.name == "info" && $0.namespace == metadataNode }
@@ -36,7 +36,7 @@ public enum AvatarWire {
         return try decodeBase64(data.text)
     }
 
-    /// `<PHOTO><TYPE/><BINVAL/></PHOTO>` from a vCard; nil when the card carries no usable photo.
+    // nil when the vCard carries no usable photo.
     static func parseVCardPhoto(_ vcard: XMLNode) throws -> (type: String, data: Data)? {
         guard vcard.name == "vCard", vcard.namespace == vcardNamespace else { throw XMPPIQError.malformedResponse }
         guard let photo = vcard.child("PHOTO", namespace: vcardNamespace),

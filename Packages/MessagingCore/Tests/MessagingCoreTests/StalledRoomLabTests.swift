@@ -5,19 +5,19 @@ import OMEMO
 import XMPPProtocol
 @testable import MessagingCore
 
-/// The extension's entry point against a real server with rooms whose MUC component never answers: catch-up must not
-/// hang on them. Needs a separate disposable server with such a component, which is not part of this repository. Runs
-/// only when configured:
-///   HAUS_LAB_STALLED_ACCOUNT / HAUS_LAB_STALLED_PEER  credential JSON ({"jid", "password"}) of two accounts there
-///   HAUS_LAB_STALLED_ROOMS  comma-separated rooms on the component (answering only resources named "setup…")
-///   HAUS_LAB_STALLED_PORT   the server's direct TLS port on 127.0.0.1 (default 45223)
-///   HAUS_LAB_CA             the CA (PEM) that signed that server's certificate
+// The extension's entry point against a real server with rooms whose MUC component never answers: catch-up must not
+// hang on them. Needs a separate disposable server with such a component, which is not part of this repository. Runs
+// only when configured:
+//   HAUS_LAB_STALLED_ACCOUNT / HAUS_LAB_STALLED_PEER  credential JSON ({"jid", "password"}) of two accounts there
+//   HAUS_LAB_STALLED_ROOMS  comma-separated rooms on the component (answering only resources named "setup…")
+//   HAUS_LAB_STALLED_PORT   the server's direct TLS port on 127.0.0.1 (default 45223)
+//   HAUS_LAB_CA             the CA (PEM) that signed that server's certificate
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_STALLED_ACCOUNT"] != nil), .serialized)
 struct StalledRoomLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
 
-    /// The configured server, and a store as the app leaves it: an identity, the own archive walked, and the rooms
-    /// recorded while they still answered.
+    // The configured server, and a store as the app leaves it: an identity, the own archive walked, and the rooms
+    // recorded while they still answered.
     private struct Lab: Sendable {
         let own: Credentials, peer: Credentials, rooms: [String], port: UInt16, authority: Data
         let url: URL, key = Data(repeating: 9, count: 32)
@@ -55,7 +55,7 @@ struct StalledRoomLabTests {
             try await store.close()
         }
 
-        /// A direct message keyed only for a device this account does not have: it commits as a placeholder.
+        // A direct message keyed only for a device this account does not have: it commits as a placeholder.
         func sendDirect() async throws {
             let sender = try await connect(peer)
             try await sender.sendEncryptedMessage(to: own.jid, envelope: XMPPOMEMOEnvelope(
@@ -64,7 +64,7 @@ struct StalledRoomLabTests {
             await sender.disconnectAndWait()
         }
 
-        /// One extension run: `BackgroundSynchronizer` with the presenter.
+        // One extension run: `BackgroundSynchronizer` with the presenter.
         func synchronize(posting: FakePosting, progress: NotificationRunProgress) async throws {
             let parts = own.jid.split(separator: "@").map(String.init), accountID = own.jid
             try await BackgroundSynchronizer().synchronize(
@@ -104,9 +104,9 @@ struct StalledRoomLabTests {
         }
     }
 
-    /// A second message and its push while the rooms are walked, and the user opening the app from the first banner:
-    /// the push joins the running run (one run, both messages posted, both requests settled) and the app gets the
-    /// lease soon after, instead of waiting for a second run to walk the silent rooms again.
+    // A second message and its push while the rooms are walked, and the user opening the app from the first banner:
+    // the push joins the running run (one run, both messages posted, both requests settled) and the app gets the
+    // lease soon after, instead of waiting for a second run to walk the silent rooms again.
     @Test func aBurstDuringTheRoomWalkJoinsOneRunAndTheAppGetsTheLeaseSoon() async throws {
         try await withLab { lab in
             try await lab.sendDirect()

@@ -3,8 +3,8 @@ import Testing
 
 private typealias Phase = SceneLifecycleDriver.Phase
 
-/// What `HausXMPPApp` and `AppModel` did before the signals were split: the scene-phase closure verbatim, then what
-/// `setForeground(true)` and `setForeground(false)` ran.
+// Reference model the scene driver must reproduce: one `foreground` flag set by the scene phase, and the effects of
+// `setForeground(true)` and `setForeground(false)`.
 private enum Legacy: Equatable {
     case leftForeground
     case setForeground(Bool)
@@ -17,19 +17,17 @@ private enum Legacy: Equatable {
         return calls
     }
 
-    /// On: return-to-front work and CSI active on the client. Off: away presence while connected, which carried CSI
-    /// inactive (now stated explicitly, with the same bytes: ClientStateWireTests), then the quiesce.
+    // Off sends away presence with CSI inactive (same bytes: ClientStateWireTests), then quiesces.
     static func effects(_ active: Bool) -> LifecycleTransition {
         active ? LifecycleTransition(resumesTransport: true, clientActive: true)
             : LifecycleTransition(quiescesTransport: true, clientActive: false, presence: .away)
     }
 }
 
-/// Runs a driver the way `AppModel.applyLifecycle` does and reports each step in the legacy vocabulary.
+// Applies a driver's updates as the app does and reports each step in the reference model's terms.
 private struct Harness {
     var driver = SceneLifecycleDriver()
     var applied = LifecycleSignals.inFront
-    /// The legacy `foreground` flag, starting true as it did.
     var foreground = true
 
     mutating func step(_ event: SceneLifecycleDriver.Event) -> [Legacy] {
@@ -57,7 +55,7 @@ private struct Harness {
         for case let .setForeground(active) in calls { foreground = active }
     }
 
-    /// Every signal equals the flag the old code read, so each re-routed guard decides as before.
+    // Every signal equals the reference flag, so each guard that reads a signal decides as the flag would.
     func signalsMatchForeground() -> Bool {
         [applied.transportWanted, applied.windowVisible, applied.readsOpenChat, applied.present].allSatisfy { $0 == foreground }
     }
@@ -102,13 +100,13 @@ struct SceneLifecycleDriverTests {
 
     @Test func aBackgroundLaunchStartsAwayAndTurnsOnAtItsFirstActivation() {
         var harness = Harness()
-        // prepare() set foreground = false without a transition: no quiesce, no presence.
+        // No quiesce and no presence for a background launch.
         #expect(harness.driver.updates(for: .launched(inBackground: true)) == [.start(.away)])
         #expect(harness.driver.signals == .away)
         harness.applied = .away
         harness.foreground = false
         #expect(harness.step(.becameActive) == [.setForeground(true)])
-        // The scene phase change that follows runs the return work again, as it did.
+        // The scene phase change that follows runs the return work again.
         #expect(harness.step(.phaseChanged(from: .inactive, to: .active)) == [.setForeground(true)])
         #expect(harness.step(.becameActive) == [], "the observer only ran when foreground was false")
     }
@@ -127,7 +125,7 @@ struct SceneLifecycleDriverTests {
     }
 }
 
-/// Each signal's own effect, with the others held still. iOS never separates them; a desktop driver will.
+// Each signal's own effect, with the others held still.
 struct LifecycleTransitionTests {
     private func signals(transport: Bool = true, window: Bool = true, reading: Bool = true, present: Bool = true) -> LifecycleSignals {
         LifecycleSignals(transportWanted: transport, windowVisible: window, readsOpenChat: reading, present: present)
@@ -189,7 +187,7 @@ struct LifecycleTransitionTests {
         #expect(signals(window: false, reading: false).streamBinding == StreamBinding(presence: .available, clientActive: false))
         #expect(signals(window: false, reading: false, present: false).streamBinding == StreamBinding(presence: .away, clientActive: false))
         #expect(signals(reading: false, present: false).streamBinding == StreamBinding(presence: .away, clientActive: true))
-        // Going away: the quiesce closes the stream and says away itself; iOS's race keeps the defaults.
+        // The quiesce closes the stream and announces away itself.
         #expect(LifecycleSignals.away.streamBinding == StreamBinding(presence: .available, clientActive: true))
     }
 

@@ -39,7 +39,6 @@ public struct StoredLinkPreview: Sendable, Equatable, Codable {
                                     image: zip(imageType, imageData).map { .data(type: $0, bytes: $1) }, imageAlt: imageAlt)
     }
 
-    /// Rows the store accepts: an http(s) link, texts and image within the wire's receive bounds.
     func validate() throws {
         typealias Bounds = MessageContent.LinkMetadata
         let scheme = url.prefix { $0 != ":" }.lowercased()
@@ -87,13 +86,11 @@ public struct LinkPreviewCacheEntry: Sendable, Equatable {
         self.summary = summary; self.imageAlt = imageAlt; self.imagePath = imagePath; self.imageWidth = imageWidth; self.imageHeight = imageHeight
     }
 
-    /// Whether this result still stands at `date` instead of a new fetch.
     public func isFresh(at date: Date) -> Bool {
         let age = date.timeIntervalSince(fetchedAt)
         return age >= 0 && age < (status == .ok ? Self.successLifetime : Self.failureLifetime)
     }
 
-    /// Rows the store accepts: the wire's text bounds, and an image path that stays inside `link-previews/`.
     func validate() throws {
         typealias Bounds = MessageContent.LinkMetadata
         let path = imagePath.map { $0.split(separator: "/", omittingEmptySubsequences: false) }
@@ -107,9 +104,8 @@ public struct LinkPreviewCacheEntry: Sendable, Equatable {
     }
 }
 
-/// The fetch cache the app's preview center reads and writes. `MessageStore` implements it (schema 26,
-/// `link_preview_cache`); the app alone writes it, never a notification extension. Image files are the caller's:
-/// methods that remove rows return the image paths that were in them, for the caller to delete.
+/// The link preview fetch cache, implemented by `MessageStore`. Only the app writes it, never a notification
+/// extension. Image files are the caller's: methods that remove rows return their image paths for the caller to delete.
 public protocol LinkPreviewCaching: Sendable {
     /// The entry for `url` (a `LinkDetection.cacheKey`), fresh or not; nil when there is none.
     func linkPreviewCacheEntry(accountID: String, url: String) async throws -> LinkPreviewCacheEntry?

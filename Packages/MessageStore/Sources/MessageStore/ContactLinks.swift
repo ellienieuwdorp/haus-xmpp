@@ -5,9 +5,7 @@ import Foundation
 /// holds is written back to the roster, a vCard or PEP. The notification extension reads the cached name and photo and
 /// never touches Contacts itself.
 public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
-    /// How the link was made.
     public enum Source: String, Sendable, Equatable {
-        /// The user picked the contact.
         case picker
         /// The user confirmed a suggested contact whose Jabber address equals the chat's.
         case imAddress = "im_address"
@@ -46,11 +44,9 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
 
     public var description: String { "ContactLink(<redacted>)" }
 
-    /// The name a linked chat shows, ahead of its stored title. Name precedence: linked contact, then the stored title
-    /// (a roster name or nickname once those exist), then the address's local part (`displayName(for:title:)` callers).
+    /// The name a linked chat shows, ahead of its stored title and then the address's local part.
     public var name: String? { displayName.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
 
-    /// The title to present for a chat: the linked contact's name when there is one, else the stored title.
     public static func title(_ stored: String?, link: ContactLink?) -> String? { link?.name ?? stored }
 
     /// Avatar precedence: the peer's verified avatar, then the contact's photo; the photo first when the user asked.
@@ -69,7 +65,7 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
         else { throw MessageStoreError.invalidValue }
     }
 
-    /// Lowercase hex SHA-1, as avatar files are named.
+    // Lowercase hex SHA-1, as avatar files are named.
     static func isHash(_ hash: String) -> Bool {
         hash.utf8.count == 40 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// XEP-0363 service discovery over a real socket, against `LoopbackServer` acting as the server and its components.
+// XEP-0363 service discovery over a real socket, against `LoopbackServer` acting as the server and its components.
 @Suite(.serialized)
 struct UploadDiscoveryTests {
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
@@ -16,14 +16,14 @@ struct UploadDiscoveryTests {
 
     private enum Answer { case features(String), silent }
 
-    /// What the server and each component answer to disco#info; an entity missing here refuses. `listed` is the
-    /// domain's items.
+    // What the server and each component answer to disco#info; an entity missing here refuses. `listed` is the
+    // domain's items.
     private struct Network {
         var listed: [String]
         var info: [String: Answer]
     }
 
-    /// Runs `uploadService` against `network` and returns its outcome and how long it took.
+    // Runs `uploadService` against `network` and returns its outcome and how long it took.
     private func discover(_ network: Network, timeout: Duration) async throws -> (Result<XMPPUploadService?, any Error>, Duration) {
         let server = try await LoopbackServer.start()
         defer { Task { await server.stop() } }
@@ -61,8 +61,7 @@ struct UploadDiscoveryTests {
         return (outcome, elapsed)
     }
 
-    /// Before: items were probed one at a time with the 15 s IQ deadline, the first match won, and a MUC service that
-    /// also lists uploads could be chosen. A silent component cost 15 s on every connect.
+    // A silent component must not cost a deadline per probe, and a MUC service that also lists uploads is never chosen.
     @Test func probesConcurrentlyWithinTheDeadlineAndPicksTheLargestNonRoomService() async throws {
         let network = Network(listed: ["rooms.localhost", "silent.localhost", "small.localhost", "big.localhost", "pubsub.localhost"],
                               info: ["localhost": .features("<feature var='urn:xmpp:carbons:2'/>"),
@@ -82,8 +81,8 @@ struct UploadDiscoveryTests {
         #expect(try outcome.get() == XMPPUploadService(jid: "localhost", maximumFileSize: nil))
     }
 
-    /// Refusals are an answer ("none offered"); a component that never answered is not, so the caller keeps what it
-    /// knew instead of removing the attach button.
+    // Refusals are an answer ("none offered"); a component that never answered is not, so the caller keeps what it
+    // knew instead of removing the attach button.
     @Test func onlyAnsweredProbesCanConcludeThatNoServiceIsOffered() async throws {
         let refused = Network(listed: ["pubsub.localhost"], info: [:])
         let (none, _) = try await discover(refused, timeout: .milliseconds(300))

@@ -2,8 +2,8 @@ import CryptoKit
 import Foundation
 
 extension MessageContent {
-    /// XEP-0447 stateless file sharing with XEP-0446 metadata and, when `key` is set, XEP-0448
-    /// encrypted sources (AES-256-GCM, the XEP-0454 cipher). Hashes are raw SHA-256 bytes.
+    /// XEP-0447 stateless file sharing with XEP-0446 metadata and, when `key` is set, XEP-0448 encrypted sources
+    /// (AES-256-GCM, the XEP-0454 cipher). Hashes are raw SHA-256 bytes.
     public struct FileSharing: Sendable, Equatable {
         public static let namespace = "urn:xmpp:sfs:0"
         public static let metadataNamespace = "urn:xmpp:file:metadata:0"
@@ -17,12 +17,12 @@ extension MessageContent {
         public var size: Int
         public var width: Int?
         public var height: Int?
-        /// SHA-256 of the plaintext file; empty for a legacy `aesgcm://` body, which carries none.
+        /// Of the plaintext; empty for a legacy `aesgcm://` body, which carries none.
         public var hash: Data
         public var url: String
         public var key: Data?
         public var iv: Data?
-        /// SHA-256 of the uploaded ciphertext, when the sender included one.
+        /// Of the uploaded ciphertext, when the sender included one.
         public var cipherHash: Data?
 
         public init(name: String, mediaType: String, size: Int, width: Int? = nil, height: Int? = nil, hash: Data, url: String,
@@ -31,15 +31,15 @@ extension MessageContent {
             self.hash = hash; self.url = url; self.key = key; self.iv = iv; self.cipherHash = cipherHash
         }
 
-        /// The legacy (XEP-0454) form a body carries: the https URL with IV and key in the fragment.
+        /// The legacy XEP-0454 body: the https URL with IV and key in the fragment.
         public var aesgcmURL: String? {
             guard let key, let iv, let https = URL(string: url), https.scheme == "https", let host = https.host else { return nil }
             var path = https.path; if let query = https.query { path += "?" + query }
             return "aesgcm://" + host + (https.port.map { ":\($0)" } ?? "") + path + "#" + (iv + key).map { String(format: "%02x", $0) }.joined()
         }
 
-        /// Parses an `aesgcm://` body (12-byte IV, 32-byte key). A 16-byte IV is an older
-        /// Conversations form this client does not decrypt; such a body stays plain text.
+        /// 12-byte IV, 32-byte key. A 16-byte IV (an older Conversations form) is not decrypted; such a body stays
+        /// text.
         public static func fromAESGCMBody(_ body: String) -> FileSharing? {
             let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.hasPrefix("aesgcm://"), !trimmed.contains(where: { $0.isWhitespace }), trimmed.utf8.count <= 2_048,
@@ -94,7 +94,7 @@ extension MessageContent {
             return "<file-sharing xmlns='\(Self.namespace)' disposition='inline'>\(file)<sources>\(sources)</sources></file-sharing>"
         }
 
-        /// `nil` when the element is malformed; strict callers treat that as tampering.
+        // nil when malformed; strict callers treat that as tampering.
         static func decode(_ node: XMLNode) -> FileSharing? {
             guard node.children("file", namespace: metadataNamespace).count == 1, node.children("sources", namespace: namespace).count == 1,
                   let file = node.child("file", namespace: metadataNamespace), let sources = node.child("sources", namespace: namespace) else { return nil }

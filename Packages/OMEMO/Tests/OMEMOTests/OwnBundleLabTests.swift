@@ -4,17 +4,14 @@ import MessageStore
 import XMPPProtocol
 @testable import OMEMO
 
-/// Our device listed in the account's device lists without its bundle, against the local lab Prosody. The fake server
-/// in `ServiceTests` answers item-not-found by construction; this checks what the real server answers for a missing
-/// bundle node (the first device) and for the shared OMEMO 2 node that holds another device's item but not ours (the
-/// second device). Runs only when the lab is configured:
-///   HAUS_LAB_OWNBUNDLE_ACCOUNT  fixture JSON ({"jid", "password"}) of a fresh disposable account under work/
-///   HAUS_LAB_CA (PEM)
+// Against a real Prosody: our device listed without its bundle, for a missing bundle node and for a shared OMEMO 2
+// node holding another device's item. Set HAUS_LAB_OWNBUNDLE_ACCOUNT (fixture JSON {"jid", "password"} of a fresh
+// disposable account) and HAUS_LAB_CA (PEM).
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_OWNBUNDLE_ACCOUNT"] != nil), .serialized)
 struct OwnBundleLabTests {
     private let env = ProcessInfo.processInfo.environment
     private struct Fixture: Decodable { let jid: String; let password: String }
-    /// Creates local encryption state and then fails, so nothing reaches the server.
+    // Lets `initialize` create local state, then fails, so nothing reaches the server.
     private struct Unreachable: OMEMOTransport {
         func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { throw OMEMOError.unavailable }
         func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle { throw OMEMOError.unavailable }
@@ -49,7 +46,7 @@ struct OwnBundleLabTests {
                 try await service.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
                 let listed = try await client.fetchOMEMODevices(for: account, profile: profile)
                 #expect(!listed.contains(local))
-                // What another client, an earlier build or a server that lost PEP data can leave behind anyway.
+                // What another client or a server that lost PEP data can leave behind anyway.
                 try await client.publishOMEMODevices(listed.filter { $0 != local } + [local], profile: profile)
                 await #expect(throws: XMPPIQError.stanza(condition: "item-not-found")) {
                     try await client.fetchOMEMOBundle(for: account, deviceID: local, profile: profile)

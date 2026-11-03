@@ -2,9 +2,8 @@ import Foundation
 
 extension MessageContent {
     /// XEP-0511 link metadata about one link in the body: an RDF `<Description rdf:about=…>` with OpenGraph children.
-    /// It travels only inside an authenticated SCE `<content/>` (modern OMEMO, direct and group); legacy OMEMO and
-    /// plaintext carry none. `rdf:about` is read by namespace, whatever prefix the sender bound, and the bounds below
-    /// apply on receive and on send.
+    /// Travels only inside authenticated SCE `<content/>` (modern OMEMO); legacy OMEMO and plaintext carry none.
+    /// `rdf:about` is read by namespace, whatever the prefix.
     public struct LinkMetadata: Sendable, Equatable {
         public static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
         public static let openGraphNamespace = "https://ogp.me/ns#"
@@ -16,40 +15,35 @@ extension MessageContent {
         public static let maximumTitleBytes = 1_024
         public static let maximumDescriptionBytes = 2_048
         public static let maximumImageAltBytes = 512
-        /// Decoded bytes of an embedded image we accept. The base64 length is checked against this before decoding.
+        /// Decoded bytes; the base64 length is checked against this before decoding.
         public static let maximumImageBytes = 65_536
-        /// Send bounds, tighter than what we accept: card text as the fetcher shortens it, and the thumbnail we make.
-        /// The encoder sends nothing that breaks one.
+        /// Send bounds, tighter than the receive bounds; the encoder sends nothing that breaks one.
         public static let maximumSentTitle = (characters: 200, bytes: 512)
         public static let maximumSentDescription = (characters: 300, bytes: 1_024)
         public static let maximumSentImageAlt = (characters: 200, bytes: 512)
-        /// Decoded bytes of the thumbnail we send (JPEG, within 400 px, else 256 px, else no image).
+        /// JPEG, within 400 px, else 256 px, else no image.
         public static let maximumSentImageBytes = 24_576
-        /// `data:image/<subtype>;base64,` subtypes accepted on receive. We send only `image/jpeg`.
+        /// Accepted on receive; only `image/jpeg` is sent.
         public static let imageMediaTypes: Set<String> = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic"]
 
-        /// An `og:image`. Version 1 carries only an embedded `data:` image; remote URLs, `cid:` and `ni:` are ignored.
+        /// Only an embedded `data:` image; remote URLs, `cid:` and `ni:` are ignored.
         public enum Image: Sendable, Equatable {
-            /// `data:<type>;base64,<bytes>`, `type` one of `imageMediaTypes`.
             case data(type: String, bytes: Data)
         }
 
-        /// `rdf:about`: exactly a previewable URL of the body (`LinkDetection.previewableURLs`), as its `absoluteString`.
+        /// Exactly a previewable URL of the body (`LinkDetection.previewableURLs`), as its `absoluteString`.
         public var about: String
         public var title: String?
-        /// `og:description`.
         public var description: String?
         public var image: Image?
-        /// `og:image:alt`.
         public var imageAlt: String?
 
         public init(about: String, title: String? = nil, description: String? = nil, image: Image? = nil, imageAlt: String? = nil) {
             self.about = about; self.title = title; self.description = description; self.image = image; self.imageAlt = imageAlt
         }
 
-        /// Card text as plain text: C0 and C1 controls and bidi embedding, override and isolate characters removed,
-        /// runs of whitespace (newlines included) collapsed to one space, trimmed. Nil when nothing is left.
-        /// Callers apply their own byte caps afterwards (receive drops an over-cap field, the fetcher shortens it).
+        /// Strips C0/C1 controls and bidi embedding, override and isolate characters, collapses whitespace runs to one
+        /// space and trims; nil when nothing is left. Callers apply their own byte caps afterwards.
         public static func plainText(_ text: String) -> String? {
             var result = String.UnicodeScalarView()
             var pendingSpace = false
@@ -76,16 +70,15 @@ extension MessageContent {
     }
 }
 
-// MARK: Codec
 
 extension MessageContent.LinkMetadata {
-    /// At most this many children per `<Description/>`; more is a malformed Description.
+    // More children than this is a malformed Description.
     static let maximumChildren = 16
-    /// `ceil(maximumImageBytes / 3) * 4`: the longest base64 text that can decode within the image cap.
+    // The longest base64 text that can decode within the image cap.
     static let maximumImageBase64Length = (maximumImageBytes + 2) / 3 * 4
 
-    /// The Description as we send it: the form slixmpp, nbxmpp and Cheogram emit, with unprefixed OpenGraph children.
-    /// Texts go out as `plainText` gives them; callers send only metadata that `validated(_:body:)` accepted.
+    // The form slixmpp, nbxmpp and Cheogram emit, with unprefixed OpenGraph children. Callers send only metadata that
+    // `validated(_:body:)` accepted.
     func xml() -> String {
         let rdf = Self.rdfNamespace, og = Self.openGraphNamespace
         var xml = "<Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' rdf:about='\(xmlEscaped(about))'>"
@@ -98,10 +91,8 @@ extension MessageContent.LinkMetadata {
         return xml + "</Description>"
     }
 
-    /// `metadata` as it may be sent with `body` (the text after any reply quote): texts as `plainText`, an alt only with
-    /// its image, and only when every entry passes the rules a receiver applies (`decode`) and our send bounds
-    /// (`maximumSent…`). Anything else gives `[]`, so a peer never receives metadata it would drop or more than we
-    /// send, and the caller can tell the preview did not ride along.
+    // `body` is the text after any reply quote. Returns `[]` unless every entry passes the receive rules (`decode`) and
+    // the send bounds, so a peer never receives metadata it would drop and the caller can tell the preview did not go.
     static func validated(_ metadata: [Self], body: String) -> [Self] {
         guard !metadata.isEmpty, !body.isEmpty, metadata.count <= maximumDescriptions,
               Set(metadata.map(\.about)).count == metadata.count else { return [] }
@@ -129,12 +120,9 @@ extension MessageContent.LinkMetadata {
         return result
     }
 
-    /// The link metadata of authenticated `<content/>` (`node`) whose body after any reply quote is `body`, in the
-    /// order its links appear in the body. A Description must be about a previewable link of `body` (`rdf:about` read
-    /// by namespace, any prefix), and texts and the embedded image must keep within the receive bounds. Any broken
-    /// rule drops every Description of the message (an empty result) and never the message itself. A Description with
-    /// neither title nor image is ignored; remote, `cid:` and `ni:` images are ignored. Several languages for one link:
-    /// the first in `preferredLanguages` order, else the first given.
+    // `body` is the text after any reply quote; results are in body order. A Description must be about a previewable
+    // link of `body`; any broken rule drops every Description of the message, never the message. A Description with
+    // neither title nor image is ignored. Several languages for one link: the first in `preferredLanguages`.
     static func decode(in node: XMLNode, body: String, preferredLanguages: [String] = Locale.preferredLanguages) -> [Self] {
         let descriptions = node.children("Description", namespace: rdfNamespace)
         guard !descriptions.isEmpty, !body.isEmpty, descriptions.count <= maximumDescriptions else { return [] }
@@ -162,7 +150,7 @@ extension MessageContent.LinkMetadata {
         }
     }
 
-    /// Nil when the Description breaks a rule; `.some(nil)` when it only has nothing to show (no title, no image).
+    // nil breaks a rule; `.some(nil)` has nothing to show.
     private static func decodeProperties(of description: XMLNode, about: String) -> Self?? {
         var result = Self(about: about)
         var seen = Set<String>()
@@ -197,8 +185,8 @@ extension MessageContent.LinkMetadata {
 
     private enum ImageValue { case image(Image), ignored, malformed }
 
-    /// `data:image/<type>;base64,<payload>` within the bounds. Another scheme (a remote URL, `cid:`, `ni:`) or media
-    /// type is ignored; a `data:` image whose base64 is broken, empty or over the cap breaks the Description.
+    // Another scheme or media type is ignored; a `data:` image whose base64 is broken, empty or over the cap breaks the
+    // Description.
     private static func embeddedImage(_ text: String) -> ImageValue {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value.prefix(5).lowercased() == "data:" else { return .ignored }

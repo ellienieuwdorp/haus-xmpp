@@ -26,7 +26,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var unreadableReason: UnreadableReason?
     /// The link preview the sender attached or we sent with it (`StoredLinkPreview`); nil for most messages.
     public var linkPreview: StoredLinkPreview?
-    /// Projection flags, set only by `applying(_:)`; never persisted.
+    /// Set only by `applying(_:)`; never persisted.
     public var isRetracted = false
     public var isEdited = false
 
@@ -94,7 +94,7 @@ public struct StoredAttachment: Sendable, Equatable, Codable {
     /// Nil for received files. A queued message is not sendable until this is `uploaded`.
     public var uploadState: UploadState?
     public var uploadTaskID: Int?
-    /// The account spelling `secret` was sealed under when that differs from the row's key (v23 address migration).
+    /// The account spelling `secret` was sealed under when it differs from the row's key (address normalisation).
     public var sealedAccount: String?
 
     public init(name: String, mediaType: String, size: Int, width: Int? = nil, height: Int? = nil, hash: String, cipherHash: String? = nil,
@@ -221,11 +221,10 @@ public struct MessageReply: Codable, Sendable, Equatable {
 public struct EncryptionState: Sendable, Equatable {
     public let revision: Int
     public let data: Data
-    /// The account spelling `data` was sealed under when that differs from the row's key: set by the v23 address
-    /// migration for state saved under the typed spelling, cleared by the next save.
+    /// The account spelling `data` was sealed under when it differs from the row's key; the next save clears it.
     public var sealedAccount: String? = nil
     /// The device ID the sealed identity is published under, kept in plain text so that it is still known when the
-    /// wrapping key is lost and encryption is set up again. Nil for a row no build has recorded yet.
+    /// wrapping key is lost and encryption is set up again. Nil when not recorded.
     public var deviceID: UInt32? = nil
 }
 
@@ -477,7 +476,6 @@ public struct AuthenticatedReaction: Sendable, Equatable {
         self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
     }
 
-    /// The projection row: reactions are one event kind among several.
     public init?(_ event: MessageEvent) {
         guard event.kind == .reaction, let values = try? JSONDecoder().decode([String].self, from: Data(event.payload.utf8)) else { return nil }
         self.init(id: event.id, chatID: event.chatID, actorID: event.actorID, targetWireID: event.targetWireID, reactions: values, updatedAt: event.updatedAt)
@@ -488,8 +486,7 @@ public struct AuthenticatedReaction: Sendable, Equatable {
     }
 }
 
-/// Message-scoped events other peers or our own devices assert about a target message. Reactions
-/// and receipts (`delivered`, `displayed`) are accepted; retraction and correction are reserved.
+/// Message-scoped events other peers or our own devices assert about a target message.
 public enum MessageEventKind: String, Sendable, CaseIterable {
     case reaction, retraction, correction, delivered, displayed
 }
@@ -558,7 +555,7 @@ public struct AccountPreferences: Sendable, Equatable {
     public var deliveryReceipts = true
     public var readReceipts = true
     public var lastSeen = true
-    /// Others' authenticated reactions to this account's messages alert. Defaults on.
+    /// Others' authenticated reactions to this account's messages alert.
     public var reactionNotifications = true
     public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true, lastSeen: Bool = true,
                 reactionNotifications: Bool = true) {

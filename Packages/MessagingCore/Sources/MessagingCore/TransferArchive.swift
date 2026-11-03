@@ -1,27 +1,13 @@
 import Foundation
 import CryptoKit
 
-/// One file that carries an install's data to another install: a manifest followed by every entry's bytes, encrypted
-/// as one stream under a key derived from a `TransferCode`.
-///
-/// Layout (format 1):
-///
-///     header   64 bytes, in the clear: "HAUSXFER", version (UInt16), 0 (UInt16), chunk size (UInt32), salt (32),
-///              code check (16). Every integer is big-endian.
-///     frames   until the end of the file: sealed length (UInt32), then AES-GCM ciphertext and its 16-byte tag.
-///
-/// The plaintext the frames carry, in order: the manifest's length (UInt32) and its JSON, then each entry's bytes in
-/// the manifest's order. Every frame but the last holds exactly one chunk of plaintext.
-///
-/// The key and the code check come from the code through HKDF-SHA256 with the header's random salt, so every archive
-/// has its own key. Each frame is sealed with a nonce made of its index and a final-frame flag, and authenticates the
-/// whole header: frames cannot be reordered, dropped, cut short or moved to another archive without failing to open.
-/// The code check tells a mistyped code apart from a damaged file before anything is decrypted. Each entry's size
-/// and SHA-256 in the manifest are checked as well as it is read.
-///
-/// Names in the manifest are logical (`messaging/messages.sqlite`, `keychain/account`), never paths or identifiers of
-/// the install that wrote them: the reader maps them onto its own storage, and refuses any name that could reach
-/// outside the folder it extracts into.
+/// Carries one install's data to another as a single encrypted stream.
+/// Format 1: a 64-byte clear header ("HAUSXFER", version UInt16, 0 UInt16, chunk size UInt32, salt 32, code check 16;
+/// big-endian), then frames to the end of the file: sealed length (UInt32), AES-GCM ciphertext, 16-byte tag. The
+/// plaintext is the manifest's length (UInt32) and JSON, then each entry's bytes in manifest order, one full chunk per
+/// frame but the last. HKDF-SHA256 with the salt derives the key and the code check from the `TransferCode`. Nonces
+/// are the frame index plus a final flag and every frame authenticates the header, so frames cannot be reordered,
+/// dropped, cut short or moved to another archive. Manifest names are logical, never the writer's paths.
 public enum TransferArchive {
     public static let fileExtension = "hausxmpp"
     public static let formatVersion = 1
@@ -29,13 +15,11 @@ public enum TransferArchive {
     static let headerLength = 64
     static let tagLength = 16
     public static let defaultChunkSize = 1 << 20
-    /// Larger chunks are refused on reading: a frame is held in memory whole.
+    // A frame is held in memory whole.
     static let maximumChunkSize = 16 << 20
     static let maximumManifestLength = 64 << 20
-    /// An entry kept in memory (a Keychain item, preferences) is never larger than this.
     public static let maximumInMemoryEntry = 4 << 20
 
-    /// The size and SHA-256 of one entry, read in pieces.
     public static func describe(name: String, source: TransferSource) throws -> TransferManifest.Entry {
         guard TransferManifest.isValidName(name) else { throw TransferArchiveError.invalidManifest("name") }
         switch source {
@@ -53,9 +37,8 @@ public enum TransferArchive {
         }
     }
 
-    /// Writes `manifest` and every entry's bytes from `sources` (keyed by entry name) to a new file at `url`. Each
-    /// file is hashed again as it is written: one that changed since `describe` fails the write. `progress` receives
-    /// the entry bytes written so far. A failed write leaves a partial file for the caller to remove.
+    /// Hashes each file again as it is written: one that changed since `describe` fails the write. A failed write
+    /// leaves a partial file for the caller to remove.
     public static func write(_ manifest: TransferManifest, sources: [String: TransferSource], to url: URL, code: TransferCode,
                              chunkSize: Int = defaultChunkSize, progress: (Int64) -> Void = { _ in }) throws {
         try manifest.validate()
@@ -92,8 +75,7 @@ public enum TransferArchive {
         try writer.finish()
     }
 
-    /// Opens an archive: checks the header and the code, then reads and checks the manifest. A manifest from a newer
-    /// format, or of data at a newer schema than `supportedSchema`, is refused before any entry is read.
+    /// Refuses a newer format, or data at a newer schema than `supportedSchema`, before any entry is read.
     public static func open(_ url: URL, code: TransferCode, supportedSchema: Int) throws -> TransferArchiveReader {
         try TransferArchiveReader(url: url, code: code, supportedSchema: supportedSchema)
     }
@@ -115,31 +97,26 @@ public enum TransferArchive {
     }
 }
 
-/// Where an entry's bytes come from when writing.
 public enum TransferSource: Sendable {
     case file(URL)
     case data(Data)
 }
 
 public enum TransferArchiveError: Error, Equatable, Sendable {
-    /// Not a transfer archive at all (another file was picked).
     case notATransfer
-    /// Written by a newer build in a format this one cannot read.
     case newerFormat(Int)
-    /// The code does not open this archive.
+    /// Told apart from `damaged` by the header's code check, before anything is decrypted.
     case wrongCode
-    /// The code is right but the contents do not check out: changed, corrupted, or not what the manifest lists.
     case damaged
-    /// The file ends before the archive does (an interrupted copy or download).
+    /// An interrupted copy or download.
     case truncated
     case invalidManifest(String)
-    /// The data is at a schema newer than this build can open.
     case newerSchema(found: Int, supported: Int)
     /// A file changed while it was being written into the archive.
     case sourceChanged(String)
 }
 
-/// What an archive holds. Written first and checked before any entry is extracted.
+/// Checked before any entry is extracted.
 public struct TransferManifest: Codable, Sendable, Equatable {
     public struct Entry: Codable, Sendable, Equatable {
         public let name: String
@@ -149,16 +126,16 @@ public struct TransferManifest: Codable, Sendable, Equatable {
     }
 
     public var formatVersion: Int
-    /// Random for every transfer: a target records it, so the same archive is never restored twice.
+    /// A target records it, so the same archive is never restored twice.
     public var transferID: String
     public var createdAt: Date
     public var appVersion: String
     public var appBuild: String
-    /// "iOS" or "macOS": the platform that wrote it.
+    /// "iOS" or "macOS".
     public var platform: String
-    /// The store's schema: a newer one than the reader's is refused, an older one is migrated as usual.
+    /// A newer one than the reader's is refused; an older one is migrated as usual.
     public var schemaVersion: Int
-    /// The signed-in account, or empty.
+    /// Empty when signed out.
     public var accountID: String
     public var entries: [Entry]
 
@@ -173,8 +150,7 @@ public struct TransferManifest: Codable, Sendable, Equatable {
 
     public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
 
-    /// A name is one or more components joined by "/": none empty, "." or "..", none with a NUL or a backslash, and
-    /// not too long. So an entry can only land inside the folder it is extracted into.
+    /// Ensures an entry can only land inside the folder it is extracted into.
     public static func isValidName(_ name: String) -> Bool {
         guard !name.isEmpty, name.utf8.count <= 1024, !name.contains("\0"), !name.contains("\\") else { return false }
         return name.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { component in
@@ -218,7 +194,7 @@ public struct TransferManifest: Codable, Sendable, Equatable {
     }
 }
 
-/// Reads an archive opened with its code, entry by entry in the manifest's order, holding at most one frame in memory.
+/// Holds at most one frame in memory.
 public final class TransferArchiveReader {
     public let manifest: TransferManifest
     private let frames: FrameReader
@@ -245,10 +221,8 @@ public final class TransferArchiveReader {
 
     deinit { frames.close() }
 
-    /// Extracts every entry: those `inMemory` selects are returned by name (each at most
-    /// `TransferArchive.maximumInMemoryEntry` bytes), the rest are written under `directory` at their names. Every
-    /// entry's size and SHA-256 are checked, and the archive must end exactly after the last one. Throws on the first
-    /// problem; the caller removes `directory`. `progress` receives the entry bytes read so far.
+    /// Returns the entries `inMemory` selects and writes the rest under `directory`. Checks every size and SHA-256,
+    /// and that the archive ends exactly after the last entry. On a throw the caller removes `directory`.
     public func extract(into directory: URL, inMemory: (TransferManifest.Entry) -> Bool,
                         progress: (Int64) -> Void = { _ in }) throws -> [String: Data] {
         let files = FileManager.default
@@ -286,7 +260,7 @@ public final class TransferArchiveReader {
         return kept
     }
 
-    /// Reads and checks everything without keeping any of it: the writer's last step, before the archive is offered.
+    /// The writer's last step, before the archive is offered.
     public func verify(progress: (Int64) -> Void = { _ in }) throws {
         var read: Int64 = 0
         for entry in manifest.entries {
@@ -303,8 +277,6 @@ public final class TransferArchiveReader {
         try frames.requireEnd()
     }
 }
-
-// MARK: Frames
 
 private final class FrameWriter {
     private let handle: FileHandle
@@ -325,7 +297,6 @@ private final class FrameWriter {
         #endif
         guard files.createFile(atPath: url.path, contents: nil, attributes: attributes) else { throw CocoaError(.fileWriteUnknown) }
         handle = try FileHandle(forWritingTo: url)
-        // A random key's bytes: CryptoKit draws them from the system's secure generator.
         let salt = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
         let (key, check) = TransferArchive.keys(code: code, salt: salt)
         var header = TransferArchive.magic
@@ -380,7 +351,7 @@ private final class FrameReader {
     private var plaintext = Data()
     private var index: UInt64 = 0
     private var sawFinal = false
-    /// The next frame's length, read ahead to tell whether the current frame is the last.
+    // Read ahead to tell whether the current frame is the last.
     private var nextLength: UInt32?
 
     init(url: URL, code: TransferCode) throws {
@@ -418,7 +389,7 @@ private final class FrameReader {
         return result
     }
 
-    /// Between 1 and `count` bytes: what the current frame still holds, or the next one.
+    // Between 1 and `count` bytes.
     func read(upTo count: Int) throws -> Data {
         while plaintext.isEmpty {
             guard try openNextFrame() else { throw TransferArchiveError.damaged }
@@ -428,7 +399,6 @@ private final class FrameReader {
         return result
     }
 
-    /// Everything was read: no plaintext left over, the final frame seen, and nothing after it.
     func requireEnd() throws {
         while !sawFinal {
             guard try openNextFrame() else { throw TransferArchiveError.damaged }
@@ -436,8 +406,6 @@ private final class FrameReader {
         guard plaintext.isEmpty else { throw TransferArchiveError.damaged }
     }
 
-    /// False once the final frame was read. Throws `truncated` when the file stops before it, `damaged` when a frame
-    /// does not open.
     private func openNextFrame() throws -> Bool {
         guard !sawFinal else { return false }
         guard let length = nextLength else { throw TransferArchiveError.truncated }
@@ -463,7 +431,6 @@ private final class FrameReader {
         return true
     }
 
-    /// The next frame's length; nil at the end of the file.
     private func readLength() throws -> UInt32? {
         let bytes = try handle.read(upToCount: 4) ?? Data()
         if bytes.isEmpty { return nil }

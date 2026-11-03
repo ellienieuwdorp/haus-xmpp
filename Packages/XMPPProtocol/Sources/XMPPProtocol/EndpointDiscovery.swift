@@ -4,13 +4,13 @@ import Foundation
 public enum XMPPTransportSecurity: String, Sendable, Codable, CaseIterable {
     /// TLS from the first byte (XEP-0368), ALPN `xmpp-client`.
     case directTLS
-    /// RFC 6120 §5: plain TCP, then a mandatory `<starttls/>` before anything else is sent.
+    /// RFC 6120 §5: plain TCP, then a mandatory `<starttls/>` before anything else.
     case startTLS
 
     public var defaultPort: UInt16 { self == .directTLS ? 5223 : 5222 }
 }
 
-/// Where to open the TCP connection. TLS identity is always the account domain, never this host.
+/// TLS identity is always the account domain, never this host.
 public struct XMPPEndpoint: Sendable, Hashable, Codable {
     public let host: String
     public let port: UInt16
@@ -22,21 +22,20 @@ public struct XMPPEndpoint: Sendable, Hashable, Codable {
 }
 
 public enum XMPPRoute: Sendable, Equatable {
-    /// Exactly this endpoint, no discovery: a manually entered server, or the lab.
+    /// No discovery: a manually entered server, or the lab.
     case fixed(XMPPEndpoint)
-    /// RFC 6120 §3.2 and XEP-0368 discovery for the account domain. `preferred`, the endpoint that worked last time,
-    /// is tried first; DNS is only queried when it fails.
+    /// RFC 6120 §3.2 and XEP-0368 discovery. `preferred`, the endpoint that worked last time, is tried first; DNS only
+    /// when it fails.
     case discover(preferred: XMPPEndpoint?)
 }
 
-/// One SRV record set: the records, "." (RFC 2782: decidedly not offered), or nothing usable (no records, NXDOMAIN,
-/// error or timeout).
+// "." means decidedly not offered (RFC 2782); nothing usable covers no records, NXDOMAIN, error or timeout.
 enum SRVLookup: Equatable {
     case records([SRVRecord])
     case notOffered
     case none
 
-    /// "." is honoured only when it is all there is; real records next to it win. Port 0 is unusable.
+    // "." counts only when it is all there is. Port 0 is unusable.
     init(_ records: [SRVRecord]) {
         let usable = records.filter { $0.target != "." && $0.port != 0 }
         self = !usable.isEmpty ? .records(usable) : records.contains { $0.target == "." } ? .notOffered : .none
@@ -49,7 +48,7 @@ struct SRVRecord: Equatable {
     let port: UInt16
     let target: String
 
-    /// RFC 2782 RDATA: priority, weight, port, then the target as uncompressed DNS labels. The root name is ".".
+    // RFC 2782 RDATA: priority, weight, port, then uncompressed target labels.
     init?(rdata: Data) {
         let bytes = [UInt8](rdata)
         guard bytes.count >= 7 else { return nil }
@@ -74,10 +73,9 @@ struct SRVRecord: Equatable {
 }
 
 enum EndpointDiscovery {
-    /// Merges `_xmpps-client._tcp` (direct TLS) and `_xmpp-client._tcp` (STARTTLS) answers into the order to try.
-    /// Priority first; RFC 2782 weighted order within a priority; direct TLS before STARTTLS on equal priority.
-    /// With no records at all: `<domain>:5222` STARTTLS (RFC 6120 §3.2.2), then `<domain>:5223` direct TLS. A type
-    /// answered with "." contributes nothing, not even its fallback. Empty means the domain offers no client service.
+    // Priority first, RFC 2782 weighted within a priority, direct TLS before STARTTLS on ties. No records at all:
+    // `<domain>:5222` STARTTLS (RFC 6120 §3.2.2), then `:5223` direct TLS; a type answered "." adds nothing. Empty
+    // means the domain offers no client service.
     static func candidates<R: RandomNumberGenerator>(domain: String, directTLS: SRVLookup, startTLS: SRVLookup,
                                                      using random: inout R) -> [XMPPEndpoint] {
         var tagged: [(SRVRecord, XMPPTransportSecurity)] = []
@@ -100,7 +98,7 @@ enum EndpointDiscovery {
         return ordered.filter { seen.insert($0).inserted }
     }
 
-    /// RFC 2782: zero-weight records first, then repeatedly pick by a random point in the running weight sum.
+    // RFC 2782: zero-weight records first, then pick by a random point in the running weight sum.
     static func weightedOrder<R: RandomNumberGenerator>(_ records: [SRVRecord], using random: inout R) -> [SRVRecord] {
         var remaining = records.filter { $0.weight == 0 } + records.filter { $0.weight != 0 }
         var ordered: [SRVRecord] = []
@@ -114,7 +112,6 @@ enum EndpointDiscovery {
         return ordered
     }
 
-    /// Both SRV types, concurrently, each bounded by `timeout`.
     static func resolve(domain: String, timeout: Duration) async -> [XMPPEndpoint] {
         async let direct = lookup("_xmpps-client._tcp." + domain, timeout: timeout)
         async let starttls = lookup("_xmpp-client._tcp." + domain, timeout: timeout)
@@ -123,7 +120,7 @@ enum EndpointDiscovery {
         return candidates(domain: domain, directTLS: directTLS, startTLS: startTLS, using: &random)
     }
 
-    /// Cancellation ends the query at once with nothing usable, so a caller's budget bounds discovery too.
+    // Cancellation ends the query at once, so a caller's budget bounds discovery too.
     static func lookup(_ name: String, timeout: Duration) async -> SRVLookup {
         let query = SRVQuery(name: name, timeout: timeout)
         return await withTaskCancellationHandler {
@@ -132,8 +129,8 @@ enum EndpointDiscovery {
     }
 }
 
-/// One `DNSServiceQueryRecord`. `ReturnIntermediates` makes NXDOMAIN and NODATA answer at once instead of waiting
-/// out the timeout. Records arrive in batches flagged `MoreComing`; the first complete SRV batch ends the query.
+// `ReturnIntermediates` makes NXDOMAIN and NODATA answer at once. Records arrive in batches flagged `MoreComing`; the
+// first complete SRV batch ends the query.
 private final class SRVQuery: @unchecked Sendable {
     private let name: String
     private let timeout: Duration

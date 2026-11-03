@@ -1,15 +1,14 @@
 import CryptoKit
 import Foundation
 
-/// XEP-0115 entity capabilities: the one disco#info identity and feature list this client
-/// advertises, hashed into the `<c/>` element on presence so PEP services know which
-/// `+notify` nodes to push (servers ignore a client that sends presence without caps).
+/// XEP-0115 entity capabilities: the one identity and feature list this client advertises, hashed into `<c/>` on
+/// presence so PEP services know which `+notify` nodes to push.
 public enum EntityCapabilities {
     public static let node = "https://xmpp.haus/ios"
     public static let identity = "client/phone//Haus XMPP"
-    /// Only what the wire code sends and parses: peers gate reactions, replies and file sharing on this list
-    /// (XEP-0444 §2 makes advertising reactions a MUST). The MUC namespace stays out until invitations are parsed:
-    /// peers check it (XEP-0045 §6.1) before sending an invitation this client cannot yet show.
+    /// Only what the wire code sends and parses: peers gate reactions, replies and file sharing on it (XEP-0444 §2
+    /// makes advertising reactions a MUST). The MUC namespace stays out: peers check it (XEP-0045 §6.1) before sending
+    /// invitations, which this client does not parse.
     public static var features: [String] {
         ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", XMPPChatState.namespace, PresenceWire.lastActivityNamespace, AvatarWire.metadataNode + "+notify", DisplayedSync.node + "+notify",
          "urn:xmpp:reactions:0", "urn:xmpp:reply:0", "urn:xmpp:fallback:0", MessageContent.FileSharing.namespace, MessageContent.FileSharing.encryptedNamespace,
@@ -30,7 +29,7 @@ public enum EntityCapabilities {
         "<c xmlns='http://jabber.org/protocol/caps' hash='sha-1' node='\(node)' ver='\(verification)'/>"
     }
 
-    /// The disco#info result body; echoes the requested `node` so caps lookups match their query.
+    // Echoes the requested `node` so caps lookups match their query.
     static func discoInfoQuery(node requested: String?) -> String {
         let nodeAttribute = requested.map { " node='\(xmlEscaped($0))'" } ?? ""
         return "<query xmlns='http://jabber.org/protocol/disco#info'\(nodeAttribute)><identity category='client' type='phone' name='Haus XMPP'/>"

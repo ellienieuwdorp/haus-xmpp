@@ -5,7 +5,7 @@ import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
-/// Retractions obey the same inbound rules as reactions.
+// Retractions obey the same inbound rules as reactions.
 struct RevisionResumptionTests {
     private let account = "alice@localhost", peer = "bob@localhost"
 

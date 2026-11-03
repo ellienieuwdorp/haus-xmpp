@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// XEP-0424 retractions and XEP-0308 corrections share the one payload grammar with bodies and reactions.
+// XEP-0424 retractions and XEP-0308 corrections share the one payload grammar with bodies and reactions.
 private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
     var parser = XMLStreamFramer()
     let frames = try parser.feed(Data(("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>" + xml).utf8))

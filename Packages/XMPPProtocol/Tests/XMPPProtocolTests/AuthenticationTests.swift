@@ -5,7 +5,7 @@ import Testing
 private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
 private func data(_ text: String) -> Data { Data(text.utf8) }
 
-/// RFC 5802 §5 (SCRAM-SHA-1) and RFC 7677 §3 (SCRAM-SHA-256) example exchanges.
+// RFC 5802 §5 (SCRAM-SHA-1) and RFC 7677 §3 (SCRAM-SHA-256) example exchanges.
 private struct Vector {
     let offered: String, nonce: String, serverFirst: String, clientFinal: String, serverFinal: String
     static let sha1 = Vector(offered: "SCRAM-SHA-1", nonce: "fyko+d2lbbFgONRv9qkxdawL",
@@ -92,7 +92,7 @@ private func rejectsUnsafeServerFirstMessages(_ serverFirst: String) throws {
     }
 }
 
-/// RFC 4013 §3 examples, plus this implementation's documented limit for right-to-left text.
+// RFC 4013 §3 examples, plus this implementation's documented limit for right-to-left text.
 @Test func saslprepMapsNormalizesAndProhibits() {
     let cases: [(String, String?)] = [
         ("user", "user"), ("I\u{00AD}X", "IX"), ("\u{00AA}", "a"), ("\u{2168}", "IX"),

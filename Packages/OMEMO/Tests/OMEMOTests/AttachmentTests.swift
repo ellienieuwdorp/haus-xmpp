@@ -31,7 +31,6 @@ final class AttachmentTests: XCTestCase {
         XCTAssertNil(try EncryptedContent.decode(Data("just text".utf8), sender: sender, recipient: recipient, modern: false).fileSharing)
     }
 
-    /// The SCE `<content>` children of a modern payload, for checking what rides inside the envelope.
     private func envelopeContent(_ data: Data) throws -> XMPPProtocol.XMLNode {
         let root = try XMPPProtocol.XMLNode.parse(standalone: data)
         return try XCTUnwrap(root.child("content", namespace: "urn:xmpp:sce:1"))

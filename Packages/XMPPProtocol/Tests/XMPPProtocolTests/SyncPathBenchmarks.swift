@@ -2,11 +2,11 @@ import Foundation
 import XCTest
 @testable import XMPPProtocol
 
-/// Microbenchmarks for the per-page parse path of archive catch-up. They only
-/// run with HAUS_BENCHMARKS=1, so the default suite stays fast:
-///   HAUS_BENCHMARKS=1 swift test --package-path Packages/XMPPProtocol [-c release] --filter SyncPathBenchmarks
-/// The page is synthetic: legacy OMEMO messages from one peer device to eight recipient devices, as Prosody returns
-/// them for an own-archive query, delivered in 64 KiB reads (`XMPPClient`'s receive size).
+// Microbenchmarks for the per-page parse path of archive catch-up. They only
+// run with HAUS_BENCHMARKS=1, so the default suite stays fast:
+//   HAUS_BENCHMARKS=1 swift test --package-path Packages/XMPPProtocol [-c release] --filter SyncPathBenchmarks
+// The page is synthetic: legacy OMEMO messages from one peer device to eight recipient devices, as Prosody returns
+// them for an own-archive query, delivered in 64 KiB reads (`XMPPClient`'s receive size).
 final class SyncPathBenchmarks: XCTestCase {
     private static let account = "app@localhost"
     private static let opening = "<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' from='localhost' id='s1' version='1.0'>"
@@ -15,12 +15,12 @@ final class SyncPathBenchmarks: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["HAUS_BENCHMARKS"] == "1", "set HAUS_BENCHMARKS=1 to run benchmarks")
     }
 
-    /// Deterministic base64 of `count` bytes, so every run parses the same input.
+    // Deterministic base64 of `count` bytes, so every run parses the same input.
     private static func filler(_ count: Int, seed: Int) -> String {
         Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ seed &* 17) }).base64EncodedString()
     }
 
-    /// One archived message as the server sends it; the sender's address is mixed case so normalisation has work to do.
+    // One archived message as the server sends it; the sender's address is mixed case so normalisation has work to do.
     static func result(_ index: Int) -> String {
         let keys = (0..<8).map { "<key rid='\(1000 + $0)'\($0 == 0 ? " prekey='true'" : "")>\(filler($0 == 0 ? 220 : 150, seed: index + $0))</key>" }.joined()
         let inner = "<message xmlns='jabber:client' from='Peer@LocalHost/Phone' type='chat' id='m\(index)'>"
@@ -34,7 +34,7 @@ final class SyncPathBenchmarks: XCTestCase {
             + "\(inner)</forwarded></result></message>"
     }
 
-    /// The stream opening, `results` archived messages and the closing `<fin/>`, in 64 KiB reads.
+    // The stream opening, `results` archived messages and the closing `<fin/>`, in 64 KiB reads.
     static func page(results: Int) -> [Data] {
         let fin = "<iq xmlns='jabber:client' type='result' id='q1'><fin xmlns='urn:xmpp:mam:2'><set xmlns='http://jabber.org/protocol/rsm'>"
             + "<first>a0</first><last>a\(results - 1)</last></set></fin></iq>"
@@ -59,7 +59,7 @@ final class SyncPathBenchmarks: XCTestCase {
     func testFramerFeeds50ResultPage() { measureFramer(results: 50) }
     func testFramerFeeds100ResultPage() { measureFramer(results: 100) }
 
-    /// `XMPPClient` normalises every inbound stanza tree before routing it.
+    // `XMPPClient` normalises every inbound stanza tree before routing it.
     func testNormalisesMAMWrappedMessage() throws {
         let node = try XCTUnwrap(frame(Self.page(results: 1)).first)
         var normalised = node
@@ -69,8 +69,8 @@ final class SyncPathBenchmarks: XCTestCase {
         XCTAssertEqual(inner?.attributes["from"], "peer@localhost/Phone")
     }
 
-    /// Everything the client does with a 50-result page before ArchiveSynchronizer sees it: framing, normalising each
-    /// stanza, the archive provenance and OMEMO envelope parse, and the `<fin/>`.
+    // Everything the client does with a 50-result page before ArchiveSynchronizer sees it: framing, normalising each
+    // stanza, the archive provenance and OMEMO envelope parse, and the `<fin/>`.
     func testParsesWhole50ResultPage() throws {
         let chunks = Self.page(results: 50)
         var page: XMPPArchivePage?

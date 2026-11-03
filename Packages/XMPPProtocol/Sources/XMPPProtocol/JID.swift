@@ -1,19 +1,11 @@
 import Foundation
 
-/// An RFC 7622 address in normal form: the one spelling every key and comparison in this client uses. Parse input once
-/// at the boundary (sign-in, a typed contact or room, a stanza off the wire) and keep the result; two addresses name
-/// the same entity exactly when their normal forms are equal.
-///
-/// - Localpart: the PRECIS UsernameCaseMapped rules of RFC 8265 §3.3 without the bidi rule and without the
-///   IdentifierClass letter/digit restriction. Fullwidth and halfwidth forms are width-mapped, the result lowercased
-///   (Unicode toLowerCase) and NFC-normalised. Rejected: controls, spaces, default-ignorable and unassigned code
-///   points, noncharacters, and the RFC 7622 §3.3.1 characters `" & ' / : < > @`.
-/// - Domainpart: width-mapped, lowercased, NFC, one trailing dot removed (RFC 7622 §3.2). No IDNA conversion, so an
-///   A-label and its U-label stay different spellings. Empty labels, spaces, controls and `@ / \ " & ' < > :` are
-///   rejected, except inside a bracketed IP literal.
-/// - Resourcepart: untouched (compared byte for byte). Only an empty resource and controls are rejected.
-///
-/// Each part is limited to 1023 UTF-8 bytes (RFC 7622 §3.1).
+/// An RFC 7622 address in normal form, the one spelling every key and comparison uses; parse once at the boundary.
+/// Localpart: RFC 8265 §3.3 UsernameCaseMapped without the bidi rule or letter/digit restriction (width-mapped,
+/// lowercased, NFC); controls, spaces, default-ignorable, unassigned, noncharacters and `" & ' / : < > @` rejected.
+/// Domainpart: width-mapped, lowercased, NFC, one trailing dot removed (§3.2), no IDNA conversion; empty labels,
+/// spaces, controls and `@ / \ " & ' < > :` rejected outside a bracketed IP literal. Resourcepart: compared byte for
+/// byte; only empty and controls rejected. Each part at most 1023 UTF-8 bytes (§3.1).
 public struct JID: Hashable, Sendable, CustomStringConvertible {
     public let localpart: String?
     public let domainpart: String
@@ -46,15 +38,14 @@ public struct JID: Hashable, Sendable, CustomStringConvertible {
         self.resourcepart = resourcepart
     }
 
-    /// `local@domain` or `domain`.
     public var bare: String { localpart.map { $0 + "@" + domainpart } ?? domainpart }
     public var full: String { resourcepart.map { bare + "/" + $0 } ?? bare }
     public var description: String { full }
 
-    /// The normal form of any address (bare or full, with or without a localpart), or nil when it is not a valid JID.
+    /// nil when not a valid JID.
     public static func normalized(_ string: String) -> String? { JID(string)?.full }
 
-    /// The normal bare form of an address that has a localpart (a user or a room), or nil.
+    /// For an address with a localpart (a user or a room); nil otherwise.
     public static func normalizedBare(_ string: String) -> String? {
         guard let jid = JID(string), jid.localpart != nil else { return nil }
         return jid.bare
@@ -82,7 +73,7 @@ public struct JID: Hashable, Sendable, CustomStringConvertible {
         return mapped
     }
 
-    /// Width mapping, then toLowerCase, then NFC (RFC 8265 §3.3.2 steps 1, 3 and 4).
+    // RFC 8265 §3.3.2 steps 1, 3 and 4.
     private static func mapped(_ value: String) -> String {
         var scalars = String.UnicodeScalarView()
         for scalar in value.unicodeScalars {
@@ -102,9 +93,8 @@ public struct JID: Hashable, Sendable, CustomStringConvertible {
         }
     }
 
-    /// The stanza with the `from` and `to` of every `jabber:client` message, presence and iq in it (the stanza itself
-    /// and anything forwarded inside it: carbons, archive results) in normal form. An address that is not a valid JID
-    /// is left as it is, so the parsers that follow reject it as before.
+    // Normalizes `from` and `to` of every `jabber:client` stanza in it, forwarded ones included. An invalid address is
+    // left as it is so later parsers reject it.
     static func normalizingAddresses(_ node: XMLNode) -> XMLNode {
         var attributes = node.attributes
         if node.namespace == "jabber:client", ["message", "presence", "iq"].contains(node.name) {
@@ -115,8 +105,8 @@ public struct JID: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-/// The server bound a different account than the one that signed in (RFC 6120 §7.7 lets it choose the resource,
-/// never the bare JID). The session ends instead of adopting it.
+/// The server bound a different account (RFC 6120 §7.7 lets it choose the resource, never the bare JID). The session
+/// ends instead of adopting it.
 public enum XMPPIdentityError: Error, Sendable, Equatable {
     case boundAccountMismatch
 }

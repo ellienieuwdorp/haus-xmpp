@@ -3,8 +3,8 @@ import MessageStore
 import Testing
 @testable import MessagingCore
 
-/// A running app on the far side of the handshake: it answers each request after `delay` with what `answer` decides,
-/// as the app's responder writes it to the App Group.
+// A running app on the far side of the handshake: it answers each request after `delay` with what `answer` decides,
+// as the app's responder writes it to the App Group.
 private final class FakeApp: LivenessChannel, @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [LivenessRequest] = []
@@ -16,7 +16,7 @@ private final class FakeApp: LivenessChannel, @unchecked Sendable {
         self.delay = delay; self.decide = decide
     }
 
-    /// An app that can keep the promise, or not, answering through the real decision.
+    // An app that can keep the promise, or not, answering through the real decision.
     convenience init(after delay: Duration = .milliseconds(100), conditions: LivenessConditions) {
         self.init(after: delay) { LivenessHandshake.answer(to: $0, conditions: conditions) }
     }
@@ -39,7 +39,7 @@ private let live = LivenessConditions(wantsConnection: true, quiescing: false, o
                                       presentsCatchUp: true)
 private let account = "alice@example.org"
 
-/// Runs `body` with the extension's store and the app's, which holds the lease for the whole test.
+// Runs `body` with the extension's store and the app's, which holds the lease for the whole test.
 private func withBusyLease(_ body: (_ extension: MessageStore, _ app: MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "liveness-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -63,9 +63,9 @@ struct LivenessHandshakeTests {
         #expect(answer == LivenessAnswer(nonce: "n1", answeredAt: Date(timeIntervalSince1970: 1_000.2)))
     }
 
-    /// Each condition the promise needs, missing on its own, keeps the app silent: a quiescing app (on its way to the
-    /// background or to sleep) is about to drop the lease and the connection, and an app that dismisses what it
-    /// catches up on (the iPhone) could lose the message to a reconnect.
+    // Each condition the promise needs, missing on its own, keeps the app silent: a quiescing app (on its way to the
+    // background or to sleep) is about to drop the lease and the connection, and an app that dismisses what it
+    // catches up on (the iPhone) could lose the message to a reconnect.
     @Test(arguments: [
         LivenessConditions(wantsConnection: true, quiescing: true, ownsLease: true, servesExtensionAccount: true, presentsCatchUp: true),
         LivenessConditions(wantsConnection: false, quiescing: false, ownsLease: true, servesExtensionAccount: true, presentsCatchUp: true),
@@ -78,7 +78,7 @@ struct LivenessHandshakeTests {
         #expect(LivenessHandshake.answer(to: LivenessRequest(sentAt: now), conditions: conditions, now: now) == nil)
     }
 
-    /// A ring delivered late (an app resumed from suspension) or a request from the future is not answered.
+    // A ring delivered late (an app resumed from suspension) or a request from the future is not answered.
     @Test func onlyAFreshRequestIsAnswered() {
         let sent = Date(timeIntervalSince1970: 1_000)
         func answers(after seconds: TimeInterval) -> Bool {
@@ -135,8 +135,8 @@ struct LivenessHandshakeTests {
         }
     }
 
-    /// An answer after the window, while the wait goes on toward its fallback, never suppresses. (The real app does not
-    /// answer a request this old at all; this one does.)
+    // An answer after the window, while the wait goes on toward its fallback, never suppresses. (The real app does not
+    // answer a request this old at all; this one does.)
     @Test func aLateAnswerDoesNotHandOff() async throws {
         try await withBusyLease { store, _ in
             let app = FakeApp(after: .seconds(LivenessHandshake.answerWindow + 0.3)) { LivenessAnswer(nonce: $0.nonce) }
@@ -159,7 +159,7 @@ struct LivenessHandshakeTests {
         }
     }
 
-    /// An answer to another request (a stale file, another wait's nonce) is ignored.
+    // An answer to another request (a stale file, another wait's nonce) is ignored.
     @Test func anAnswerWithAnotherNonceIsIgnored() async throws {
         try await withBusyLease { store, _ in
             let app = FakeApp { LivenessAnswer(nonce: $0.nonce + "-other", answeredAt: Date()) }
@@ -169,7 +169,7 @@ struct LivenessHandshakeTests {
         }
     }
 
-    /// The lease is tried first on every round: a lease that comes free is taken, answered or not.
+    // The lease is tried first on every round: a lease that comes free is taken, answered or not.
     @Test func aFreeLeaseNeverAsks() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "liveness-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -183,11 +183,9 @@ struct LivenessHandshakeTests {
 
     // MARK: After a hand-off
 
-    /// Between the answer and the message the Mac may sleep, quit or lose its stream (a probe that went unanswered, a
-    /// reconnect that failed); the message then comes with a later connection's catch-up, hours later perhaps. The
-    /// hand-off claims nothing, so what the app already holds stays held, and the desktop claim after a catch-up posts
-    /// it whatever its age: the push still ends in a banner. (The phone's claim would dismiss it as history, which is
-    /// why only an app that presents its catch-up answers.)
+    // The Mac may sleep or lose its stream after answering, so the message may come with a much later catch-up. The
+    // hand-off claims nothing and the desktop catch-up claim posts whatever its age, so the push still ends in a
+    // banner; the phone's claim would dismiss it as history, which is why only an app that presents catch-up answers.
     @Test func whatArrivesAfterAHandOffIsPostedByTheNextCatchUp() async throws {
         try await withBusyLease { store, app in
             let now = Date().timeIntervalSince1970

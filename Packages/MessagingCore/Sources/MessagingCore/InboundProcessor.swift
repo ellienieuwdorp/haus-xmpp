@@ -3,44 +3,40 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// Every inbound stanza that changes durable state goes through here, in the app and in the
-/// notification extension alike: decrypt, persist, project, and honour the stream-management
-/// barrier only when everything before it is durably disposed. Callers layer UI on the outcome.
+/// Every inbound stanza that changes durable state, in the app and the notification extension: decrypt, persist,
+/// project, and acknowledge a stream-management barrier only when everything before it is durably disposed.
 public actor InboundProcessor {
     public enum Outcome: Sendable, Equatable {
         /// Not a persistence event (connection state, presence, device lists); the caller decides.
         case ignored
-        /// Content persisted and projected.
         case stored
-        /// Decryption failed but the ciphertext is retained for later trust or keys; nothing is lost.
+        /// Decryption failed but the ciphertext is retained for later trust or keys.
         case retained(problem: String)
-        /// Deliberately not shown as content. When the envelope would have been a bubble, a durable placeholder row now
-        /// marks it; otherwise (an update from a device that excluded this one) nothing is stored. Nothing to review.
-        /// The reason is the error class; the row carries the exact reason.
+        /// Never shown as content. A would-be bubble gets a durable placeholder row carrying the exact reason; an
+        /// update from a device that excluded this one stores nothing.
         case excluded(reason: UnreadableReason)
-        /// A server returned one of our stanzas, and the message or update it named is now failed with the reason.
+        /// A server returned one of our stanzas; the message or update it named is failed.
         case rejected(RejectedOutgoing)
-        /// The barrier was acknowledged to the server.
         case acknowledged
     }
     public enum Failure: Error, Sendable, Equatable {
-        /// An earlier inbound stanza has no durable disposition, so the barrier was refused and
-        /// the transport ended: the server will redeliver from its last acknowledged count.
+        /// An earlier inbound stanza has no durable disposition, so the barrier was refused and the transport ended;
+        /// the server redelivers from its last acknowledged count.
         case unsavedInbound
     }
 
     public nonisolated let client: XMPPClient
     private let encryption: OMEMOService
     private let account: String
-    /// False from a storage failure until the next barrier ends the stream.
+    // False from a storage failure until the next barrier ends the stream.
     private var mayAcknowledge = true
 
     public init(encryption: OMEMOService, client: XMPPClient, account: String) {
         self.encryption = encryption; self.client = client; self.account = account
     }
 
-    /// Throws only when the stanza could not be durably disposed (storage failure) or the
-    /// barrier could not be honoured; both end the stream so nothing is skipped.
+    /// Throws only when the stanza could not be durably disposed or the barrier could not be honoured; both end the
+    /// stream so nothing is skipped.
     public func process(_ event: XMPPEvent) async throws -> Outcome {
         switch event {
         case .encryptedMessage(let message):
@@ -49,7 +45,6 @@ public actor InboundProcessor {
             catch OMEMOError.notForThisDevice { return .excluded(reason: .notForThisDevice) }
             catch OMEMOError.undecryptable { return .excluded(reason: .decryptFailed) }
             catch {
-                // A failed decrypt can still be safely retained for later explicit trust.
                 // Storage failures and unretained content must stop before the next barrier.
                 guard (try? await encryption.hasDurableIncomingDisposition(account: account, message: message)) ?? false else {
                     mayAcknowledge = false; throw error
@@ -84,7 +79,7 @@ public actor InboundProcessor {
                 return rejected.map(Outcome.rejected) ?? .ignored
             } catch { mayAcknowledge = false; throw error }
         case .displayedSync(let items):
-            // XEP-0490 state another device of ours published; the client verified it came from our bare JID.
+            // The client verified it came from our bare JID.
             do { _ = try await encryption.receiveDisplayedSync(account: account, items: items); return .stored }
             catch { mayAcknowledge = false; throw error }
         case .streamManagementBarrier(let token):

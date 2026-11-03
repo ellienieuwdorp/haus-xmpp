@@ -1,8 +1,8 @@
 import Foundation
 import XMPPProtocol
 
-/// Value-only registration intent journal. The caller must persist every returned state
-/// before network transmission and serialize access within the owning account/installation.
+/// Value-only registration intent journal. Persist every returned state before transmitting, and serialize access
+/// per account and installation.
 public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public private(set) var revision: UInt64
     public private(set) var acknowledgedRevision: UInt64
@@ -21,8 +21,8 @@ public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStrin
         }
     }
 
-    /// A genuine new APNs callback supersedes even an unacknowledged same-token intent.
-    /// The gateway might have committed that intent and subsequently invalidated it.
+    /// A new APNs callback supersedes even an unacknowledged same-token intent: the gateway may have committed that
+    /// intent and since invalidated it.
     @discardableResult public mutating func stageFreshRegistration(deviceToken: String) throws -> XMPPPushRegistrationOperation {
         try stage(action: .register, deviceToken: deviceToken)
     }
@@ -47,16 +47,16 @@ public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStrin
         return true
     }
 
-    /// Settles `operation` without a gateway result: only for a revocation the gateway refused because it holds no such
-    /// node for this account (item-not-found or forbidden), so nothing is left to revoke. The revision stays spent.
+    /// Only for a revocation the gateway refused with item-not-found or forbidden: nothing is left to revoke. The
+    /// revision stays spent.
     @discardableResult public mutating func abandonPending(_ operation: XMPPPushRegistrationOperation) -> Bool {
         guard pending == operation else { return false }
         acknowledgedRevision = operation.revision; pending = nil
         return true
     }
 
-    /// Call only with a status result from the authenticated configured component. This
-    /// preserves the current local intent after reinstall/conflict; persist before retrying.
+    /// Call only with a status result from the authenticated configured component. Keeps the local intent after a
+    /// reinstall or conflict; persist before retrying.
     @discardableResult public mutating func rebasePending(after result: XMPPPushRegistrationResult) throws -> XMPPPushRegistrationOperation? {
         guard let desired = pending else { return nil }
         guard result.revision >= desired.revision else { return desired }

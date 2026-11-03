@@ -3,11 +3,8 @@ import XCTest
 
 @testable import OMEMOCrypto
 
-/// What `OMEMOService` pays per incoming message before and after the ratchet step: importing the account's engine
-/// from its snapshot and exporting it again. Runs only with HAUS_BENCHMARKS=1:
-///   HAUS_BENCHMARKS=1 swift test --package-path Packages/OMEMOCrypto [-c release] --filter SnapshotBenchmarks
-/// Each session has done one exchange each way, so it holds a sending and a receiving chain; the local engine keeps
-/// its 100 prekeys, as a published device does.
+// Per-message snapshot import and export cost, with 100 prekeys and sessions holding both chains. Run with
+// HAUS_BENCHMARKS=1 swift test --package-path Packages/OMEMOCrypto [-c release] --filter SnapshotBenchmarks
 final class SnapshotBenchmarks: XCTestCase {
   override func setUpWithError() throws {
     try XCTSkipUnless(

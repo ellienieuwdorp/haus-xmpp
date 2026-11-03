@@ -3,8 +3,8 @@ import Testing
 import CSQLite
 @testable import MessageStore
 
-/// A fresh store in a temporary directory, holding the transport lease, with an encryption state for `account` so
-/// authenticated commits can follow and `chats` (id, title) already created. Closed and removed afterwards.
+// A fresh store in a temporary directory, holding the transport lease, with an encryption state for `account` so
+// authenticated commits can follow and `chats` (id, title) already created. Closed and removed afterwards.
 func withEncryptedStore(account: String, chats: [(String, String)] = [], _ operation: (MessageStore, URL) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -20,7 +20,7 @@ func withEncryptedStore(account: String, chats: [(String, String)] = [], _ opera
     } catch { try? await store.close(); throw error }
 }
 
-/// Every row of `sql` read straight from the database file, each column as text ("NULL" for null).
+// Every row of `sql` read straight from the database file, each column as text ("NULL" for null).
 func sqliteRows(url: URL, sql: String) -> [[String]] {
     var db: OpaquePointer?
     guard sqlite3_open(url.path, &db) == SQLITE_OK else { return [] }
@@ -35,7 +35,7 @@ func sqliteRows(url: URL, sql: String) -> [[String]] {
     return result
 }
 
-/// Runs `sql` straight against the database file, as an older or newer build would have left it.
+// Runs `sql` straight against the database file, as an older or newer build would have left it.
 func sqliteExecute(url: URL, sql: String) -> Bool {
     var db: OpaquePointer?
     guard sqlite3_open(url.path, &db) == SQLITE_OK else { return false }
@@ -43,10 +43,9 @@ func sqliteExecute(url: URL, sql: String) -> Bool {
     return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
 }
 
-/// Writes a store a previous build left, from its real dump: schema 21 is the 21ba6b0 build's (three synthetic messages
-/// of `Ellie@Example.org`, as typed, with `bob@example.org`), schema 23 the 6664869 build's (the same three, already
-/// `ellie@example.org`, plus a group message), schema 24 that store as main at 58b543a migrates it, schema 25 as main
-/// at 7159f37 migrates that. In write-ahead-log mode, as every one of those builds keeps it.
+// Writes the real dump of a store an earlier schema left, in WAL mode: 21 holds three synthetic messages of
+// `Ellie@Example.org`, as typed, with `bob@example.org`; 23 the same three normalised plus a group message; 24 and 25
+// that store migrated forward.
 func writePreviousReleaseStore(at url: URL, schema: Int = 21) throws {
     let fixture = try #require(Bundle.module.url(forResource: "schema-\(schema)", withExtension: "sql", subdirectory: "Fixtures"))
     #expect(sqliteExecute(url: url, sql: try String(contentsOf: fixture, encoding: .utf8) + "PRAGMA journal_mode=WAL;"))

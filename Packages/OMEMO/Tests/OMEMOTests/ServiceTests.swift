@@ -13,7 +13,7 @@ private func expectTrue(_ a: Bool, file: StaticString = #filePath, line: UInt = 
 private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertFalse(a, file: file, line: line) }
 private func expectNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNil(a, file: file, line: line) }
 private func expectNotNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotNil(a, file: file, line: line) }
-/// A freshly generated identity published under an existing device ID: a reinstall that reused the ID, or an attacker.
+// A fresh identity under an existing device ID: a reinstall that reused the ID, or an attacker.
 private func replacementBundle(_ profile: XMPPOMEMOProfile, deviceID: UInt32) throws -> XMPPOMEMOBundle {
     let bundle = try OMEMOEngine(profile: profile == .legacy ? .legacy : .modern, deviceID: deviceID).bundle()
     return XMPPOMEMOBundle(profile: profile, deviceID: bundle.deviceID, identityKey: bundle.identityKey, signedPreKeyID: bundle.signedPreKeyID,
@@ -30,7 +30,7 @@ actor PublicationServer {
     }
     func publish(_ jid: String, _ ids: [UInt32], _ profile: XMPPOMEMOProfile) { lists[jid + profile.rawValue] = ids }
     func publish(_ jid: String, _ bundle: XMPPOMEMOBundle) { bundles[jid + bundle.profile.rawValue + String(bundle.deviceID)] = bundle }
-    /// A bundle the server lost or another client deleted; the device list is left alone.
+    // The device list is left alone.
     func withdraw(_ jid: String, _ id: UInt32, _ profile: XMPPOMEMOProfile) { bundles[jid + profile.rawValue + String(id)] = nil }
 }
 struct TestTransport: OMEMOTransport {
@@ -83,7 +83,7 @@ private struct RegisterDuringBundlePublication: OMEMOTransport {
     }
 }
 
-/// What a transport was asked for, in order: lets tests pin exactly which network work a receive performs.
+// Pins exactly which network work a receive performs, in order.
 actor TransportLog {
     enum Call: Equatable {
         case devices(String, XMPPOMEMOProfile)
@@ -94,7 +94,7 @@ actor TransportLog {
     }
     private(set) var calls: [Call] = []
     private(set) var notes: [String] = []
-    /// Requests for someone's devices or keys; publications of our own bundle after a prekey message are not lookups.
+    // Publications of our own bundle after a prekey message are not lookups.
     var fetches: [Call] {
         calls.filter { if case .devices = $0 { return true }; if case .bundle = $0 { return true }; return false }
     }
@@ -104,7 +104,6 @@ actor TransportLog {
 struct CountingTransport: OMEMOTransport {
     let base: TestTransport
     let log: TransportLog
-    /// Runs before a bundle fetch is delegated (for example to check what is already durable at that point).
     var beforeBundle: (@Sendable (String, UInt32) async throws -> Void)? = nil
     func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] {
         await log.record(.devices(jid, profile))
@@ -124,7 +123,6 @@ struct CountingTransport: OMEMOTransport {
         try await base.publishOMEMOBundle(bundle)
     }
 }
-/// Runs `action` once, on the first device-list fetch, then behaves like `base`.
 private actor OnFirstFetch {
     private var action: (@Sendable () async throws -> Void)?
     init(_ action: @escaping @Sendable () async throws -> Void) { self.action = action }
@@ -210,8 +208,8 @@ final class ServiceFixture {
 }
 
 extension ServiceFixture {
-    /// Fills `store`'s pending table to the account ceiling with rows from senders the account wrote to (known senders,
-    /// each at its own quota), so any further row is refused by the ceiling alone.
+    // Fills the pending table to the account ceiling with known senders, each at its own quota, so any further row is
+    // refused by the ceiling alone.
     func fillPendingTable(_ store: MessageStore, account: String) async throws {
         let limits = MessageStore.pendingLimits
         for owner in 0..<(limits.perAccount / limits.perKnownSender) {
@@ -224,8 +222,7 @@ extension ServiceFixture {
         }
     }
 
-    /// Alice's second device, leased and initialized. Every active device of Alice and Bob is accepted on Alice's two
-    /// devices (her own included, for her own carbons) and on Bob's.
+    // Every active device of Alice and Bob is accepted on Alice's two devices (own included, for carbons) and Bob's.
     func addSecondAliceDevice() async throws -> (store: MessageStore, service: OMEMOService) {
         let store = try openStore("alice-second.sqlite")
         try await store.acquireTransportOwnership()
@@ -245,8 +242,8 @@ extension ServiceFixture {
 
 @MainActor
 final class ServiceTests: XCTestCase {
-    /// A device that publishes keys only in the other OMEMO version is left out of the envelope and reported, never a
-    /// reason to hold the chat: with three own clients on one account that rule kept messages queued indefinitely.
+    // A device publishing keys only in the other OMEMO version is left out and reported, never a reason to hold the
+    // chat.
     func testDevicesPublishedOnlyInTheOtherVersionAreReportedNotBlocking() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)
@@ -309,8 +306,8 @@ final class ServiceTests: XCTestCase {
         do { _ = try await f.b.receive(account: f.bob, message: invalid, transport: f.bTransport); XCTFail("Tampered payload accepted") }
         catch { expectEqual(error as? OMEMOError, .undecryptable) }
         expectEqual(try await f.engines(f.bStore, account: f.bob), before)
-        // A trusted device's ciphertext that fails authentication is a quiet placeholder, never content, never pending.
-        // No pending row was ever needed: the placeholder is the disposition, so the barrier may be acknowledged.
+        // A trusted device's ciphertext that fails authentication is a quiet placeholder, never content or pending;
+        // the placeholder is the disposition, so the barrier may be acknowledged.
         expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: invalid))
         let afterTamper = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
         expectEqual(afterTamper.count, 1)
@@ -564,9 +561,8 @@ final class ServiceTests: XCTestCase {
         expectEqual(after.localFingerprint, modern.localFingerprint)
     }
 
-    /// Our own device ID answering with another identity stops initialization before our bundle is published over
-    /// it: neither identity silently replaces the other, in either version (the second one also after the first
-    /// passed its check).
+    // Another identity under our device ID stops initialization before our bundle is published over it: neither
+    // silently replaces the other, in either version.
     func testInitializeRefusesAnotherIdentityPublishedUnderOurDeviceID() async throws {
         for profile in [XMPPOMEMOProfile.legacy, .modern] {
             let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
@@ -582,9 +578,8 @@ final class ServiceTests: XCTestCase {
         }
     }
 
-    /// Our device listed in one version without a bundle there (a server that lost PEP data, a bundle deleted by
-    /// another client, or a list that advertised us before the bundle went out) is not yet published: initialization
-    /// publishes the same identity there instead of failing every connection with item-not-found.
+    // Our device listed without a bundle in one version is unpublished there: initialization publishes the same
+    // identity instead of failing every connection with item-not-found.
     func testListedOwnDeviceWithoutABundleIsPublishedOnInitialize() async throws {
         for profile in [XMPPOMEMOProfile.legacy, .modern] {
             let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
@@ -600,12 +595,11 @@ final class ServiceTests: XCTestCase {
         }
     }
 
-    /// The own device-list notification arrives while connection setup runs. Before this installation's initialize has
-    /// published a version's bundle, answering it must not list the device there: that list would name a device
-    /// without keys, and initialize would find it listed. Afterwards the same call keeps the device listed.
+    // An own device-list notification during setup must not list the device before its bundle is published;
+    // afterwards the same call keeps it listed.
     func testOwnListNotificationBeforeInitializeDoesNotAdvertiseAnUnpublishedDevice() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        // Encryption state exists, but nothing reached the server (like a build whose PEP replies were dropped).
+        // Encryption state exists, but nothing reached the server.
         do { try await f.a.initialize(account: f.alice, transport: OfflineTransport()); XCTFail("Initialized offline") } catch {}
         let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
         let relaunched = OMEMOService(store: f.aStore, protection: f.protection)
@@ -626,8 +620,8 @@ final class ServiceTests: XCTestCase {
         }
     }
 
-    /// Only item-not-found means "not published". A timeout, a wait-type or server error, or an unreadable answer for
-    /// our own bundle fails initialization without publishing anything that could overwrite what is there.
+    // Only item-not-found means "not published". Any other failure for our own bundle fails initialization without
+    // publishing anything.
     func testTransientOwnBundleErrorsFailWithoutPublishing() async throws {
         let failures: [any Error] = [XMPPClientError.timedOut, XMPPIQError.stanza(condition: "resource-constraint"),
                                      XMPPIQError.stanza(condition: "internal-server-error"), XMPPIQError.malformedResponse]
@@ -643,7 +637,7 @@ final class ServiceTests: XCTestCase {
         }
     }
 
-    /// Stored profiles that disagree on the identity fail closed before any network use and are never repaired.
+    // Stored profiles that disagree on the identity fail closed before any network use and are never repaired.
     func testInitializeFailsClosedWhenStoredProfilesDisagreeOnIdentity() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let legacy = try OMEMOEngine(profile: .legacy, deviceID: 4_242)
@@ -673,8 +667,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(next.messageIDs, [original.id, late.id])
     }
 
-    /// Files sent together queue one message each. One pass fetches the chat's device list once, not once per
-    /// message, and every message is still sealed for the peer.
+    // Files sent together: one device-list fetch per pass, and every message is still sealed for the peer.
     func testOnePassFetchesAChatsDevicesOnceForSeveralMessages() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -764,10 +757,8 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.b.receive(account: f.bob, message: f.message(retained), transport: f.bTransport))
     }
 
-    /// Observed on a phone (2026-09-29): a chat that sends with legacy OMEMO received OMEMO 2 messages from a device it
-    /// had never reviewed. The ciphertext was retained, but the chat's device list showed only legacy devices, so no
-    /// approval could release it. The device holding the messages must be on the chat's review surface, and approving
-    /// it there decrypts them without changing the version the chat sends with.
+    // A legacy-sending chat holding OMEMO 2 ciphertext from an unreviewed device lists that device for review;
+    // approving it decrypts the messages without changing the chat's sending version.
     func testOtherVersionDeviceHoldingIncomingMessagesIsOfferedForReviewAndReleasesThem() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)
@@ -913,7 +904,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(after.devices.first { $0.id == selected.id }?.active, false)
     }
 
-    /// This installation never retires itself, even when a stored record names its own device ID.
+    // This installation never retires itself, even when a stored record names its own device ID.
     func testRetirementRefusesThisInstallationsDevice() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -929,8 +920,8 @@ final class ServiceTests: XCTestCase {
         for profile in [XMPPOMEMOProfile.legacy, .modern] { expectTrue(await f.server.devices(f.alice, profile).contains(local)) }
     }
 
-    /// A stale review sheet must not retire a replacement that reused the device ID: the identity in every profile is
-    /// checked before the first list changes, so a replacement in the other version leaves both lists untouched.
+    // A stale review sheet must not retire a replacement that reused the device ID: every profile's identity is
+    // checked before the first list changes.
     func testRetirementChecksEveryProfilesIdentityBeforeChangingAnyList() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -945,7 +936,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.a.overview(account: f.alice, peer: f.bob).devices.first { $0.id == selected.id }?.active, true)
     }
 
-    /// A replacement published after that check (a reinstall racing the removal) is caught before its ID is removed.
+    // A replacement published after that check is caught before its ID is removed.
     func testRetirementRechecksTheIdentityBeforeEachListPublication() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -1009,7 +1000,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).count, 1)
         expectTrue(try await f.bStore.pendingNotifications(accountID: f.bob).candidates.isEmpty)
         do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope, fallbackBody: true), transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
-        // Plan D5: the retained ciphertext is a review candidate in Alice's chat; nothing about trust changed.
+        // The retained ciphertext is a review candidate in Alice's chat; nothing about trust changed.
         let batch = try await f.bStore.pendingNotifications(accountID: f.bob)
         expectEqual(batch.candidates.map(\.content), [.pendingEncrypted])
         expectEqual(batch.candidates.first?.chatID, f.alice)
@@ -1039,8 +1030,8 @@ final class ServiceTests: XCTestCase {
         guard case .unreadable? = unreadable.candidates.first?.content else { return XCTFail("Expected an unreadable candidate") }
     }
 
-    /// A peer's envelope without exactly one key for this device can never decrypt here. A would-be bubble leaves one
-    /// placeholder, and only that placeholder makes it durable (the no-hint case is pinned for own devices above).
+    // A peer's envelope without exactly one key for this device never decrypts here; a would-be bubble leaves one
+    // placeholder, which is its only durable disposition.
     func testPeerEnvelopeWithoutOneKeyForThisDeviceBecomesADurablePlaceholder() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -1064,8 +1055,8 @@ final class ServiceTests: XCTestCase {
         do { _ = try await f.b.receive(account: f.bob, message: hinted, transport: OfflineTransport()); XCTFail("No key for this device") }
         catch { expectEqual(error as? OMEMOError, .notForThisDevice) }
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 1)
-        // Ambiguous duplicate keys no longer wedge the archive walk: a malformed-content placeholder is the disposition.
-        // (A distinct payload: the unaddressed identity deliberately ignores keys, so the same payload is the same message.)
+        // Ambiguous duplicate keys do not wedge the archive walk: a malformed-content placeholder is the disposition.
+        // A distinct payload, because the unaddressed identity ignores keys.
         var doubledPayload = try unwrap(envelope.payload); doubledPayload[doubledPayload.startIndex + 1] ^= 0x01
         let ambiguous = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID,
                                           keys: envelope.keys + envelope.keys, iv: envelope.iv, payload: doubledPayload)
@@ -1264,7 +1255,7 @@ final class ServiceTests: XCTestCase {
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
         let message = try await f.a.outgoingEnvelope(account: f.alice, messageID: queued.id)
         expectTrue(try await f.a.canReplay(account: f.alice, xml: XMPPClient.encryptedMessageXML(to: f.bob, envelope: message, id: queued.id)))
-        // A key transport: bob answers alice's prekey message. Previously never replayable.
+        // A key transport: bob answers alice's prekey message.
         _ = try await f.b.receive(account: f.bob, message: f.message(message), transport: f.bTransport)
         let transport = try unwrap(try await f.bStore.queuedUpdates(accountID: f.bob, kind: .keyTransport).first)
         let response = try unwrap(f.b.savedEnvelope(try unwrap(try await f.bStore.updateWire(accountID: f.bob, updateID: transport.id))))
@@ -1344,7 +1335,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(try protection.open(ciphertext, account: "alice@localhost"), Data("secret state".utf8))
     }
 
-    // MARK: Receive-path cost (S5)
+    // MARK: Receive-path cost
 
     func testKnownTrustedSenderDecryptsWithoutRetainingEvenWhenPendingTableIsFull() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
@@ -1578,9 +1569,8 @@ final class ServiceTests: XCTestCase {
 
     // MARK: Retention limits and blocked devices
 
-    /// A blocked device's message is final on arrival: never opened, never kept, never a review alert, just a quiet
-    /// placeholder. A row kept for that device before the block (or before this rule existed) drains the same way on
-    /// the next retry, so it no longer holds a slot or keeps its review notification alive.
+    // A rejected device's message is a quiet placeholder on arrival, never opened, kept or alerted. A row retained
+    // before the rejection drains the same way on the next retry.
     func testBlockedDeviceMessagesBecomeQuietPlaceholdersAndDrainRetainedRows() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern, trust: false)
@@ -1597,7 +1587,7 @@ final class ServiceTests: XCTestCase {
         do { _ = try await f.b.receive(account: f.bob, message: f.message(envelopes[0], id: "m1", fallbackBody: true), transport: f.bTransport, sentAt: stamp); XCTFail("Trust undecided") }
         catch { expectEqual(error as? OMEMOError, .trustRequired) }
         expectEqual(try await f.bStore.pendingNotifications(accountID: f.bob).candidates.map(\.content), [.pendingEncrypted])
-        // The kept row as a build from before this rule wrote it: without the bubble hint.
+        // The retained row without the bubble hint.
         let kept = try unwrap(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).first)
         var json = try unwrap(try JSONSerialization.jsonObject(with: kept.wire) as? [String: Any])
         expectTrue(json.removeValue(forKey: "expectsBubble") != nil)
@@ -1622,8 +1612,8 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 2)
     }
 
-    /// A stranger's unreviewed device keeps its quota of messages for review. The next one is a quiet placeholder that is
-    /// already final (durable, nothing kept), and approving the device later still opens every kept message.
+    // A stranger's unreviewed device keeps its quota for review; the next message is a final quiet placeholder, and
+    // approving the device later still opens every kept message.
     func testStrangerQuotaOverflowIsFinalAndApprovalStillOpensKeptMessages() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern, trust: false)

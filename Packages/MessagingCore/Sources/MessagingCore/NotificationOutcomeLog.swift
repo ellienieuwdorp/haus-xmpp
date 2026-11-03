@@ -1,7 +1,7 @@
 import Foundation
 
-/// One extension run as the physical checks need to see it: timestamps, phase and counts. No account, address,
-/// identifier, token or content. The extension writes it in DEBUG builds only; the app's diagnostics read it.
+/// One extension run: timestamps, phase and counts. No account, address, identifier, token or content. Written in
+/// DEBUG builds only.
 public struct NotificationOutcomeRecord: Codable, Sendable, Equatable {
     public let started: Double
     public let finished: Double
@@ -10,7 +10,7 @@ public struct NotificationOutcomeRecord: Codable, Sendable, Equatable {
     public let reason: NotificationFallbackReason?
     /// The furthest phase the run reached.
     public let phase: NotificationRunPhase
-    /// Remote requests that shared this run, and how many of them expired before it ended.
+    /// Remote requests that shared this run; `expired` of them expired before it ended.
     public let requests: Int
     public let expired: Int
     public let report: NotificationRunReport
@@ -34,7 +34,7 @@ public struct NotificationOutcomeRecord: Codable, Sendable, Equatable {
 public enum NotificationOutcomeLog {
     public static let fileName = "notification-outcomes.json"
     public static let capacity = 32
-    /// A file larger than this is not ours to parse.
+    // A file larger than this is not ours to parse.
     static let maximumBytes = 64 * 1024
 
     public static func read(directory: URL) throws -> [NotificationOutcomeRecord] {

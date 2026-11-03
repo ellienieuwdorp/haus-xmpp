@@ -50,7 +50,7 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
     #expect(UserNotificationPoster.content(for: PlannedNotification(identifier: "m-2", threadIdentifier: "t", title: "", body: "New message",
                                                                     playsSound: false, destination: nil)).badge == nil)
 }
-/// A donation that never answers in time, like a cold Intents service; records what it was given.
+// A donation that never answers in time, like a cold Intents service; records what it was given.
 private final class DonationProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var seen: [INInteraction] = []

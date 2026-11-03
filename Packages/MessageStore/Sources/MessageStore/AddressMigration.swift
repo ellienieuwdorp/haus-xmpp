@@ -2,23 +2,13 @@ import Foundation
 import CSQLite
 import XMPPProtocol
 
-/// v23: every stored account, chat, sender, actor, room and archive address in normal form (`JID`), so rows written
-/// by builds that kept typed capitals meet the normalised keys every caller now uses. Stored rows are migrated once
-/// rather than normalised on every read: SQL lookups compare exact text, and SQLite cannot case-fold beyond ASCII.
-///
-/// A row whose normal form collides with a row already in normal form is a spelling duplicate. Two chats merge into
-/// one (messages move, the normal row keeps its settings and takes the other's pin, avatar and nickname if it has
-/// none); a read pointer keeps the later of the two; ledgers, cursors and replay records keep the normal row. Messages,
-/// their dependents and an encryption identity are never deleted: a colliding one stays under its old spelling (with
-/// its chat), unreachable but intact.
-///
-/// Sealed blobs (encryption state, attachment secrets) use the account as associated data, and the store cannot
-/// reseal them. A renamed row keeps the spelling it was sealed under in `sealed_account`; the reader opens with it and
-/// the next save of the state reseals under the normal spelling.
+// Schema v23 rewrites stored addresses to normal form (`JID`) once, because SQL compares exact text and SQLite folds
+// ASCII only. A row colliding with its normal twin: chats merge, read pointers keep the later one, ledgers keep the
+// normal row; messages and encryption identities are never deleted and stay under the old spelling.
 enum AddressMigration {
     private enum Duplicate { case keep, delete, mergeChat, keepLaterReadPointer }
 
-    /// Tables in dependency order; a missing table or column (a branch that never created it) is skipped.
+    // Dependency order; a missing table or column is skipped.
     private static let tables: [(name: String, columns: [String], duplicate: Duplicate)] = [
         ("chats", ["account_id", "id"], .mergeChat),
         ("messages", ["account_id", "chat_id", "sender_id"], .keep),
@@ -47,12 +37,13 @@ enum AddressMigration {
         ("message_link_previews", ["account_id"], .keep),
         ("link_preview_cache", ["account_id"], .delete),
     ]
-    /// Tables whose blobs are sealed with the row's account as associated data.
+    // Blobs sealed with the account as associated data cannot be resealed here: `sealed_account` keeps the spelling
+    // they were sealed under, and the next save of the state reseals under the normal spelling.
     private static let sealed = ["attachments", "encryption_state"]
 
     static func normal(_ value: String) -> String { JID.normalized(value) ?? value }
 
-    /// Outside the rewrite's savepoint, so the readers find the column even when the rewrite is rolled back.
+    // Outside the rewrite's savepoint, so the readers find the column even when the rewrite is rolled back.
     static func addSealedAccountColumns(_ connection: Connection) throws {
         for table in sealed where try !connection.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [.text(table)]).isEmpty
             && connection.query("SELECT 1 FROM pragma_table_info(?) WHERE name='sealed_account'", [.text(table)]).isEmpty {
@@ -60,8 +51,8 @@ enum AddressMigration {
         }
     }
 
-    /// Runs inside the schema transaction. All-or-nothing: a result that would add a foreign-key violation is rolled
-    /// back and reported as false, and the store keeps its old spellings rather than failing to open.
+    // All-or-nothing inside the schema transaction: a result that adds a foreign-key violation rolls back and returns
+    // false, so the store keeps its old spellings rather than failing to open.
     static func run(_ connection: Connection) throws -> Bool {
         try connection.defineAddressNormalizer()
         // Violations already present (unrelated to addresses) must not block the rewrite.
@@ -103,8 +94,8 @@ enum AddressMigration {
         return wanted.filter(existing.contains)
     }
 
-    /// Rows with a column not yet in normal form. The GLOB prefilter (an upper-case letter, a non-ASCII or control
-    /// character, a trailing dot on the domain) keeps rows that are already normal away from the Swift normaliser.
+    // The GLOB prefilter (an upper-case letter, a non-ASCII or control character, a trailing dot on the domain) keeps
+    // rows that are already normal away from the Swift normaliser.
     private static func pendingCondition(_ table: String, _ wanted: [String], _ connection: Connection) throws -> String? {
         let columns = try columns(table, wanted, connection)
         guard !columns.isEmpty else { return nil }
@@ -127,7 +118,6 @@ enum AddressMigration {
         case .delete: try connection.execute("DELETE FROM \(table) WHERE \(pending)"); return
         case .mergeChat, .keepLaterReadPointer: break
         }
-        // Few rows (chats and read pointers), read in bounded pages all the same.
         let twin = columns.map { "\($0) IS ?" }.joined(separator: " AND ")
         var after = 0
         while true {
@@ -160,7 +150,7 @@ enum AddressMigration {
 }
 
 extension Connection {
-    /// `jid_normal(x)`: `x` in normal form (`JID`), or `x` unchanged when it is not text or not a valid address.
+    // `jid_normal(x)` returns `x` unchanged when it is not text or not a valid address.
     func defineAddressNormalizer() throws {
         guard let handle else { throw MessageStoreError.closed }
         let result = sqlite3_create_function_v2(handle, "jid_normal", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { context, _, arguments in

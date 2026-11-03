@@ -5,14 +5,11 @@ import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
-/// Two clients of one account on the local lab Prosody: this client (XMPPClient, store, OMEMOService, InboundProcessor,
-/// ReadSync) and an independent slixmpp client of the same account, with a second lab account as the peer. The slixmpp
-/// client is a small script that is not part of this repository: it sends messages and chat markers, and publishes and
-/// fetches XEP-0490 displayed state. Runs only when the lab is configured:
-///   HAUS_LAB_READSYNC_ACCOUNT / HAUS_LAB_READSYNC_PEER  credential JSON files ({"jid", "password"})
-///   HAUS_LAB_CA (PEM), HAUS_LAB_PYTHON (a venv with slixmpp), HAUS_LAB_READSYNC_SCRIPT (path to mds_client.py)
-/// Messages are real (the peer sends them, our server archives them); they are stored as if decrypted, with the ids
-/// the archive assigned, because the check is about read state, not OMEMO.
+// This client and an independent slixmpp client of the same account (an external script that sends markers and
+// publishes and fetches XEP-0490 state), on the local lab Prosody. Runs only when configured:
+//   HAUS_LAB_READSYNC_ACCOUNT / HAUS_LAB_READSYNC_PEER  credential JSON files ({"jid", "password"})
+//   HAUS_LAB_CA (PEM), HAUS_LAB_PYTHON (a venv with slixmpp), HAUS_LAB_READSYNC_SCRIPT (path to mds_client.py)
+// Real archived messages are stored as if decrypted: the check is about read state, not OMEMO.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_READSYNC_ACCOUNT"] != nil), .serialized)
 struct ReadSyncLabTests {
     private let env = ProcessInfo.processInfo.environment
@@ -23,7 +20,7 @@ struct ReadSyncLabTests {
         try JSONDecoder().decode(Credentials.self, from: Data(contentsOf: URL(fileURLWithPath: try #require(env[key]))))
     }
 
-    /// Runs the second client once and returns its output lines.
+    // Runs the second client once and returns its output lines.
     private func second(_ credentialsKey: String, _ arguments: [String]) async throws -> [String] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: try #require(env["HAUS_LAB_PYTHON"]))

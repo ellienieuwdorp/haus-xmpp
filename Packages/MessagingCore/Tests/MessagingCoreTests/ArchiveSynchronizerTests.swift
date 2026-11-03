@@ -31,7 +31,7 @@ struct ArchiveSynchronizerTests {
               complete: complete, firstID: ids.first, lastID: ids.last, handledTokens: [.init(session: UUID(), sequence: sequence)])
     }
 
-    /// What a forward query past the newest entry returns.
+    // What a forward query past the newest entry returns.
     private let emptyPage = XMPPArchivePage(messages: [], complete: true, firstID: nil, lastID: nil, handledTokens: [])
 
     @Test func walksOwnArchiveBeforeRoomsAndSeparatesPagedCheckpoints() async throws {
@@ -164,8 +164,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// Our archive keeps bounces. Its copy fails a send the live stream never told us about, adds no message, and never
-    /// undoes a retry made after the live copy (the walk can reach an old bounce after the user retried).
+    // Our archive keeps bounces. Its copy fails a send the live stream never told us about, adds no message, and never
+    // undoes a retry made after the live copy (the walk can reach an old bounce after the user retried).
     @Test func archivedBounceFailsTheSendOnceAndLeavesALaterRetryAlone() async throws {
         try await fixture { store async throws in
             let bob = "bob@localhost"
@@ -208,8 +208,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// An entry this device cannot decrypt yet has been processed once its ciphertext is retained, so its page may
-    /// advance. One with no durable outcome fails the page.
+    // An entry this device cannot decrypt yet has been processed once its ciphertext is retained, so its page may
+    // advance. One with no durable outcome fails the page.
     @Test func undecryptedArchiveEntryPassesOnlyWhenItsCiphertextIsRetained() async throws {
         try await fixture { store async throws in
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
@@ -235,8 +235,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// However full the retained-ciphertext table is, a message that cannot be kept for review gets a final outcome: the
-    /// live stream still acknowledges it (direct and room), and an archive page holding another one still advances.
+    // However full the retained-ciphertext table is, a message that cannot be kept for review gets a final outcome: the
+    // live stream still acknowledges it (direct and room), and an archive page holding another one still advances.
     @Test func everyRetentionLimitKeepsTheStreamAcknowledgingAndTheArchiveMoving() async throws {
         let bob = "bob@localhost", limits = MessageStore.pendingLimits
         let everyKnownSender = (0..<(limits.perAccount / limits.perKnownSender)).map { ("known-\($0)@localhost", limits.perKnownSender) }
@@ -369,8 +369,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// An archive that was empty at the first walk held no history: what the next connection's first page brings arrived
-    /// meanwhile, and stays unread.
+    // An archive that was empty at the first walk held no history: what the next connection's first page brings arrived
+    // meanwhile, and stays unread.
     @Test func anArchiveEmptyAtTheFirstWalkHasNoHistory() async throws {
         try await fixture { store async throws in
             let peer = "bob@localhost"
@@ -389,8 +389,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// A room's join boundary is its newest entry's archive time (the earliest time for an empty archive). The entry's
-    /// tokens are acknowledged, since the archive keeps it for the first walk; a failed acknowledgement ends the stream.
+    // A room's join boundary is its newest entry's archive time (the earliest time for an empty archive). The entry's
+    // tokens are acknowledged, since the archive keeps it for the first walk; a failed acknowledgement ends the stream.
     @Test func roomJoinBoundaryAcknowledgesTheNewestEntryAndDisconnectsWhenItCannot() async throws {
         try await fixture { store async throws in
             let synchronizer = ArchiveSynchronizer(store: store), trace = Trace()
@@ -441,7 +441,7 @@ struct ArchiveSynchronizerTests {
                 process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(await bounds.values == [.after("c1"), .after("c2"), .after("r1")])
-            // A pre-v16 archive gets no backfill row, so backfill treats it as walked from its start.
+            // A checkpoint without a backfill row counts as walked from the archive's start.
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == nil)
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: room) == nil)
         }
@@ -449,7 +449,7 @@ struct ArchiveSynchronizerTests {
 
     // MARK: A cursor the server no longer holds
 
-    /// Prosody answers an RSM id it no longer holds (archive expiry, one week by default) with item-not-found.
+    // Prosody answers an RSM id it no longer holds (archive expiry, one week by default) with item-not-found.
     @Test func anExpiredCursorReanchorsByTimeOnTheSameConnection() async throws {
         for archive in [account, room] {
             try await fixture { store async throws in
@@ -481,8 +481,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// A checkpoint saved before stamps existed restarts at the newest page, and its backfill cursor moves there so
-    /// backfill walks back through whatever the server still holds between the lost cursor and that page.
+    // A checkpoint without a stamp restarts at the newest page, and its backfill cursor moves there so
+    // backfill walks back through whatever the server still holds between the lost cursor and that page.
     @Test func anExpiredCursorWithoutAStampRestartsAtTheNewestPage() async throws {
         for archive in [account, room] {
             try await fixture { store async throws in
@@ -511,8 +511,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// A refused, repeated-unknown or unanswered query carries no page and no tokens: the archive stays behind its
-    /// checkpoint for the next connection, the connection and the other archives carry on.
+    // A refused, repeated-unknown or unanswered query carries no page and no tokens: the archive stays behind its
+    // checkpoint for the next connection, the connection and the other archives carry on.
     @Test func archiveQueriesWithoutAPageEndOnlyTheirArchive() async throws {
         let failures: [any Error] = [XMPPIQError.stanza(condition: "service-unavailable"), XMPPIQError.stanza(condition: "item-not-found"),
                                      XMPPClientError.timedOut]
@@ -546,8 +546,8 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    /// A lost connection fails the pending query with `timedOut`, like the query's own deadline. With the connection
-    /// gone, the walk must not report a finished catch-up for the app to build on.
+    // A lost connection fails the pending query with `timedOut`, like the query's own deadline. With the connection
+    // gone, the walk must not report a finished catch-up for the app to build on.
     @Test func aTimeoutFromALostConnectionEndsTheWholeWalk() async throws {
         try await fixture { store async throws in
             _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c1", stamp: Date(timeIntervalSince1970: 50))

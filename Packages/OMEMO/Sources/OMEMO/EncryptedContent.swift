@@ -3,35 +3,30 @@ import Security
 import MessageStore
 import XMPPProtocol
 
-/// SCE (XEP-0420) envelope around the shared `MessageContent` grammar. Only the wrapper,
-/// the affix checks and the trust decisions live here; the payload elements are decoded once,
-/// strictly, by XMPPProtocol.
+// XEP-0420 SCE envelope around `MessageContent`: the wrapper, affix checks and trust decisions live here; payload
+// elements are decoded once, strictly, by XMPPProtocol.
 struct EncryptedContent: Equatable {
     let body: String
     let reply: MessageReply?
     var reaction: ReactionContent? = nil
-    /// XEP-0424 / XEP-0308 references, authenticated only inside a modern envelope.
+    // XEP-0424 / XEP-0308 references, authenticated only inside a modern envelope.
     var retraction: String? = nil
     var correction: String? = nil
     var receipt: MessageContent.Receipt? = nil
     var originID: String? = nil
     var timestamp: Date? = nil
     var fileSharing: MessageContent.FileSharing? = nil
-    /// XEP-0511 metadata about the first described link of `body`; only ever from a modern envelope.
+    // XEP-0511 metadata for the first described link of `body`; only ever from a modern envelope.
     var linkMetadata: MessageContent.LinkMetadata? = nil
 
-    /// Whether a file message sealed for this profile can carry `reply`: only as a bare reference to a wire ID,
-    /// inside a modern envelope. Otherwise `encode` sends the file without it.
     static func fileCarries(_ reply: MessageReply, modern: Bool) -> Bool { modern && reply.wireID != nil }
 
-    /// Whether `encode` sends `metadata` with this text: only inside a modern envelope, never with a file, and only
-    /// when a receiver would keep it (`MessageContent.LinkMetadata.validated`). Legacy OMEMO has no envelope to carry
-    /// it in, and it never goes in clear; the sealer then clears the stored preview, as for a dropped reply.
+    // Link metadata never goes in clear, so legacy (no envelope) drops it and the sealer clears the stored preview.
     static func linkMetadataRides(_ metadata: MessageContent.LinkMetadata, body: String, modern: Bool, fileSharing: Bool) -> Bool {
         modern && !fileSharing && !MessageContent(body: body, linkMetadata: [metadata]).sendableLinkMetadata.isEmpty
     }
 
-    /// `correction` rides inside a modern envelope; for legacy the caller puts it on the outer stanza.
+    // Legacy has no envelope: the caller puts `correction` on the outer stanza.
     static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil,
                        fileSharing: MessageContent.FileSharing? = nil, correction: String? = nil,
                        linkMetadata: MessageContent.LinkMetadata? = nil) throws -> Data {
@@ -45,12 +40,9 @@ struct EncryptedContent: Equatable {
                   reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1024 && MessageContent.validXMLText($0) }) ?? true
             else { throw OMEMOError.invalidContent }
         }
-        // A file's body must stay exactly its link (Conversations shows the file only then), so a reply on a file
-        // carries no quote: modern sends the reference alone, inside the envelope. Legacy has nowhere private to put
-        // a reference, and a reply without a wire ID has no reference to send. The composer queues a file reply only
-        // for a modern chat and an own sent message; should the chat have fallen back to legacy since, the file goes
-        // without the reply rather than leaking the reference in clear or breaking the link (the sealer then clears
-        // the stored reply too, so the sender's bubble shows what the peer gets).
+        // A file's body must stay exactly its link (Conversations shows the file only then), so a file reply carries
+        // only its reference inside a modern envelope. Legacy has nowhere private for it: the file goes without the
+        // reply rather than leaking the reference or breaking the link.
         if fileSharing != nil, let fileReply = reply {
             guard fileCarries(fileReply, modern: modern), let target = fileReply.wireID else {
                 return try encode(body: body, reply: nil, sender: sender, recipient: recipient, modern: modern,
@@ -81,14 +73,14 @@ struct EncryptedContent: Equatable {
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
-    /// Legacy peers get a plain XEP-0424 stanza instead; there is no envelope to authenticate it in.
+    // Legacy peers get a plain XEP-0424 stanza instead; there is no envelope to authenticate it in.
     static func encodeRetraction(targetWireID: String, sender: String, recipient: String, originID: String, modern: Bool) throws -> Data {
         guard modern else { throw OMEMOError.unsupportedMessageUpdate }
         let content = MessageContent(body: "", retraction: targetWireID, originID: originID)
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
-    /// A receipt or read marker for a modern peer rides inside the envelope so the read message ID is never on the wire in clear.
+    // Inside the envelope, so the read message ID is never on the wire in clear.
     static func encodeReceipt(targetWireID: String, kind: MessageContent.Receipt.Kind, sender: String, recipient: String, originID: String) throws -> Data {
         try wrap(MessageContent(body: "", receipt: .init(targetID: targetWireID, kind: kind), originID: originID), sender: sender, recipient: recipient)
     }
@@ -121,8 +113,8 @@ struct EncryptedContent: Equatable {
         if requireGroupAffixes {
             guard root.children("from", namespace: ns).count == 1, root.children("to", namespace: ns).count == 1 else { throw OMEMOError.invalidContent }
         }
-        // A present affix must match the authenticated direct-message context. Missing from is
-        // permitted by XEP-0384; this client always emits it. Group traffic has a separate contract.
+        // A present affix must match the authenticated direct-message context. XEP-0384 permits a missing `from`;
+        // this client always emits it. Group traffic has a separate contract.
         if let from = root.child("from", namespace: ns) {
             guard from.attributes["jid"].map(bare) == sender else { throw OMEMOError.invalidContent }
         }
@@ -133,8 +125,7 @@ struct EncryptedContent: Equatable {
         if let time = root.child("time", namespace: ns) {
             guard let raw = time.attributes["stamp"], raw.utf8.count <= 64,
                   let parsed = parseTimestamp(raw), time.children.isEmpty else { throw OMEMOError.invalidContent }
-            // A signed time is optional. When present SCE requires comparison with the
-            // trusted archive/live sending context; never accept an arbitrary future time.
+            // SCE requires an optional signed time to be compared with the trusted archive or live sending context.
             let reference = sendingTime ?? Date()
             guard abs(parsed.timeIntervalSince(reference)) <= 300 else { throw SendingTimeOutsideWindow() }
             timestamp = parsed
@@ -151,8 +142,7 @@ struct EncryptedContent: Equatable {
                                 linkMetadata: content.linkMetadata.first)
     }
 
-    // Remove only the exact quotation syntax emitted by this adapter. Foreign fallback
-    // layouts remain readable verbatim; a heuristic must never discard source text.
+    // Strips only the exact quotation this adapter emits; a heuristic must never discard source text.
     private static func unquote(_ quote: String, author: String) -> String {
         let prefix = "> \(author)\n"
         guard quote.hasPrefix(prefix), quote.hasSuffix("\n\n") else { return quote }
@@ -167,7 +157,6 @@ struct EncryptedContent: Equatable {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: value)
     }
-    /// In normal form (`JID`), like the authenticated sender and recipient it is compared with.
     private static func bare(_ jid: String) -> String { JID.normalizedBare(jid) ?? String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
     private static func escape(_ value: String) -> String {
         value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
@@ -185,7 +174,6 @@ struct ReactionContent: Equatable, Sendable {
     static func isEmoji(_ value: String) -> Bool { MessageContent.isEmoji(value) }
 }
 
-/// The signed SCE time lies outside the window around the trusted sending context. Unlike every other content failure
-/// this depends on the context, not the ciphertext: a validated archive stamp can later make the same ciphertext valid,
-/// so the receive path keeps it retained (reported as `OMEMOError.invalidContent`) instead of declaring it unreadable.
+// Unlike other content failures this depends on context, not ciphertext: a validated archive stamp can later make
+// the same ciphertext valid, so the receive path retains it (reported as `.invalidContent`) instead of giving up.
 struct SendingTimeOutsideWindow: Error {}

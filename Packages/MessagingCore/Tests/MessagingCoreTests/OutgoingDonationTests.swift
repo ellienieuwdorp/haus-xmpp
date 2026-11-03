@@ -65,8 +65,8 @@ struct OutgoingDonationTests {
 }
 
 extension OutgoingDonationTests {
-    /// A deletion (sign-out, previews or suggestions off) runs while the system is still donating the first of a share's
-    /// conversations: that one is deleted again once the system finished, and the rest are never donated.
+    // A deletion (sign-out, previews or suggestions off) runs while the system is still donating the first of a share's
+    // conversations: that one is deleted again once the system finished, and the rest are never donated.
     @Test func aDonationStillInFlightWhenADeletionRanIsDeletedAgainAndTheRestNeverStart() async throws {
         let conversations: [OutgoingConversation] = ["a@x", "b@x", "c@x"].map {
             .direct(accountID: "me@x", chatID: $0, displayName: $0, avatarHash: nil)
@@ -93,7 +93,7 @@ extension OutgoingDonationTests {
         #expect(deleted.values == [first])
     }
 
-    /// Blocking one chat deletes its donations while another chat's is in flight: only the blocked one goes.
+    // Blocking one chat deletes its donations while another chat's is in flight: only the blocked one goes.
     @Test func aBlockDeletesOnlyThatConversationsDonationAgain() async throws {
         let blocked = Permission(), deleted = InteractionLog()
         try await withStore { store in
@@ -107,9 +107,9 @@ extension OutgoingDonationTests {
     }
 }
 
-/// Contacts in outgoing donations follow the notifications' rules (`NotificationPresenterTests`): each recipient is
-/// named by the contact the store links now, and a link that changes while the donation is in flight deletes the
-/// conversation's donations once the system is done, so an unlinked contact is never left donated.
+// Contacts in outgoing donations follow the notifications' rules (`NotificationPresenterTests`): each recipient is
+// named by the contact the store links now, and a link that changes while the donation is in flight deletes the
+// conversation's donations once the system is done, so an unlinked contact is never left donated.
 extension OutgoingDonationTests {
     private static let me = "alice@example.org"
 
@@ -145,8 +145,8 @@ extension OutgoingDonationTests {
         }
     }
 
-    /// The composer, a notification Reply or the share sheet donates while the user unlinks or relinks the chat:
-    /// unlinking deleted the donations before this one landed, so the donation deletes them again once it is done.
+    // The composer, a notification Reply or the share sheet donates while the user unlinks or relinks the chat:
+    // unlinking deleted the donations before this one landed, so the donation deletes them again once it is done.
     @Test func anUnlinkOrRelinkWhileADonationIsInFlightDeletesTheConversationsDonations() async throws {
         let thread = Self.bob(nil).conversationIdentifier
         for change in ["unlink", "relink", "none"] {
@@ -167,8 +167,8 @@ extension OutgoingDonationTests {
         }
     }
 
-    /// A failed donation may still have reached the system; a relink meanwhile deletes it too. A conversation no longer
-    /// allowed is deleted once, not again by the link check.
+    // A failed donation may still have reached the system; a relink meanwhile deletes it too. A conversation no longer
+    // allowed is deleted once, not again by the link check.
     @Test func aFailedDonationIsWithdrawnTooAndADisallowedOneIsDeletedOnce() async throws {
         let thread = Self.bob(nil).conversationIdentifier
         let deleted = InteractionLog(), permission = Permission()

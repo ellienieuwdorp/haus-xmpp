@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MessagingCore
 
-/// The transfer archive: what one install writes and another reads with the code shown on the first.
+// The transfer archive: what one install writes and another reads with the code shown on the first.
 struct TransferArchiveTests {
     private let schema = 26
 
@@ -12,7 +12,7 @@ struct TransferArchiveTests {
         return directory
     }
 
-    /// A file of `size` bytes whose content depends on `seed`, so a misplaced or reordered chunk shows.
+    // A file of `size` bytes whose content depends on `seed`, so a misplaced or reordered chunk shows.
     private func file(_ name: String, size: Int, seed: UInt8, in directory: URL) throws -> URL {
         let url = directory.appending(path: name)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -25,8 +25,8 @@ struct TransferArchiveTests {
                          appBuild: "3", platform: "iOS", schemaVersion: schema ?? self.schema, accountID: "ellie@example.org", entries: entries)
     }
 
-    /// An archive of a database, two attachments across several frames, an empty file and a Keychain record, with a
-    /// small chunk size so entries straddle frames.
+    // An archive of a database, two attachments across several frames, an empty file and a Keychain record, with a
+    // small chunk size so entries straddle frames.
     private func archive(in directory: URL, code: TransferCode, schema: Int? = nil) throws -> (URL, TransferManifest, [String: Data]) {
         let source = directory.appending(path: "source", directoryHint: .isDirectory)
         let files: [(String, URL)] = [
@@ -80,8 +80,8 @@ struct TransferArchiveTests {
         #expect(throws: TransferArchiveError.wrongCode) { try TransferArchive.open(url, code: .generate(), supportedSchema: schema) }
     }
 
-    /// One changed byte anywhere after the header, or a changed header, fails; nothing is extracted from a frame that
-    /// did not open.
+    // One changed byte anywhere after the header, or a changed header, fails; nothing is extracted from a frame that
+    // did not open.
     @Test func aChangedByteIsDetected() throws {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -106,8 +106,8 @@ struct TransferArchiveTests {
         }
     }
 
-    /// An interrupted copy: cut inside a frame, or exactly between two frames (where every remaining frame still opens
-    /// on its own).
+    // An interrupted copy: cut inside a frame, or exactly between two frames (where every remaining frame still opens
+    // on its own).
     @Test func aCutShortFileIsTruncated() throws {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -136,8 +136,8 @@ struct TransferArchiveTests {
         #expect(try TransferArchive.open(url, code: code, supportedSchema: schema + 2).manifest.schemaVersion == schema + 1)
     }
 
-    /// Entry names are logical: nothing that could reach outside the folder it is extracted into, and nothing the
-    /// writing install's paths could leak through.
+    // Entry names are logical: nothing that could reach outside the folder it is extracted into, and nothing the
+    // writing install's paths could leak through.
     @Test func namesThatCouldLeaveTheTargetFolderAreRefused() throws {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }

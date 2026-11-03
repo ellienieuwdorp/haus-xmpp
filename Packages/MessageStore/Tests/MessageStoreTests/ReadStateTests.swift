@@ -11,7 +11,7 @@ private func message(_ id: String, at second: Double, chat: String = peer, sende
                   sentAt: Date(timeIntervalSince1970: 1_800_000_000 + second), isOutgoing: outgoing, encryptionProfile: "modern", wireID: wire ?? id)
 }
 
-/// One authenticated commit, as OMEMO makes it; the revision follows the store's.
+// One authenticated commit, as OMEMO makes it; the revision follows the store's.
 private func commit(_ store: MessageStore, digest: String, sender: String = peer, message: StoredMessage? = nil, groupRoom: String? = nil,
                     roomStanzaID: String? = nil, archiveStanzaID: String? = nil, readMarker: OwnReadMarker? = nil) async throws {
     let revision = try await store.encryptionStateRevision(accountID: account)!
@@ -146,9 +146,9 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// A first sign-in is not news: the newest archive page, and whatever backfill later brings from before it, count as
-/// read without any pointer (nothing is published). Messages after it are unread and alert. XEP-0490 state older than the
-/// baseline does not make history unread again.
+// A first sign-in is not news: the newest archive page, and whatever backfill later brings from before it, count as
+// read without any pointer (nothing is published). Messages after it are unread and alert. XEP-0490 state older than the
+// baseline does not make history unread again.
 @Test func firstArchivePageIsReadHistoryWithoutPublishing() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         try await commit(store, digest: "d1", message: message("m1", at: 1), archiveStanzaID: "s1")
@@ -182,8 +182,8 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// An archive the first walk found empty has no history: its baseline is the earliest possible and stays, so what a
-/// later connection's first page holds (it arrived meanwhile) is unread and alerts.
+// An archive the first walk found empty has no history: its baseline is the earliest possible and stays, so what a
+// later connection's first page holds (it arrived meanwhile) is unread and alerts.
 @Test func emptyFirstArchiveKeepsWhatArrivesAfterwardsUnread() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         try await store.recordEmptyArchive(accountID: account, archiveID: account)
@@ -196,9 +196,9 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// A room joined during a connection is first walked on the next one. The archive's newest time before the join is its
-/// baseline, so what arrived in between, stored or retained for review, stays unread and alerts once that first page
-/// brings it, while history from before the join stays read. A room that already has a checkpoint keeps its own baseline.
+// A room joined during a connection is first walked on the next one. The archive's newest time before the join is its
+// baseline, so what arrived in between, stored or retained for review, stays unread and alerts once that first page
+// brings it, while history from before the join stays read. A room that already has a checkpoint keeps its own baseline.
 @Test func joinedRoomCountsWhatArrivesBeforeItsFirstWalk() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         let at = { (second: Double) in Date(timeIntervalSince1970: 1_800_000_000 + second) }
@@ -227,9 +227,9 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// Retained ciphertext waiting for trust or keys is held to the same history rule as a message row: what the
-/// first archive page or a later backfill brings from before the baseline never asks for review, and a candidate the
-/// first page retained before its baseline existed goes when the baseline is recorded. Newer ciphertext still alerts.
+// Retained ciphertext waiting for trust or keys is held to the same history rule as a message row: what the
+// first archive page or a later backfill brings from before the baseline never asks for review, and a candidate the
+// first page retained before its baseline existed goes when the baseline is recorded. Newer ciphertext still alerts.
 @Test func retainedHistoryCiphertextDoesNotAlert() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         let at = { (second: Double) in Date(timeIntervalSince1970: 1_800_000_000 + second) }

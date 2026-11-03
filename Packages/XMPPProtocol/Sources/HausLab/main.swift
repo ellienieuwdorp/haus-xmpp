@@ -104,8 +104,8 @@ import XMPPProtocol
         print("PUSH_REGISTRATION_AND_CSI_VERIFIED")
     }
 
-    /// The app's onboarding against a gateway component on a test server: self-service register of a freshly
-    /// generated node, the environment attribute, then the XEP-0357 enable. Synthetic token; nothing reaches APNs.
+    // Self-service register of a fresh node, the environment attribute, then the XEP-0357 enable. Synthetic token;
+    // nothing reaches APNs.
     private static func verifyGatewayOnboarding(client: XMPPClient, service: String) async throws {
         guard try await client.supportsPushNotifications() else { throw XMPPNotificationError.pushUnavailable }
         func credential() throws -> String {
@@ -180,9 +180,8 @@ import XMPPProtocol
         try await verifyStreamCounters(client: client, persistence: persistence, env: env)
     }
 
-    /// Stream-management counters seen from the server: the `h` we advertise must be durable, a
-    /// graceful disconnect must persist handled advances, and an iq journaled but never written
-    /// must not shift our outbound count after resume.
+    // The advertised `h` must be durable, a graceful disconnect must persist handled advances, and an iq journaled but
+    // never written must not shift our outbound count after resume.
     private static func verifyStreamCounters(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {
         let domain = env["HAUS_LAB_DOMAIN"]!, user = env["HAUS_LAB_USERNAME"]!, password = env["HAUS_LAB_PASSWORD"]!
         let host = env["HAUS_LAB_HOST"] ?? domain, own = user + "@" + domain
@@ -204,9 +203,8 @@ import XMPPProtocol
             try require(await persistence.snapshot?.fullJID == jid, "server refused <resume/>")
         }
 
-        // 1. The server's <r/> is answered only with a persisted count. The disco result is handled
-        // in memory; nothing but the <r/> reply can persist it. An abrupt disconnect skips every
-        // other flush, and Prosody refuses a <resume h> below any h we already sent on the wire.
+        // 1. The server's <r/> is answered only with a persisted count. An abrupt disconnect skips every other flush,
+        // and Prosody refuses a <resume h> below any h already sent.
         let before = await persistence.snapshot?.inboundHandled ?? 0
         _ = try await client.discoveryFeatures()
         try require(await waitUntil({ await (persistence.snapshot?.inboundHandled ?? 0) > before }), "server <r/> reply did not persist the handled disco result")
@@ -214,8 +212,8 @@ import XMPPProtocol
         try await resume()
         print("SM_ADVERTISED_H_DURABLE_VERIFIED")
 
-        // 2. disconnectAndWait persists handled advances that no <r/> has seen. Barriers are held
-        // until the server's ack requests for these messages were answered with a lower count.
+        // 2. disconnectAndWait persists handled advances no <r/> has seen; barriers are held until the server's ack
+        // requests were answered with a lower count.
         await inbox.setHolding(true)
         let flushIDs = (0..<2).map { _ in "flush-" + UUID().uuidString }
         for id in flushIDs { try await client.sendMessage(to: own, body: "Recovery fixture", id: id) }
@@ -281,10 +279,8 @@ import XMPPProtocol
         return await condition()
     }
 
-    /// XEP-0191 against the account's server: the domain advertises the feature, a block carrying a XEP-0377 report
-    /// (with a stanza-id copy) is accepted and pushed back to this session, the fetched list holds it, and an unblock
-    /// is pushed and empties it again. Leaves the list as it found it, unless `keepsBlock` (HAUS_LAB_BLOCKING_KEEP=1)
-    /// stops after the block, so another session of the account can be watched following the push.
+    // A block carrying a XEP-0377 report is accepted and pushed back, the fetched list holds it, and an unblock empties
+    // it again. `keepsBlock` (HAUS_LAB_BLOCKING_KEEP=1) stops after the block so another session can watch the push.
     static func verifyBlocking(client: XMPPClient, address: String, domain: String, ownJID: String, keepsBlock: Bool) async throws {
         let features = try await client.discoveryFeatures(for: domain)
         guard features.contains("urn:xmpp:blocking") else { throw XMPPClientError.unexpectedProtocol }
@@ -312,7 +308,7 @@ import XMPPProtocol
         print("UNBLOCK_VERIFIED")
     }
 
-    /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
+    // Verifies the delivered fallback body, not incoming structured-reply reconciliation.
     static func verifyReply(client: XMPPClient, to: String, sourceID: String) async throws {
         let source = "Original 👩🏽‍💻 & <text>\nSecond line"
         let answer = "Reply e\u{301} & <answer>"
@@ -344,7 +340,7 @@ import XMPPProtocol
         throw XMPPClientError.connectionClosed
     }
 
-    /// Uses intentionally synthetic key bytes: this verifies XML/PEP transport, not cryptography.
+    // Synthetic key bytes: this verifies XML/PEP transport, not cryptography.
     static func verifyOMEMOWire(client: XMPPClient, ownJID: String) async throws {
         let features = try await client.discoveryFeatures()
         guard features.contains("http://jabber.org/protocol/pubsub") else { throw XMPPClientError.unexpectedProtocol }
@@ -421,11 +417,11 @@ import XMPPProtocol
 
 }
 
-/// Disposable generated-fixture persistence; app uses transactional SQLite and process ownership.
+// Disposable fixture persistence; the app uses transactional SQLite and process ownership.
 private actor LabRecoveryPersistence: XMPPStreamManagementPersistence {
     var snapshot: XMPPStreamManagementSnapshot?
     var acknowledged: Set<String> = []
-    /// Widens the window between journaling a stanza and writing it, to model a drop inside it.
+    // Widens the window between journaling a stanza and writing it, to model a drop inside it.
     var saveDelay: Duration?
     func load() -> XMPPStreamManagementSnapshot? { snapshot }
     func setSaveDelay(_ delay: Duration?) { saveDelay = delay }
@@ -439,7 +435,7 @@ private actor LabRecoveryPersistence: XMPPStreamManagementPersistence {
 
 private struct LabCheckFailed: Error, CustomStringConvertible { let description: String }
 
-/// Counts deliveries per message ID and can hold stream barriers back from acknowledgement.
+// Can hold stream barriers back from acknowledgement.
 private actor LabInbox {
     private var ids: [String] = []
     private(set) var held: [XMPPInboundToken] = []

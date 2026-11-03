@@ -2,8 +2,8 @@ import Foundation
 
 public enum XMPPPushRegistrationAction: String, Codable, Sendable { case register, revoke }
 
-/// The APNs environment the device token belongs to. A development-signed build receives sandbox tokens, an App Store or
-/// TestFlight build production tokens; the gateway must send to the matching APNs host.
+/// A development-signed build receives sandbox tokens, App Store and TestFlight builds production tokens; the gateway
+/// must send to the matching APNs host.
 public enum XMPPPushEnvironment: String, Codable, Sendable { case sandbox, production }
 
 /// Persist before transmission. A revision must never be reused for another operation.
@@ -65,8 +65,8 @@ enum PushRegistrationWire {
         return "node='\(xmlEscaped(configuration.node))' secret='\(xmlEscaped(secret))'"
     }
 
-    /// Only a registration names its environment and APNs topic: they travel with the token they describe. Without a
-    /// topic the gateway uses its default one.
+    // Only a registration names its environment and APNs topic, with the token they describe; without a topic the
+    // gateway uses its default.
     static func operationXML(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
                              environment: XMPPPushEnvironment, topic: String? = nil) throws -> String {
         if let topic {
@@ -101,8 +101,8 @@ enum PushRegistrationWire {
 }
 
 extension XMPPClient {
-    /// A register for a node the gateway does not know creates it, owned by this account's bare JID. `topic` is the
-    /// app's APNs topic (its bundle identifier); nil leaves it to the gateway's default.
+    /// Registering an unknown node creates it, owned by this account's bare JID. `topic` is the app's APNs topic (its
+    /// bundle identifier); nil leaves it to the gateway's default.
     public func updatePushRegistration(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
                                        environment: XMPPPushEnvironment, topic: String? = nil) async throws -> XMPPPushRegistrationResult {
         let payload = try PushRegistrationWire.operationXML(operation, configuration: configuration, environment: environment, topic: topic)

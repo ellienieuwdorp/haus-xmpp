@@ -155,8 +155,8 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     #expect(await manager.persistedHandledCount() == 3)
 }
 
-/// A saved session that fails validation, or whose replay policy throws, is never resumed; the connect binds fresh
-/// and `enable` replaces it. Throwing instead failed every connect for the whole 72 h resume window.
+// A saved session that fails validation, or whose replay policy throws, binds fresh and `enable` replaces it;
+// throwing would fail every connect for the 72 h resume window.
 @Test func restoreBindsFreshForASessionItCannotUse() async throws {
     func restored(_ journal: [XMPPStreamJournalEntry], policyFails: Bool = false) async throws -> XMPPStreamManagementSnapshot? {
         let store = SnapshotStore()
@@ -231,8 +231,8 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(UInt32.max) }
 }
 
-/// A journaled iq whose socket write never happened (the connection dropped between journal and
-/// write) must not leave our outbound counter ahead of the server's across later resumes.
+// A journaled iq whose socket write never happened (the connection dropped between journal and
+// write) must not leave our outbound counter ahead of the server's across later resumes.
 @Test func resumeDropsUnreceivedIQSlotsSoLaterAcknowledgementsStayAligned() async throws {
     let store = SnapshotStore()
     let first = try await enabledManager(store)
@@ -273,8 +273,8 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
               outboundSent: 0, outboundAcknowledged: 0, journal: [], resumeTimeoutSeconds: timeout)
     }
     let cases: [(XMPPStreamManagementSnapshot, Bool)] = [
-        // Past the server's advertised 300 s (an old build's snapshot, measured from its last ack): still tried,
-        // because push-enabled sessions hibernate far longer and a refusal only costs a round trip.
+        // Past the advertised 300 s: still tried, because push-enabled sessions hibernate far longer and a refusal
+        // costs one round trip.
         (snapshot(lastContact: 301, timeout: 300), true),
         (snapshot(lastContact: 3 * 3_600, timeout: 600), true),
         // A server advertising more than the attempt window keeps its own.
@@ -304,7 +304,7 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     let before = Date()
     #expect(try await sm.detach() == 1)
     #expect(await store.value?.inboundHandled == 1)
-    // The window now runs from the disconnect, not from enabling (or the last server acknowledgement).
+    // The window runs from the disconnect, not from enabling or the last server acknowledgement.
     let detached = try #require(await store.value?.expiresAt)
     #expect(detached > enabled && detached >= before.addingTimeInterval(600))
     // A failed commit advertises nothing new.
@@ -354,8 +354,8 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.restore(accountID: "other@example.org") }
 }
 
-/// A build that kept the typed capitals saved `Ellie@Example.org` beside the server's `ellie@example.org/r`; that
-/// session must still resume, for the typed and the normal spelling alike, and never for another account.
+// A session saved as `Ellie@Example.org` beside the server's `ellie@example.org/r` resumes for the typed and the normal
+// spelling alike, and never for another account.
 @Test func restoreComparesTheAccountInNormalForm() async throws {
     let store = SnapshotStore()
     await store.seed(.init(revision: 1, accountID: "Ellie@Example.org", fullJID: "ellie@example.org/r", streamID: "resume", expiresAt: nil,

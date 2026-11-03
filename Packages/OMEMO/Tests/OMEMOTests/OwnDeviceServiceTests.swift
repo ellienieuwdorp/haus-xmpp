@@ -5,12 +5,12 @@ import XMPPProtocol
 import OMEMOCrypto
 @testable import OMEMO
 
-/// The account-level review of the account's other devices: what is stored, and that one decision reaches every chat.
+// The account's other devices: what is stored, and that one decision reaches every chat.
 @MainActor
 final class OwnDeviceServiceTests: XCTestCase {
     let carol = "carol@localhost"
 
-    /// Alice's second installation, initialized but reviewed by nobody; both installations advertise in both versions.
+    // Alice's second installation, unreviewed; both installations advertise in both versions.
     private func addUnreviewedSecondDevice(_ f: ServiceFixture) async throws -> UInt32 {
         let store = try f.openStore("alice-second.sqlite")
         try await store.acquireTransportOwnership()
@@ -22,7 +22,6 @@ final class OwnDeviceServiceTests: XCTestCase {
         return try await second.localIdentity(account: f.alice, profile: .modern).deviceID
     }
 
-    /// Carol with one installation, accepted on Alice's side in `profile`, and a chat with her.
     private func addCarol(_ f: ServiceFixture, profile: XMPPOMEMOProfile) async throws {
         let store = try f.openStore("carol.sqlite")
         try await store.acquireTransportOwnership()
@@ -41,8 +40,8 @@ final class OwnDeviceServiceTests: XCTestCase {
         return message.id
     }
 
-    /// A new installation of the account appears in both versions as one identity, undecided, without a chat having
-    /// to be opened and without choosing a version for any chat; a later key change is a new undecided record.
+    // A new installation appears in both versions as one undecided identity without opening a chat or choosing a
+    // version; a later key change is a new undecided record.
     func testRefreshStoresOtherInstallationsUndecidedAndFlagsChangedKeys() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -60,8 +59,8 @@ final class OwnDeviceServiceTests: XCTestCase {
         let carolOverview = try await f.a.overview(account: f.alice, peer: carol)
         XCTAssertFalse(carolOverview.isPeerKnown)
 
-        // The same device ID later publishes another OMEMO 2 identity (a reinstall that reused the ID, or an attacker):
-        // a new undecided record flagged as changed, while the earlier decision stays on the old key and the legacy record.
+        // The same device ID publishes another OMEMO 2 identity: a new undecided record flagged as changed; the earlier
+        // decision stays on the old key and the legacy record.
         try await f.a.setTrust(account: f.alice, deviceIDs: devices.map(\.id), trust: .accepted)
         let replacement = try OMEMOEngine(profile: .modern, deviceID: second).bundle()
         await f.server.publish(f.alice, XMPPOMEMOBundle(profile: .modern, deviceID: second, identityKey: replacement.identityKey,
@@ -74,8 +73,7 @@ final class OwnDeviceServiceTests: XCTestCase {
         XCTAssertEqual(after.first { $0.profile == .legacy }?.trust, .accepted)
     }
 
-    /// Trust is per device record, not per chat: accepting the new installation once releases held sends in two chats,
-    /// and both envelopes then carry a key for it. Accepted stays accepted, never verified.
+    // Trust is per device record: one acceptance releases held sends in two chats. Accepted is never verified.
     func testOneDecisionReleasesSendsHeldInEveryChat() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -102,7 +100,7 @@ final class OwnDeviceServiceTests: XCTestCase {
         }
     }
 
-    /// Not trusting the other installation keeps 1:1 sending going to every remaining trusted device.
+    // Rejecting the other installation keeps 1:1 sending going to every remaining trusted device.
     func testRejectedOwnDeviceIsLeftOutWhileDirectSendingContinues() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -118,9 +116,8 @@ final class OwnDeviceServiceTests: XCTestCase {
         XCTAssertTrue(envelope.keys.contains { $0.recipientJID == f.bob })
     }
 
-    /// Remove from Account in the review, for a device the user does not recognise: the undecided device leaves the
-    /// account's lists in both versions without a chat, sends held for it go out without it, and if it is still signed in
-    /// and advertises itself again it comes back not trusted rather than asking again.
+    // A retired device leaves both versions' lists, held sends go without it, and if it advertises itself again it
+    // comes back rejected rather than asking again.
     func testRemovingAnUndecidedDeviceReleasesHeldSendsAndAReturnStaysUntrusted() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -164,7 +161,7 @@ final class OwnDeviceServiceTests: XCTestCase {
         XCTAssertFalse(nextEnvelope.keys.contains { $0.deviceID == second })
     }
 
-    /// The multi-record decision is all or nothing: a stale identifier among them changes none of them.
+    // All or nothing: a stale identifier among them changes none of them.
     func testDecisionWithAStaleIdentifierChangesNothing() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -178,8 +175,7 @@ final class OwnDeviceServiceTests: XCTestCase {
         XCTAssertTrue(unchanged.allSatisfy { $0.trust == .undecided })
     }
 
-    /// The refresh runs on every connection, so its round trips must not hold the service's gate: work that takes the
-    /// gate (here a decision; decrypts and seals in the app) completes while a bundle request is still outstanding.
+    // The refresh runs on every connection, so its round trips must not hold the gate.
     func testRefreshDoesNotHoldTheGateDuringNetworkRequests() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)

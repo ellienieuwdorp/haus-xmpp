@@ -9,14 +9,13 @@ import OMEMOCrypto
 private func expectEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #filePath, line: UInt = #line) { XCTAssertEqual(a, b, file: file, line: line) }
 private func expectTrue(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertTrue(a, file: file, line: line) }
 private func expectNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNil(a, file: file, line: line) }
-/// Another client's freshly generated bundle.
 private func otherClientBundle(_ profile: XMPPOMEMOProfile, deviceID: UInt32) throws -> XMPPOMEMOBundle {
     let bundle = try OMEMOEngine(profile: profile == .legacy ? .legacy : .modern, deviceID: deviceID).bundle()
     return XMPPOMEMOBundle(profile: profile, deviceID: bundle.deviceID, identityKey: bundle.identityKey, signedPreKeyID: bundle.signedPreKeyID,
                            signedPreKey: bundle.signedPreKey, signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)
 }
 
-/// Writes back `putBack` after every device-list publication, as another client with a stale read-modify-write would.
+// Writes back `putBack` after every device-list publication, like a client with a stale read-modify-write.
 private struct StaleListTransport: OMEMOTransport {
     let base: TestTransport
     let putBack: UInt32
@@ -28,13 +27,12 @@ private struct StaleListTransport: OMEMOTransport {
     func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { try await base.publishOMEMOBundle(bundle) }
 }
 
-/// Starting encryption over after the wrapping key was lost: Bob's store keeps its
-/// sealed state, but his device only has a different key now.
+// Bob's store keeps its sealed state, but his device only has a different wrapping key.
 @MainActor
 final class KeyRecoveryServiceTests: XCTestCase {
     private let replacementKey = Data(repeating: 0x55, count: 32)
 
-    /// Alice, untrusted on Bob's side, sends him one message: Bob retains its ciphertext waiting for a decision.
+    // Alice, untrusted on Bob's side, sends one message; Bob retains its ciphertext.
     private func retainOneMessageForBob(_ f: ServiceFixture) async throws -> UInt32 {
         try await f.initialize(.modern, trust: false)
         for device in try await f.a.overview(account: f.alice, peer: f.bob).devices where device.active {
@@ -53,7 +51,6 @@ final class KeyRecoveryServiceTests: XCTestCase {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
         let oldFingerprint = try await f.b.overview(account: f.bob, peer: f.alice).localFingerprint
-        // Initialize recorded the ID in plain text.
         expectEqual(try await f.bStore.encryptionState(accountID: f.bob)?.deviceID, oldID)
         for profile in XMPPOMEMOProfile.allCases {
             let listed = await f.server.devices(f.bob, profile)
@@ -62,8 +59,7 @@ final class KeyRecoveryServiceTests: XCTestCase {
         let sealed = try await f.bStore.encryptionState(accountID: f.bob)
 
         let protection = try StateProtection(key: replacementKey)
-        // Retained ciphertext that would never have been a bubble (here: one that does not decode) is not counted as a
-        // message that becomes unreadable.
+        // Retained ciphertext that would never have been a bubble is not counted.
         try await f.bStore.retainEncryptedIncoming(accountID: f.bob, sender: f.alice, digest: "not-a-bubble", wire: Data([1]))
         let lost = try await OMEMOService.unreadableStates(store: f.bStore, protection: protection)
         XCTAssertEqual(lost, [UnreadableEncryptionState(accountID: f.bob, revision: try XCTUnwrap(sealed).revision, deviceID: oldID,
@@ -117,8 +113,7 @@ final class KeyRecoveryServiceTests: XCTestCase {
         XCTAssertEqual(aliceView.devices.first { $0.jid == f.bob && $0.deviceID == newID }?.trust, .undecided)
     }
 
-    /// The old ID stays listed while the removal has not reached the server: the dead device is never offered for review,
-    /// neither in a chat's refresh nor in the account-level own-device refresh.
+    // While the old ID stays listed, the dead device is never offered for review, in a chat or the own-device refresh.
     func testARetiredDeviceStillListedIsSkippedByRefresh() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -134,13 +129,13 @@ final class KeyRecoveryServiceTests: XCTestCase {
         let own = overview.devices.filter { $0.jid == f.bob }.map(\.deviceID)
         XCTAssertEqual(own, [4242])
         XCTAssertFalse(own.contains(oldID) || own.contains(newID))
-        // The account-level review (#17) reads the same lists in both versions and skips the dead device too.
+        // The own-device review reads the same lists in both versions and skips it too.
         let reviewed = try await recovered.refreshOwnDevices(account: f.bob, transport: f.bTransport)
         XCTAssertEqual(reviewed.map(\.deviceID), [4242])
     }
 
-    /// Every unreadable row goes, each under its own account; only the current account gets an identity now, the other
-    /// one at its next initialize, and each retires only its own old ID.
+    // Every unreadable row goes; only the current account gets an identity now, the other at its next initialize,
+    // and each retires only its own old ID.
     func testAnotherAccountsLostStateIsDiscardedAndGetsItsIdentityOnItsNextConnection() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -172,7 +167,7 @@ final class KeyRecoveryServiceTests: XCTestCase {
         expectEqual(try await f.bStore.retiredOwnDevices(accountID: f.bob), [oldID])
     }
 
-    /// A row from before the device ID was recorded: discarded all the same, but nothing can be retired automatically.
+    // A row without a recorded device ID is discarded all the same, but nothing can be retired automatically.
     func testARowWithoutARecordedDeviceIDRetiresNothing() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -188,7 +183,6 @@ final class KeyRecoveryServiceTests: XCTestCase {
         XCTAssertTrue(listed.contains(oldID))
     }
 
-    /// A readable row without a recorded ID (written before schema 25) gets it on the next open, without a connection.
     func testRecordLocalDeviceIDsFillsRowsThatPredateTheColumn() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -198,8 +192,6 @@ final class KeyRecoveryServiceTests: XCTestCase {
         expectEqual(try await f.bStore.encryptionState(accountID: f.bob)?.deviceID, oldID)
     }
 
-    /// Recording runs at every launch for every account: a row that opens but does not decode is that account's own
-    /// problem and must not keep storage closed (or stop the other rows from being recorded).
     func testRecordLocalDeviceIDsSkipsARowThatOpensButDoesNotDecode() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -214,8 +206,7 @@ final class KeyRecoveryServiceTests: XCTestCase {
         expectNil(try await f.bStore.encryptionState(accountID: carol)?.deviceID)
     }
 
-    /// Another client keeps writing back a stale device list that names the dead device. Setup still succeeds once the
-    /// new device is listed, and the next connection takes the dead ID out again: retired IDs are kept for good.
+    // Setup succeeds once the new device is listed; the next connection removes the put-back dead ID again.
     func testARetiredDevicePutBackDoesNotFailSetupAndIsRemovedAgain() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -237,10 +228,8 @@ final class KeyRecoveryServiceTests: XCTestCase {
         }
     }
 
-    /// Migration Assistant or a restore to another machine leaves the source machine working with the old key and the
-    /// old device ID. It puts that ID back after the recovered installation removed it; from then on the recovered side
-    /// leaves the ID alone instead of trading device-list publications with it for as long as both are online, and the
-    /// device is reviewed like any other.
+    // A restored copy keeps using the old key and ID and puts the ID back. The recovered side then leaves it alone
+    // instead of trading device-list publications, and the device is reviewed like any other.
     func testAnOldInstallationStillUsingTheRetiredIDReclaimsItAndTheListsSettle() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)

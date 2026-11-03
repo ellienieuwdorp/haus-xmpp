@@ -27,7 +27,7 @@ public actor MessageStore {
     /// `user_version` when this store was opened, before any migration it ran.
     public nonisolated let openedSchemaVersion: Int
     private let url: URL
-    /// The database file this connection opened; a lease is never granted over a file replaced since.
+    // A lease is never granted over a file replaced since this connection opened it.
     private let fileIdentity: FileIdentity
 
     public init(url: URL) throws { try self.init(url: url, schema: .upgrade) }
@@ -62,6 +62,8 @@ public actor MessageStore {
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
             guard version <= currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
+            // Every step checks its table or column (or uses IF NOT EXISTS) first: stores from parallel branches reach
+            // these versions in any order, and a rolled-back address rewrite can leave the version at 22.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -156,8 +158,7 @@ public actor MessageStore {
                 try connection.execute("UPDATE messages SET wire_id=id WHERE wire_id IS NULL AND outgoing=1 AND encryption_profile='legacy'")
             }
             try connection.execute("CREATE INDEX IF NOT EXISTS message_wire ON messages(account_id,chat_id,wire_id)")
-            // Every outgoing stanza that is not a chat message: reactions, key transports, later
-            // retractions/markers. One queue, one state machine, one replay rule (the sealed wire).
+            // One queue for every outgoing stanza that is not a chat message; a retry resends the sealed wire.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS outgoing_updates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -186,8 +187,7 @@ public actor MessageStore {
                     try connection.execute("DROP TABLE encryption_controls")
                 }
             }
-            // Every message-scoped event peers assert: reactions now, retractions/corrections/receipts
-            // later. One table, one idempotency rule, one target resolution.
+            // Every message-scoped event peers assert, under one idempotency rule and one target resolution.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS message_events (
                     account_id TEXT NOT NULL, actor_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -206,7 +206,6 @@ public actor MessageStore {
             }
             try connection.execute("CREATE INDEX IF NOT EXISTS event_target ON message_events(account_id,chat_id,target_wire_id,kind,actor_id,updated_at,id)")
             if version < 13, try !connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_preferences'").isEmpty {
-                // One row per account was always the shape; receipts add two switches beside previews.
                 try connection.execute("ALTER TABLE notification_preferences RENAME TO account_preferences")
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN delivery_receipts INTEGER NOT NULL DEFAULT 1")
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN read_receipts INTEGER NOT NULL DEFAULT 1")
@@ -238,12 +237,12 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            // v13 (v12 on the avatars-only tree; the column check keeps it idempotent): the verified XEP-0084/0153 avatar hash; the bytes live as a file beside the database.
+            // v13: the verified XEP-0084/0153 avatar hash; the bytes are a file beside the database. Some v12 stores have it.
             if version < 13, try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='avatar_hash'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN avatar_hash TEXT")
             }
-            // v14 (v12 on the media-only tree; IF NOT EXISTS keeps it idempotent): one file per message,
-            // with metadata, sealed key material and transfer state. Bytes are files.
+            // v14: one row per message file (metadata, sealed key material, transfer state); the bytes are files.
+            // Some v12 stores have it.
             if version < 14 {
                 try connection.execute("""
                     CREATE TABLE IF NOT EXISTS attachments (
@@ -255,16 +254,15 @@ public actor MessageStore {
                     )
                     """)
             }
-            // v15: placeholders for messages this device deliberately cannot show, and why a retained ciphertext is still pending.
-            // Values are enforced in Swift (`UnreadableReason`, `PendingEncryptedReason`); ALTER cannot add a CHECK.
+            // v15: unreadable placeholders and why retained ciphertext is pending. Swift enforces the values
+            // (`UnreadableReason`, `PendingEncryptedReason`): ALTER cannot add a CHECK.
             if version < 15, try connection.query("SELECT 1 FROM pragma_table_info('messages') WHERE name='unreadable_reason'").isEmpty {
                 try connection.execute("ALTER TABLE messages ADD COLUMN unreadable_reason TEXT")
             }
             if version < 15, try connection.query("SELECT 1 FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'").isEmpty {
                 try connection.execute("ALTER TABLE pending_encrypted_inbox ADD COLUMN reason TEXT NOT NULL DEFAULT 'trustPending'")
             }
-            // v16: the backward cursor of each archive's history backfill; IF NOT EXISTS keeps it idempotent.
-            // An archive with a forward checkpoint and no row here was walked forward from its start (before v16).
+            // v16: backfill cursors. An archive with a forward checkpoint and no row here was walked forward from its start.
             if version < 16 {
                 try connection.execute("""
                     CREATE TABLE IF NOT EXISTS archive_backfill (
@@ -274,12 +272,12 @@ public actor MessageStore {
                     )
                     """)
             }
-            // v17: the last-seen switch (column check keeps it idempotent on trees that wrote it as v15).
+            // v17: the last-seen switch, checked by column because some v15 stores have it.
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
             }
-            // v18: retained ciphertext waiting for trust or keys may alert. It has no message row, so its
-            // candidate lives beside the pending row and disappears with it. IF NOT EXISTS keeps it idempotent.
+            // v18: retained ciphertext has no message row, so its notification candidate lives beside the pending row and
+            // goes with it.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS pending_notification_candidates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, sender TEXT NOT NULL, digest TEXT NOT NULL,
@@ -287,9 +285,8 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,sender,digest) REFERENCES pending_encrypted_inbox(account_id,sender,digest) ON DELETE CASCADE
                 )
                 """)
-            // v19: read state. Each chat's read pointer (the newest message read on any device of the account) and the
-            // XEP-0359 id the account's own archive gave a direct message, by which XEP-0490 names it. Every step checks
-            // for its column or table, so the v18–v20 branches migrate correctly in any merge order.
+            // v19: each chat's read pointer (newest message read on any own device) and the XEP-0359 id the own archive gave a
+            // direct message, by which XEP-0490 names it. Each step checks its column or table: v18–v20 stores exist in any order.
             if try connection.query("SELECT 1 FROM pragma_table_info('messages') WHERE name='stanza_id'").isEmpty {
                 try connection.execute("ALTER TABLE messages ADD COLUMN stanza_id TEXT")
             }
@@ -308,8 +305,7 @@ public actor MessageStore {
                         PRIMARY KEY(account_id, chat_id)
                     )
                     """)
-                // An upgrade is not news: every existing chat counts as read up to its newest message, and nothing
-                // already waiting may alert. One index seek per chat.
+                // An upgrade is not news: every chat counts as read up to its newest message, and nothing waiting may alert.
                 try connection.execute("""
                     INSERT INTO chat_read_state(account_id,chat_id,read_sent_at,read_message_id)
                     SELECT c.account_id,c.id,m.sent_at,m.id FROM chats c JOIN messages m ON m.account_id=c.account_id
@@ -317,10 +313,8 @@ public actor MessageStore {
                     """)
                 try connection.execute("DELETE FROM notification_candidates")
             }
-            // v19: each archive's history baseline. Its first (newest) page is history, read before this device joined
-            // the account, as is anything backfill brings from further back: a message no newer than the baseline of
-            // the archive that holds its chat counts as read even where no pointer exists. An upgrade seeds it from
-            // what each walked archive has stored.
+            // v19: per-archive history baseline. The first page and backfill predate this device, so a message no newer than
+            // the baseline of its chat's archive counts as read without a pointer. Seeded from each walked archive.
             if try connection.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_baselines'").isEmpty {
                 try connection.execute("""
                     CREATE TABLE read_baselines (
@@ -336,8 +330,7 @@ public actor MessageStore {
                         FROM archive_checkpoints a) WHERE newest IS NOT NULL
                     """)
             }
-            // v20: per-chat notification level and mute, and the own room nickname for mention detection. Local only;
-            // column checks keep it idempotent whatever order the v18/v19 migrations land in.
+            // v20: per-chat notification level and mute, and the own room nickname for mention detection.
             if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='notification_level'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN notification_level TEXT NOT NULL DEFAULT 'all' CHECK(notification_level IN ('all','mentions'))")
             }
@@ -347,9 +340,8 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='room_nickname'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN room_nickname TEXT")
             }
-            // v21: others' authenticated reactions to this account's own messages may alert, behind a per-account
-            // switch that defaults on. One row per actor and target: a replacement updates it, a removal deletes it.
-            // Column and table checks keep it idempotent in any merge order.
+            // v21: others' authenticated reactions to own messages may alert: one row per actor and target, which a
+            // replacement updates and a removal deletes.
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='reaction_alerts'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN reaction_alerts INTEGER NOT NULL DEFAULT 1")
             }
@@ -371,8 +363,8 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
                 )
                 """)
-            // v22: the archive time of each checkpoint's entry, so a walk whose cursor the server no longer holds restarts by
-            // time (XEP-0313 `start`), and one row per lost cursor. Column and table checks keep it idempotent in any merge order.
+            // v22: each checkpoint's archive time, so a walk whose cursor the server lost restarts by time (XEP-0313 `start`),
+            // and one row per lost cursor.
             if version < 22, try connection.query("SELECT 1 FROM pragma_table_info('archive_checkpoints') WHERE name='stamp'").isEmpty {
                 try connection.execute("ALTER TABLE archive_checkpoints ADD COLUMN stamp REAL")
             }
@@ -384,13 +376,12 @@ public actor MessageStore {
                     )
                     """)
             }
-            // v23: stored addresses in normal form; merges chats that differ only in spelling. `AddressMigration` checks
-            // each table and column exists and is idempotent, so it is safe in any merge order. A rewrite it had to roll
-            // back leaves the version below 23, so a later open tries again instead of stranding the typed spelling.
+            // v23: addresses in normal form (`AddressMigration`). A rolled-back rewrite leaves the version below 23, so a
+            // later open retries it.
             try AddressMigration.addSealedAccountColumns(connection)
             let addressesMigrated = try version >= 23 || AddressMigration.run(connection)
-            // v24: why a server returned an outgoing message or update (`rejectOutgoing`), and that it ever did. Column
-            // checks keep it idempotent in any merge order, and when a rolled-back address rewrite leaves the version at 22.
+            // v24: why a server returned an outgoing message or update. Checked by column: a rolled-back address rewrite can
+            // leave the version at 22.
             if version < 24 {
                 for table in ["outbox", "outgoing_updates"] {
                     for (column, type) in [("rejection", "TEXT"), ("returned", "INTEGER NOT NULL DEFAULT 0")]
@@ -399,9 +390,8 @@ public actor MessageStore {
                     }
                 }
             }
-            // v25: each encryption state row's device ID in plain text, and own device IDs given up when encryption was
-            // set up again, with where each stands in the published device lists.
-            // Column and table checks keep it idempotent in any merge order.
+            // v25: each encryption state row's device ID in plain text, and own device IDs retired when encryption was set up
+            // again, with where each stands in the published device lists.
             if try connection.query("SELECT 1 FROM pragma_table_info('encryption_state') WHERE name='device_id'").isEmpty {
                 try connection.execute("ALTER TABLE encryption_state ADD COLUMN device_id INTEGER")
             }
@@ -412,9 +402,8 @@ public actor MessageStore {
                     PRIMARY KEY(account_id, profile, device_id)
                 )
                 """)
-            // v26: link previews. The preview a message carries, sent or received, goes and comes with its message; our
-            // own fetches are a per-account cache whose image files live under the account's attachment folder. The
-            // version check and IF NOT EXISTS keep it idempotent in any merge order.
+            // v26: a message's link preview lives and goes with it; own fetches are a per-account cache whose images live
+            // under the account's attachment folder.
             if version < 26 {
                 try connection.execute("""
                     CREATE TABLE IF NOT EXISTS message_link_previews (
@@ -434,10 +423,8 @@ public actor MessageStore {
                     """)
                 try connection.execute("CREATE INDEX IF NOT EXISTS link_preview_cache_age ON link_preview_cache(account_id,fetched_at)")
             }
-            // v27: links from a direct chat's address to a contact in this device's Contacts (`ContactLink`). Device-local:
-            // the contact identifier means nothing elsewhere. IF NOT EXISTS keeps it idempotent in any merge order.
-            // Every link (and relink) gets a new `generation`, never reused (AUTOINCREMENT), so a write prepared for one
-            // link can never land on the link that replaced it.
+            // v27: device-local contact links. `generation` (AUTOINCREMENT) is never reused, so a write prepared for one link
+            // never lands on the link that replaced it.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS contact_links (
                     generation INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -573,11 +560,9 @@ public actor MessageStore {
         }
     }
 
-    /// Copies the database, as one committed state, to a new file at `destination` with SQLite's online backup API:
-    /// page by page through this connection's read transaction, so frames still in the WAL are included and the
-    /// source is only read (no checkpoint, no journal-mode or version change, same page size and layout). The copy
-    /// is then reopened and checked (`verifySnapshot`) against the counts read in that same transaction. Requires the
-    /// lease, so no other process writes meanwhile.
+    /// Copies one committed state to a new file at `destination` with SQLite's online backup API, through this
+    /// connection's read transaction: WAL frames are included and the source is only read. The copy is reopened and
+    /// checked (`verifySnapshot`) against counts read in that transaction. Requires the lease, so nothing else writes.
     public func writeSnapshot(to destination: URL) throws -> StoreSnapshotSummary {
         try requireTransportOwnership()
         guard let source = connection.handle else { throw MessageStoreError.closed }
@@ -645,11 +630,9 @@ public actor MessageStore {
         }
     }
 
-    /// Stop and join all socket/sender/crypto work before closing. This deterministic lifecycle
-    /// boundary must complete before deleting or replacing a database or its SQLite sidecars.
-    /// Repeated closes are harmless; later database operations fail with a controlled error.
-    /// Holding the lease, interrupted submissions are marked first and the kernel lock goes last, after SQLite closed,
-    /// whichever step failed; the first failure is thrown afterwards.
+    /// Stop and join all socket, sender and crypto work first; this must complete before deleting or replacing the
+    /// database or its sidecars. Idempotent; later operations throw `closed`. Holding the lease, interrupted submissions
+    /// are marked first and the kernel lock goes last, after SQLite closed, whatever failed; the first failure is thrown.
     public func close() throws {
         guard connection.isOpen else { return }
         guard transportOwnership.isHeld else { return try connection.close() }
@@ -660,10 +643,9 @@ public actor MessageStore {
         try closed.get()
     }
 
-    /// Containing-app migration only. Stop/join all work and close every other connection
-    /// first. Close SQLite before a synchronous directory rename while retaining the same
-    /// transport-lock inode across the rename. The store is unusable afterwards, even if
-    /// the move fails; reopening the original/destination is an explicit caller decision.
+    /// Containing-app migration only. Stop and join all work and close every other connection first. SQLite closes before
+    /// the synchronous directory rename while the same transport-lock inode stays held. The store is unusable afterwards,
+    /// even if the move fails; reopening either location is the caller's decision.
     public func closeForMigration(_ move: @Sendable () throws -> Void) throws {
         try requireTransportOwnership()
         let moved = Result { try connection.close(); try move() }
@@ -671,12 +653,10 @@ public actor MessageStore {
         try moved.get()
     }
 
-    /// Caller MUST stop and join every socket/sender before release. Invalidates attempt tokens.
-    /// The kernel lock is released even when marking interrupted submissions fails (another connection kept the
-    /// database busy past the timeout, a full disk): a process suspended holding it is killed, and every owner marks
-    /// them itself after acquiring (`recoverInterruptedSubmissions`). The failure is thrown once the lock is free. A
-    /// transaction a failed rollback left open would keep SQLite's own locks, so that connection is closed first and
-    /// the store is unusable afterwards.
+    /// Caller MUST stop and join every socket and sender first. Invalidates attempt tokens. The kernel lock is released
+    /// even when marking interrupted submissions fails (a busy database, a full disk): every owner marks them after
+    /// acquiring (`recoverInterruptedSubmissions`), and the failure is thrown once the lock is free. A transaction a failed
+    /// rollback left open would keep SQLite's locks, so that connection closes first and the store is unusable afterwards.
     public func releaseTransportOwnership() throws {
         try requireTransportOwnership()
         let marked = Result { try markSubmissionsUnconfirmed() }
@@ -768,14 +748,12 @@ public actor MessageStore {
         }
     }
 
-    /// A server returned one of our stanzas (`<message type='error'>`): the outbox message or outgoing update whose wire
-    /// id is `wireID` in `chatID` becomes `failed` with `rejection` (an RFC 6120 condition, or `blocked`), whatever the
-    /// stream acknowledgement said, since server acceptance was never delivery. Left alone: a queued retry (not sent yet)
-    /// and a message the peer already confirmed with a receipt or read marker. A retry clears the reason (it described
-    /// the returned attempt) but the row stays marked as returned: our archive keeps a copy of that attempt, which must
-    /// not pass for the retry being accepted. `firstOnly` (the archive's copy of a bounce, which may be older than a
-    /// retry) leaves a row alone once it was ever returned. Returns what failed, or nil when nothing matched or the row
-    /// already failed for this reason (a bounce redelivered on a resumed stream).
+    /// A server returned one of our stanzas (`<message type='error'>`): the outbox message or update with wire id `wireID`
+    /// becomes `failed` with `rejection` (an RFC 6120 condition, or `blocked`) whatever the stream acknowledgement said,
+    /// since server acceptance was never delivery. A queued retry and a message the peer confirmed are left alone. A retry
+    /// clears the reason but the row stays marked as returned, so the archived copy of the returned attempt never passes
+    /// for the retry's acceptance. `firstOnly` (an archived bounce) skips a row ever returned. Returns nil when nothing
+    /// matched or the row already failed for this reason (a bounce redelivered on a resumed stream).
     @discardableResult public func rejectOutgoing(accountID: String, chatID: String, wireID: String, rejection: String,
                                                   firstOnly: Bool = false) throws -> RejectedOutgoing? {
         try requireTransportOwnership()
@@ -850,13 +828,11 @@ public actor MessageStore {
         }
     }
 
-    /// 4 chat + 11 attachment + 4 summary + 7 link preview columns precede `l.*` (Self.columns order).
+    // 4 chat + 11 attachment + 4 summary + 7 link preview columns precede `l.*` (`Self.columns` order).
     private static let chatListPrefix = 26
-    // `?1` is the account throughout. Every step is an index seek per chat: the newest message comes
-    // from the `timeline` index and is joined by primary key, so the cost follows the number of chats,
-    // not of messages. The store never runs ANALYZE; plans and measurements are in the package README.
-    // `last` must not alias `messages`: the outbox subquery in `Self.columns` names the table.
-    // Message columns come last so added columns never shift the prefix.
+    // `?1` is the account. Each step is an index seek per chat; a ROW_NUMBER() window over the account's messages
+    // nested-loops once per chat without statistics (59 s at 100 chats × 1,000). `last` must not alias `messages`
+    // (`Self.columns` names it); message columns come last so added columns never shift the prefix.
     private static let chatListSQL = """
         WITH last AS (
             SELECT \(columns) FROM messages WHERE account_id=?1
@@ -915,7 +891,6 @@ public actor MessageStore {
         WHERE c.account_id=?1
         ORDER BY c.pinned DESC,l.sent_at DESC,c.id
         """
-    // Same body as `decodeRow`'s inline helper; kept apart so `decodeRow` stays untouched.
     private static func optionalInteger(_ value: Value) -> Int? { if case .integer(let number) = value { return number }; return nil }
 
     /// Records which verified avatar a chat shows; nil when the contact removed theirs.
@@ -924,10 +899,9 @@ public actor MessageStore {
                                [hash.map(Value.text) ?? .null, .text(accountID), .text(chatID)])
     }
 
-    /// Removes every row of an account that only ever lived on this device (the sample conversations), so it can be
-    /// written afresh: chats, messages, events, previews, settings, all of it, in one transaction. Every table keyed by
-    /// `account_id` is covered, including ones added later. An account with encryption state is refused, so no
-    /// identity keys or sessions can be thrown away this way.
+    /// Removes every row of a device-only account (the sample conversations) in one transaction, covering every table
+    /// keyed by `account_id`. An account with encryption state is refused, so no identity keys or sessions can be thrown
+    /// away this way.
     public func eraseLocalAccount(accountID: String) throws {
         guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
         try connection.transaction {
@@ -967,7 +941,7 @@ public actor MessageStore {
         return try connection.query(sql, values).map(decodeRow).reversed()
     }
 
-    /// Literal substring search, not yet FTS/ranked multilingual search. Wildcards are literal.
+    /// Literal substring search with SQLite's ASCII case folding; wildcards are literal.
     public func search(accountID: String, query: String, chatID: String? = nil, limit: Int = 100) throws -> [StoredMessage] {
         guard !query.isEmpty else { return [] }
         var sql = "SELECT \(Self.columns) FROM messages WHERE account_id=? AND instr(lower(body), lower(?)) > 0"
@@ -1037,18 +1011,16 @@ public actor MessageStore {
         }
     }
 
-    /// See `PendingRetentionLimits`. The account ceiling keeps the earlier bound (and the retry pass's cost) at 1,000 rows.
-    /// 250 per known sender lets four contacts' unreviewed devices back up for days at once; 20 per stranger covers a
-    /// first-contact burst; strangers stop at 200 rows in all, which leaves at least 800 for known contacts.
+    /// See `PendingRetentionLimits`. The account ceiling bounds the retry pass's cost at 1,000 rows. 250 per known sender
+    /// lets four contacts' unreviewed devices back up for days at once; 20 per stranger covers a first-contact burst;
+    /// strangers stop at 200 rows in all, which leaves at least 800 for known contacts.
     public static let pendingLimits = PendingRetentionLimits(perKnownSender: 250, perStranger: 20, strangerCeiling: 200, perAccount: 1_000)
 
-    /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
-    /// `notification` names the chat of an incoming message that is waiting for trust or keys: the new row then also
-    /// becomes a notification candidate, which is removed with the row when it commits or is converted.
-    /// A new row beyond `pendingLimits` is not kept: `overflow` is recorded in the same transaction instead (its quiet
-    /// placeholder, or only the consumed replay identity), so a full table still yields a durable final outcome and the
-    /// stream and archive walk keep moving. Without `overflow` the conversation is taken to be the sender's direct chat
-    /// and the identity is consumed. Returns false exactly when a limit applied the overflow.
+    /// Keeps ciphertext that may still decrypt later; an existing row keeps its reason. With `notification` the new row is
+    /// also a notification candidate, removed with the row when it commits or is converted. A new row beyond
+    /// `pendingLimits` is not kept: `overflow` (a quiet placeholder, or only the consumed replay identity) is recorded in
+    /// the same transaction, so a full table still yields a durable outcome and the stream and archive walk keep moving.
+    /// Without `overflow` the sender's direct chat is assumed. Returns false exactly when a limit applied the overflow.
     @discardableResult
     public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
                                         reason: PendingEncryptedReason = .trustPending,
@@ -1082,8 +1054,8 @@ public actor MessageStore {
         }
     }
 
-    /// Whether one more row from `sender` fits `pendingLimits`: two primary-key range counts, and the known-sender lookup
-    /// only when a stranger's limit would bind. An approved sender device's row answers to the account ceiling alone.
+    // Two primary-key range counts, and the known-sender lookup only when a stranger's limit would bind. An approved
+    // sender device's row answers to the account ceiling alone.
     private func admitsPending(accountID: String, sender: String, chatID: String, approved: Bool) throws -> Bool {
         let limits = Self.pendingLimits
         let total = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer
@@ -1101,8 +1073,8 @@ public actor MessageStore {
             """, [.text(accountID), .text(chatID), .text(sender)]).isEmpty
     }
 
-    /// Retained ciphertext has no message row, so the shared notification rules see a stand-in with the conversation,
-    /// author and time only: no body, no content, and an ID that never names a stored row.
+    // Retained ciphertext has no message row, so the notification rules see a stand-in with conversation, author and
+    // time only: no content, and an ID that never names a stored row.
     private func queuesPendingNotification(accountID: String, sender: String, digest: String, context: PendingNotificationContext) throws -> Bool {
         guard !context.chatID.isEmpty, context.chatID.utf8.count <= 3071, context.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
         return try queuesNotification(accountID: accountID, message: StoredMessage(id: "pending-" + digest, accountID: accountID, chatID: context.chatID,
@@ -1133,13 +1105,10 @@ public actor MessageStore {
             .map { .pending(sender: $0[0].string, digest: $0[1].string) }
     }
 
-    /// Records a placeholder for a message this device will never show as content. Idempotent by `placeholder.id`
-    /// (first observation wins, `sentAt` is never rewritten). A `.ciphertext` key also consumes the replay identity
-    /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
-    /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
-    /// The row is never plaintext, never authenticated and never an event target. An incoming placeholder from someone
-    /// else is a notification candidate ("Sent a message this device can't read") when its reason `alerts`; an
-    /// own-device one never is.
+    /// Records a placeholder for a message this device will never show as content. Idempotent by `placeholder.id` (first
+    /// observation wins). A `.ciphertext` key also consumes the replay identity and removes the pending row. Needs no
+    /// transport ownership, like `commitEncryptedIncoming`. Never plaintext, authenticated or an event target. Someone
+    /// else's placeholder is a notification candidate when its reason `alerts`. Returns true when inserted now.
     @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
         try Self.validate(placeholder)
         return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
@@ -1281,8 +1250,8 @@ public actor MessageStore {
     /// key, so it can never be sealed: `retryOutgoing` refuses it, and only attaching the file again sends it.
     public static let encryptionResetRejection = "encryption-reset"
 
-    /// Queued (never claimed) messages of account `?1` with a file and no prepared ciphertext: sealing them needs the
-    /// file's key material, which was sealed with the lost key.
+    // Queued, never claimed messages of account `?1` with a file and no prepared ciphertext: sealing them needs the
+    // file's key material, which was sealed with the lost key.
     private static let unsendableFileCondition = """
         o.account_id=?1 AND o.state='queued'
         AND EXISTS (SELECT 1 FROM attachments a WHERE a.account_id=o.account_id AND a.message_id=o.message_id)
@@ -1356,7 +1325,7 @@ public actor MessageStore {
         }
     }
 
-    /// A key transport is sealed the moment it exists: its wire never depends on later preparation.
+    // A key transport is sealed the moment it exists: its wire never depends on later preparation.
     private func insertEncryptionControl(accountID: String, control: EncryptionControl) throws {
         guard !control.id.isEmpty, control.id.utf8.count <= 1024,
               !control.recipient.isEmpty, control.recipient.utf8.count <= 3071,
@@ -1365,7 +1334,7 @@ public actor MessageStore {
                          targetMessageID: nil, targetWireID: nil, reactionsJSON: nil, wire: control.wire)
     }
 
-    /// Outgoing stream message IDs must identify exactly one durable operation, whatever its kind.
+    // Outgoing stream message IDs must identify exactly one durable operation, whatever its kind.
     private func insertUpdate(accountID: String, id: String, kind: StoredUpdate.Kind, chatID: String, createdAt: Date,
                               targetMessageID: String?, targetWireID: String?, reactionsJSON: String?, wire: Data?) throws {
         guard try message(accountID: accountID, messageID: id) == nil,
@@ -1385,11 +1354,8 @@ public actor MessageStore {
             """, [.text(accountID), .integer((current ?? 0) + 1), .blob(data)])
     }
 
-    /// A message whose file has not finished uploading is durable but not yet sendable.
-    /// A message waits while it, or anything queued before it in the same chat, is a file still uploading, so the
-    /// peer sees files and the caption sent after them in the order they were written.
-    /// The hold is bounded by the app: a file the server keeps refusing is failed (`UploadFailureBudget`), which
-    /// takes it out of 'queued' and releases the chat.
+    // Holds a message while it, or anything queued before it in the same chat, is a file still uploading, so the peer
+    // sees files and their caption in order. The app bounds the hold by failing a file the server keeps refusing.
     private static let uploadedOnly = """
          AND NOT EXISTS (SELECT 1 FROM outbox o JOIN attachments a ON a.account_id=o.account_id AND a.message_id=o.message_id AND a.upload_state='pending'
          JOIN messages m ON m.account_id=o.account_id AND m.id=o.message_id
@@ -1528,17 +1494,14 @@ public actor MessageStore {
         }
     }
 
-    /// Whether a newly committed incoming message may alert. Each notification rule (own/outgoing,
-    /// read pointer, mute) is its own small condition here; runs inside the commit transaction.
-    /// `groupMembers` are the room's members at decryption (bare JIDs), for the mass-mention rule.
+    // Runs inside the commit transaction. `groupMembers` (bare JIDs at decryption) feed the mass-mention rule.
     private func queuesNotification(accountID: String, message: StoredMessage, groupMembers: [String] = []) throws -> Bool {
         guard !message.isOutgoing, message.senderID != accountID else { return false }
         guard try isAfterReadPointer(accountID: accountID, message: message) else { return false }
         return try chatNotificationAllows(accountID: accountID, message: message, groupMembers: groupMembers)
     }
 
-    /// Mute and mentions: a muted chat queues nothing; a mentions-only chat queues a message whose
-    /// decrypted body mentions this account. Reads only local state; nothing here reaches the server.
+    // A muted chat queues nothing; a mentions-only chat queues a message whose decrypted body mentions this account.
     private func chatNotificationAllows(accountID: String, message: StoredMessage, groupMembers: [String], now: Date = Date()) throws -> Bool {
         guard let row = try connection.query("SELECT notification_level,muted_until,room_nickname FROM chats WHERE account_id=? AND id=?",
                                              [.text(accountID), .text(message.chatID)]).first else { return true }
@@ -1610,13 +1573,13 @@ public actor MessageStore {
         try connection.query("SELECT room_nickname FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(room)]).first?[0].optionalString
     }
 
-    /// Test seam: the queued candidates' message IDs, oldest first.
+    // Test seam.
     func pendingNotificationMessageIDs(accountID: String) throws -> [String] {
         try connection.query("SELECT message_id FROM notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)]).map { $0[0].string }
     }
 
-    /// Read-state condition (stream B): a message at or below its chat's read pointer was already read, on this device
-    /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
+    // A message at or below its chat's read pointer was already read here or on another device (MAM catch-up of history
+    // another device displayed), so it never alerts.
     private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
         if try connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=?", [.text(accountID), .text(message.id)]).isEmpty {
             // Retained ciphertext has no row yet: compare its time with the chat's pointer and with the history
@@ -1668,10 +1631,9 @@ public actor MessageStore {
         }
     }
 
-    /// The chat was opened: its reactions are on screen, so none of them may still alert, and none that was delivered is
-    /// current any more. Reactions have no read pointer of their own. Delivered ones go with the chat's thread
-    /// (`DeliveredNotificationCleaner.removeThread`). Like `dismissPendingMessageNotifications` it needs the transport
-    /// lease, so it cannot race an extension run that already read the candidates it is about to post.
+    /// The chat was opened: none of its reactions may still alert, and none delivered is current (reactions have no read
+    /// pointer). Needs the transport lease, like `dismissPendingMessageNotifications`, so it cannot race an extension run
+    /// that already read the candidates it is about to post.
     public func dismissReactionNotifications(accountID: String, chatID: String) throws {
         try requireTransportOwnership()
         try connection.transaction {
@@ -1680,20 +1642,18 @@ public actor MessageStore {
         }
     }
 
-    /// Plan D8 cap: reaction requests per run. Older reaction rows of the same run are claimed without a request.
+    /// Older reaction rows of the same run are claimed without a request.
     public static let reactionNotificationsPerRun = 8
 
-    /// Plan D4 limits: requests per chat and per run.
+    /// Requests per chat and per run.
     public static let notificationsPerChat = 8
     public static let notificationsPerRun = 20
 
-    /// A bounded, read-only claim of the account's notification candidates. The newest `perChat` of each chat
-    /// and the newest `total` overall are selected and returned oldest first; older candidates of a selected chat are
-    /// folded into that chat's "and N more" and claimed with it; chats beyond the total cap stay for a later run and are
-    /// counted in `deferredChatCount`, which the planner turns into one visible summary request. Messages their sender
-    /// has since unsent are claimed without taking a slot, so they never hide an older message's "and N more".
-    /// Nothing is deleted here: the caller posts, then passes `claimed` to `removeNotificationCandidates`. A crash in
-    /// between reposts the same stable identifiers, which replace rather than duplicate.
+    /// A bounded, read-only claim: the newest `perChat` of each chat and the newest `total` overall, oldest first. Older
+    /// candidates of a selected chat fold into its "and N more"; chats beyond the cap wait for a later run and are counted
+    /// in `deferredChatCount`. Messages since unsent are claimed without taking a slot. Nothing is deleted here: the caller
+    /// posts, then passes `claimed` to `removeNotificationCandidates`; a crash in between reposts the same stable
+    /// identifiers, which replace rather than duplicate.
     public func pendingNotifications(accountID: String, perChat: Int = MessageStore.notificationsPerChat,
                                      total: Int = MessageStore.notificationsPerRun) throws -> MessageNotification {
         try requireTransportOwnership()
@@ -1765,8 +1725,7 @@ public actor MessageStore {
                                      groupMembers: isGroup ? try groupMembers(accountID: accountID, room: chatID, excluding: senderID) : [])
     }
 
-    /// A person (or room) as notifications name them: the title and avatar of their chat, when there is one, with a
-    /// linked contact's name and photo ahead of them (`ContactLink`), and the contact while the app can read it.
+    // A linked contact's name and photo go ahead of the chat's title and avatar; the contact only while the app can read it.
     private func participant(accountID: String, id: String) throws -> NotificationParticipant {
         let row = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(id)]).first
         let link = try contactLink(accountID: accountID, jid: id)
@@ -1775,8 +1734,7 @@ public actor MessageStore {
                                        contactIdentifier: link?.usableContactIdentifier)
     }
 
-    /// Other members a room's recent history shows (never the account itself), newest speakers first, at most eight.
-    /// Local knowledge only: a communication notification names them as the conversation's other recipients.
+    // Newest speakers first, never the account itself, at most eight; local knowledge only.
     private func groupMembers(accountID: String, room: String, excluding author: String) throws -> [NotificationParticipant] {
         try connection.query("""
             SELECT sender_id FROM (SELECT sender_id,MAX(sent_at) AS newest FROM (
@@ -1785,9 +1743,6 @@ public actor MessageStore {
             """, [.text(accountID), .text(room), .text(author)]).map { try participant(accountID: accountID, id: $0[0].string) }
     }
 
-    // MARK: Reaction notifications
-
-    /// This actor's newest stored reaction set on the same target wire ID, before a new event is inserted.
     private func latestReaction(accountID: String, reaction: AuthenticatedReaction) throws -> (id: String, reactions: [String])? {
         guard let row = try connection.query("""
             SELECT id,payload_json FROM message_events WHERE account_id=? AND chat_id=? AND actor_id=? AND target_wire_id=? AND kind='reaction'
@@ -1796,12 +1751,9 @@ public actor MessageStore {
         return (row[0].string, (try? JSONDecoder().decode([String].self, from: Data(row[1].string.utf8))) ?? [])
     }
 
-    /// Inside the commit transaction of an authenticated reaction. Another person's reaction to one of this account's
-    /// messages becomes (or replaces) one candidate per actor and target, holding the emoji they added. A removal, or a
-    /// replacement that drops emoji, trims or deletes the waiting candidate; delivered notifications of a withdrawn
-    /// reaction are removed by cleanup (`liveReactionNotifications`). Never for own reactions, reactions to other
-    /// people's messages, an event older than the actor's newest, a muted chat, history before the archive baseline, or
-    /// with the account's reaction switch off.
+    // Another person's reaction to an own message becomes or replaces one candidate per actor and target holding the added
+    // emoji; a removal trims or deletes it. Never for own reactions, others' messages, an event older than the actor's
+    // newest, a muted chat, history before the archive baseline, or with the account's switch off.
     private func queueReactionNotification(accountID: String, reaction: AuthenticatedReaction, previous: (id: String, reactions: [String])?) throws {
         guard reaction.actorID != accountID,
               let latest = try latestReaction(accountID: accountID, reaction: reaction), latest.id == reaction.id,
@@ -1832,8 +1784,8 @@ public actor MessageStore {
             """, key + [.text(try Self.reactionJSON(shown)), .real(reaction.updatedAt.timeIntervalSince1970)])
     }
 
-    /// No newer than the history baseline of the archive that holds the chat: fetched history, never news. Shared by
-    /// reactions and retained ciphertext, which have no message row to hold to `unreadCondition`.
+    // No newer than the history baseline of the chat's archive: fetched history, never news. Shared by reactions and
+    // retained ciphertext, which have no message row to hold to `unreadCondition`.
     private func isReactionHistory(accountID: String, chatID: String, at date: Date) throws -> Bool {
         try !connection.query("""
             SELECT 1 WHERE ?3 <= COALESCE((SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?2),
@@ -1841,8 +1793,8 @@ public actor MessageStore {
             """, [.text(accountID), .text(chatID), .real(date.timeIntervalSince1970)]).isEmpty
     }
 
-    /// Runs inside `pendingNotifications`' transaction: the newest reaction rows (at most `reactionNotificationsPerRun`
-    /// with a current target) oldest first, and every row considered, which the run deletes after posting.
+    // Inside `pendingNotifications`' transaction: the newest reaction rows with a current target, oldest first, and
+    // every row considered, which the run deletes after posting.
     private func pendingReactionNotifications(accountID: String) throws -> ([ReactionNotificationCandidate], [NotificationCandidateKey]) {
         let rows = try connection.query("""
             SELECT sequence,chat_id,actor_id,target_message_id,reactions_json,reacted_at FROM reaction_notification_candidates
@@ -1894,7 +1846,7 @@ public actor MessageStore {
         return live
     }
 
-    /// Test seam: each waiting reaction candidate as (actor, target message, emoji), oldest first.
+    // Test seam.
     func pendingReactionCandidates(accountID: String) throws -> [(actor: String, target: String, reactions: [String])] {
         try connection.query("SELECT actor_id,target_message_id,reactions_json FROM reaction_notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)])
             .map { ($0[0].string, $0[1].string, (try? JSONDecoder().decode([String].self, from: Data($0[2].string.utf8))) ?? []) }
@@ -2021,7 +1973,7 @@ public actor MessageStore {
             try connection.execute("DELETE FROM archive_rejections WHERE account_id=? AND sequence NOT IN (SELECT sequence FROM archive_rejections WHERE account_id=? ORDER BY sequence DESC LIMIT 1000)", [.text(accountID), .text(accountID)])
         }
     }
-    /// Raw values of every protocol `XMPPArchiveRejection` case.
+    // Raw values of every protocol `XMPPArchiveRejection` case.
     private static let archiveRejectionReasons: Set<String> = ["unverifiableEncryptedGroup", "foreignSender", "unsupportedDirectContent", "malformedEncryptedContent"]
     public func hasArchiveRejection(accountID: String, archiveID: String, messageID: String) throws -> Bool {
         try !connection.query("SELECT 1 FROM archive_rejections WHERE account_id=? AND archive_id=? AND message_id=?", [.text(accountID), .text(archiveID), .text(messageID)]).isEmpty
@@ -2092,16 +2044,12 @@ public actor MessageStore {
         }
     }
 
-    /// The first page of a newest-first sync: the archive's first forward checkpoint and its backfill cursor commit in
-    /// one transaction, so an interruption can never leave one without the other. Requires that the archive has no
-    /// checkpoint yet, or, with `replacing`, that its checkpoint is at that revision: a walk whose cursor the server no
-    /// longer holds and whose checkpoint has no `stamp` restarts from the newest page. A backfill row that is already
-    /// there (an interrupted first sync of an earlier build, or history behind the lost cursor) is replaced: paging back
-    /// from this newer page walks through whatever lies between, and reprocessing an entry is idempotent, whereas keeping
-    /// the older cursor would leave the entries between the two pages unfetched by either walk.
-    /// Returns the new checkpoint revision.
-    /// `stamp` is the archive time of the entry `cursor` names (`ArchiveCheckpoint.stamp`).
-    /// `historyThrough` is the newest archive timestamp in the page: the archive's read baseline (see `read_baselines`).
+    /// The first page of a newest-first sync: the archive's first forward checkpoint, its backfill cursor and its read
+    /// baseline (`historyThrough`, the newest archive time in the page) commit in one transaction. Requires no checkpoint
+    /// yet or, with `replacing`, one at that revision: a walk whose lost cursor has no `stamp` restarts from the newest
+    /// page. An existing backfill row is replaced: paging back from the newer page walks through whatever lies between and
+    /// reprocessing is idempotent, whereas the older cursor would leave the entries between the two pages unfetched.
+    /// `stamp` is the archive time of the entry `cursor` names. Returns the new checkpoint revision.
     @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String, stamp: Date? = nil,
                                                          oldestID: String, complete: Bool, historyThrough: Date? = nil,
                                                          replacing expectedRevision: Int? = nil) throws -> Int {
@@ -2137,12 +2085,10 @@ public actor MessageStore {
         try connection.transaction { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: .distantPast) }
     }
 
-    /// A room joined during a connection is first walked on the next one, whose first page would otherwise take
-    /// everything that arrived since the join for the history of a new member. Once the room admitted us, its archive's
-    /// newest time before the join (`historyThrough`, the archive's own clock; `.distantPast` for an empty archive) is
-    /// the room's read baseline instead: history from before it stays read, what followed is unread and alerts, and
-    /// the first walk keeps it. A room with a checkpoint already has its baseline (or predates baselines, when none may
-    /// be invented), so nothing changes for it.
+    /// A room joined during a connection is first walked on the next one, whose first page would take everything since
+    /// the join for a new member's history. Its archive's newest time before the join (`historyThrough`, the archive's
+    /// clock; `.distantPast` when empty) becomes the room's read baseline instead, so what followed is unread and alerts.
+    /// A room with a checkpoint keeps its baseline, or none when it predates baselines.
     public func recordJoinedRoom(accountID: String, room: String, historyThrough: Date) throws {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !room.isEmpty else { throw MessageStoreError.invalidValue }
@@ -2176,8 +2122,6 @@ public actor MessageStore {
             try bindGroupReference(accountID: accountID, room: room, messageID: id, stanzaID: stanzaID)
         }
     }
-
-    // MARK: Read state
 
     /// The newest message this account has read in a chat, on any of its devices; nil when nothing was ever read.
     public func readPointer(accountID: String, chatID: String) throws -> ReadPointer? {
@@ -2346,8 +2290,8 @@ public actor MessageStore {
         }
     }
 
-    /// First binding wins; a later, different id for the same message is ignored rather than trusted. Group messages
-    /// keep their room's id in `group_message_references`.
+    // First binding wins; a later, different id for the same message is ignored rather than trusted. Group messages keep
+    // their room's id in `group_message_references`.
     private func bindDirectStanzaID(accountID: String, messageID: String, stanzaID: String) throws {
         guard Self.validStanzaID(stanzaID) else { return }
         try connection.execute("""
@@ -2356,21 +2300,20 @@ public actor MessageStore {
             """, [.text(stanzaID), .text(accountID), .text(messageID)])
     }
 
-    /// The read test's joins for a message `m`: its chat's pointer `r` and the history baselines of the chat's own archive
-    /// (`bc`, a room) and of the account's archive (`ba`).
+    // Joins for message `m`: its chat's pointer `r` and the history baselines of the chat's own archive (`bc`, a room)
+    // and of the account's archive (`ba`).
     private static let readJoins = """
         LEFT JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
         LEFT JOIN read_baselines bc ON bc.account_id=m.account_id AND bc.archive_id=m.chat_id
         LEFT JOIN read_baselines ba ON ba.account_id=m.account_id AND ba.archive_id=m.account_id
         """
-    /// Unread: after the pointer (if any) and newer than the history baseline (if any). Written as two ranges so the
-    /// timeline index still bounds a count.
+    // After the pointer (if any) and newer than the history baseline (if any), as two ranges so the timeline index still
+    // bounds a count.
     private static let unreadCondition = """
         ((m.sent_at,m.id) > (COALESCE(r.read_sent_at,-1e308),COALESCE(r.read_message_id,'')) AND m.sent_at > COALESCE(bc.sent_at,ba.sent_at,-1e308))
         """
 
-    /// The first (newest) page of `archiveID` was history through `sentAt`. First baseline wins; candidates it covers go,
-    /// as a pointer's would. Runs inside the caller's transaction.
+    // First baseline wins; candidates it covers go, as a pointer's would. Runs inside the caller's transaction.
     private func recordReadBaseline(accountID: String, archiveID: String, sentAt: Date) throws {
         guard sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
         try connection.execute("INSERT INTO read_baselines(account_id,archive_id,sent_at) VALUES(?,?,?) ON CONFLICT(account_id,archive_id) DO NOTHING",
@@ -2397,8 +2340,8 @@ public actor MessageStore {
         !value.isEmpty && value.utf8.count <= 1024 && !value.contains(where: { $0.isWhitespace || $0.isNewline })
     }
 
-    /// Forward only, compared in SQL on the stored timestamp so no Date round trip can reorder equal instants. Removes the
-    /// notification candidates the pointer now covers: a read message never alerts. Runs inside the caller's transaction.
+    // Compared in SQL on the stored timestamp so no Date round trip can reorder equal instants. Removes the candidates
+    // the pointer now covers: a read message never alerts. Runs inside the caller's transaction.
     private func advanceReadPointer(accountID: String, target: StoredMessage, publish: Bool) throws -> Bool {
         let values: [Value] = [.text(accountID), .text(target.chatID), .text(target.id)]
         guard try connection.query("""
@@ -2429,7 +2372,7 @@ public actor MessageStore {
         return true
     }
 
-    /// An own XEP-0333 marker names a peer message by its wire id, resolved like every event target.
+    // An own XEP-0333 marker names a peer message by its wire id, resolved like every event target.
     private func advanceReadPointer(accountID: String, ownMarker: OwnReadMarker) throws -> Bool {
         guard !ownMarker.chatID.isEmpty, ownMarker.chatID != accountID, !ownMarker.targetWireID.isEmpty, ownMarker.targetWireID.utf8.count <= 1024,
               let target = try reactionTarget(accountID: accountID, chatID: ownMarker.chatID, wireID: ownMarker.targetWireID),
@@ -2661,7 +2604,7 @@ public actor MessageStore {
         }
     }
 
-    /// Queued, and for a reaction still bound to exactly the message it was queued against.
+    // Queued, and for a reaction still bound to exactly the message it was queued against.
     private func sealableUpdate(accountID: String, updateID: String) throws -> Bool {
         guard let update = try update(accountID: accountID, updateID: updateID), update.transportState == .queued else { return false }
         guard update.kind != .keyTransport else { return true }
@@ -2742,7 +2685,7 @@ public actor MessageStore {
         }
     }
 
-    /// Who may assert what about a message, by kind. Shape rules for the payload live here too.
+    // Who may assert what about a message, by kind, and the payload's shape.
     private static func validateEvent(accountID: String, event: MessageEvent, groupRoom: String? = nil) throws {
         guard !accountID.isEmpty, !event.chatID.isEmpty, event.chatID.utf8.count <= 3071,
               !event.id.isEmpty, event.id.utf8.count <= 1024, !event.targetWireID.isEmpty, event.targetWireID.utf8.count <= 1024,
@@ -2756,8 +2699,7 @@ public actor MessageStore {
                   reactions.count <= 12, Set(reactions).count == reactions.count,
                   reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) else { throw MessageStoreError.invalidValue }
         case .retraction, .correction:
-            // Direct chats only for now: us or the peer may claim; the read side keeps only the sender's claim.
-            // ponytail: rooms need a real-JID actor (muc_nonanonymous) and a room-scoped rule; add with group retract/edit.
+            // Direct chats only: us or the peer may claim; the read side keeps only the sender's claim.
             guard groupRoom == nil, event.actorID == accountID || event.actorID == event.chatID,
                   event.kind == .retraction || MessageEvent.correctionBody(event.payload) != nil else { throw MessageStoreError.invalidValue }
         case .delivered, .displayed:
@@ -2801,7 +2743,6 @@ public actor MessageStore {
               reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1_024 }) ?? true else { throw MessageStoreError.invalidValue }
     }
 
-    // ponytail: one extra lookup per message row (bounded by the 1000-row page); join when it shows in traces.
     private func decodeRow(_ row: [Value]) throws -> StoredMessage {
         var message = try Self.decode(row)
         if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id,sealed_account FROM attachments WHERE account_id=? AND message_id=?",
@@ -2820,7 +2761,7 @@ public actor MessageStore {
     }
 
     private static let linkPreviewColumns = "url,title,summary,image_data,image_type,image_alt,source"
-    /// `linkPreviewColumns` in order; nil when the row has no preview (a NULL url from an outer join).
+    // `linkPreviewColumns` in order; nil when the row has no preview (a NULL url from an outer join).
     private static func decodeLinkPreview(_ row: ArraySlice<Value>) -> StoredLinkPreview? {
         let values = Array(row)
         guard values.count == 7, let url = values[0].optionalString, let source = values[6].optionalString.flatMap(StoredLinkPreview.Source.init) else { return nil }
@@ -2861,7 +2802,7 @@ enum Value {
         if case let .integer(value) = self { return Double(value) }
         return 0
     }
-    /// A nullable REAL column holding seconds since 1970.
+    // A nullable REAL column holding seconds since 1970.
     var optionalDate: Date? {
         switch self {
         case .real(let seconds): Date(timeIntervalSince1970: seconds)
@@ -2871,11 +2812,11 @@ enum Value {
     }
 }
 
-/// Owned exclusively by its MessageStore actor after initialization.
+// Owned exclusively by its MessageStore actor after initialization.
 final class Connection: @unchecked Sendable {
     private(set) var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
-    /// A transaction is open (SQLite is out of autocommit mode).
+    // SQLite is out of autocommit mode.
     var inTransaction: Bool { handle.map { sqlite3_get_autocommit($0) == 0 } ?? false }
     init(url: URL, create: Bool = true) throws {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | (create ? SQLITE_OPEN_CREATE : 0)
@@ -2945,11 +2886,11 @@ final class Connection: @unchecked Sendable {
     }
 }
 
-/// No timer lease: suspension must not let another process send concurrently with a live socket.
-/// The sidecar is never removed, so all owners lock the same inode. CLOEXEC prevents inheritance
-/// into launched helpers; process death closes the descriptor and releases ownership.
+// No timer lease: suspension must not let another process send concurrently with a live socket. The sidecar is
+// never removed, so all owners lock the same inode. CLOEXEC prevents inheritance into launched helpers; process death
+// closes the descriptor and releases ownership.
 private final class TransportOwnership: @unchecked Sendable {
-    /// Locks held across the process, counted before the kernel call so the count never reads lower than the truth.
+    // Counted before the kernel call so the count never reads lower than the truth.
     static let locked = OSAllocatedUnfairLock(initialState: 0)
     private let descriptor: Int32
     private(set) var isHeld = false
@@ -2969,7 +2910,7 @@ private final class TransportOwnership: @unchecked Sendable {
         }
         isHeld = true
     }
-    /// Held until the kernel confirms the unlock.
+    // Held until the kernel confirms the unlock.
     func release() throws {
         guard isHeld else { return }
         guard flock(descriptor, LOCK_UN) == 0 else {
@@ -2985,7 +2926,7 @@ private final class TransportOwnership: @unchecked Sendable {
     }
 }
 
-/// Device and inode of a path: which file a connection opened, compared again once the lease is held.
+// Which file a connection opened, compared again once the lease is held.
 struct FileIdentity: Equatable, Sendable {
     let device: UInt64
     let inode: UInt64
@@ -3019,8 +2960,6 @@ public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
         try self.init(copy)
     }
 }
-
-// MARK: Link preview cache
 
 extension MessageStore: LinkPreviewCaching {
     private static let cacheColumns = "account_id,url,fetched_at,status,title,summary,image_alt,image_path,image_width,image_height"
@@ -3074,8 +3013,6 @@ extension MessageStore: LinkPreviewCaching {
         }
     }
 }
-
-// MARK: Contact links
 
 extension MessageStore {
     private static let contactLinkColumns =
@@ -3164,11 +3101,10 @@ extension MessageStore {
             """, [.text(accountID), .text(hash)]).isEmpty
     }
 
-    /// Removes every account's contact links from a store copy nobody has open: an account transfer's, before it is
-    /// packed and again before a restore commits. The identifiers name contacts of the device that made them, and
-    /// names and photos from Contacts are not transferred. Deleted rows are overwritten, not left in free pages.
-    /// Returns the photos no chat's verified avatar still names, whose files the caller leaves out; only well-formed
-    /// hashes, as the copy may come from an archive. A copy from before schema 27 has none.
+    /// Removes every account's contact links from a store copy nobody has open (an account transfer, before packing and
+    /// before a restore commits): the identifiers name another device's contacts. Deleted rows are overwritten, not left
+    /// in free pages. Returns the photos no chat's verified avatar still names, whose files the caller leaves out; only
+    /// well-formed hashes, as the copy may come from an archive.
     public static func removeContactLinks(fromSnapshotAt url: URL) throws -> [ContactLinkPhoto] {
         let copy = try Connection(url: url, create: false)
         defer { try? copy.close() }

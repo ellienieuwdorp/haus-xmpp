@@ -4,8 +4,8 @@ import MessageStore
 import XMPPProtocol
 @testable import OMEMO
 
-/// The one update drain (`OMEMOService.flushUpdates`) keeps the outbox contract of the message drain:
-/// a preflight failure releases the claim before any socket use, an uncertain write is never replayed.
+// The update drain keeps the outbox contract: a preflight failure releases the claim before any socket use, and an
+// uncertain write is never replayed.
 struct UpdateFlushTests {
     private enum Failure: Error { case socket }
     private func fixture(wire: String, _ body: (MessageStore, OMEMOService) async throws -> Void) async throws {
@@ -54,7 +54,7 @@ struct UpdateFlushTests {
 }
 
 
-/// Receipts and read markers are update kinds like any other: sealed plain for a legacy peer, exact bytes on replay.
+// Receipts and read markers seal plain for a legacy peer and replay only as exact bytes.
 struct ReceiptFlushTests {
     private func fixture(_ body: (MessageStore, OMEMOService) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "receipt-flush-\(UUID())")

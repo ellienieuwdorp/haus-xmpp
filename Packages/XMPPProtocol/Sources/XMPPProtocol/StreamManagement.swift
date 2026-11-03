@@ -4,29 +4,29 @@ import os
 /// One outbound stanza slot. Every journaled stanza consumes a sequence number because the server
 /// counts it in `h`, but only messages and presence keep bytes: an IQ is never replayed on resume.
 public struct XMPPStreamJournalEntry: Codable, Sendable, Equatable {
-    /// `iq` is every slot that is never replayed: IQs, and hint-only `no-store` messages (chat states), which owe
-    /// nothing after a resume. The raw value stays `iq` so a build that predates hints still reads the journal.
+    /// Slots that are never replayed: IQs and hint-only `no-store` messages (chat states). The raw value stays `iq` so
+    /// journals written before hint slots still decode.
     public enum Kind: String, Codable, Sendable { case message, presence, iq }
     public let sequence: UInt64
     public let kind: Kind
-    /// Exact wire bytes for message and presence entries; nil for iq entries, which are never replayed.
-    /// Rows written before `kind` existed may still carry iq bytes until they are acknowledged.
+    /// Exact wire bytes for message and presence entries; nil for iq entries. Older iq rows may carry bytes until
+    /// acknowledged.
     public let xml: String?
-    /// Only message entries carry an ID; it is what the persistence layer acknowledges.
+    /// Only message entries carry an ID, which the persistence layer acknowledges.
     public let messageID: String?
 
     public init(sequence: UInt64, kind: Kind, xml: String?, messageID: String?) {
         self.sequence = sequence; self.kind = kind; self.xml = xml; self.messageID = messageID
     }
 
-    /// Derives `kind` from the stanza's leading element name and keeps the bytes as given.
+    /// Derives `kind` from the stanza's leading element name.
     public init(sequence: UInt64, xml: String, messageID: String?) {
         self.init(sequence: sequence, kind: Self.derivedKind(xml: xml, messageID: messageID), xml: xml, messageID: messageID)
     }
 
     private enum CodingKeys: String, CodingKey { case sequence, kind, xml, messageID }
 
-    /// Rows written before `kind` existed decode with a derived kind; the JSON shape is otherwise unchanged.
+    /// Rows without `kind` decode with a derived kind.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sequence = try container.decode(UInt64.self, forKey: .sequence)
@@ -49,16 +49,15 @@ public struct XMPPStreamManagementSnapshot: Codable, Sendable, Equatable {
     public var accountID: String
     public var fullJID: String
     public var streamID: String?
-    /// The last contact plus `resumeTimeoutSeconds`: where the server's advertised window ends. Resumption is still
-    /// attempted after it (`StreamManagement.attemptsResume`).
+    /// The last contact plus `resumeTimeoutSeconds`. Resumption is still attempted after it
+    /// (`StreamManagement.attemptsResume`).
     public var expiresAt: Date?
     /// The server's `<enabled max='…'/>`, capped at `StreamManagement.maxResumeTimeout`; nil when it named none.
     public var resumeTimeoutSeconds: UInt32?
-    /// What this session last announced (presence and CSI). A resume repeats presence only when it changed: every
-    /// presence reaches contacts and the account's other resources, and a push-enabled hibernating one is pushed for it.
+    /// What this session last announced. A resume repeats presence only when it changed: every presence reaches
+    /// contacts and the account's other resources, and pushes a hibernating one.
     public var availability: XMPPAvailability?
-    /// The caps `ver` that presence carried. A resume after an update changed the feature list repeats presence once,
-    /// so contacts learn the new features without waiting for the next availability change.
+    /// The caps `ver` presence carried. A resume after a feature change repeats presence once.
     public var capabilities: String?
     public var inboundHandled: UInt64
     public var outboundSent: UInt64
@@ -95,7 +94,6 @@ public struct XMPPInboundToken: Sendable, Equatable {
 
 public enum XMPPStreamManagementError: Error, Sendable { case invalidState, invalidAcknowledgement, journalFull, staleToken }
 
-/// A saved session the persistence holds at `revision` but cannot decode.
 public struct XMPPStreamManagementUnreadable: Error, Sendable, Equatable {
     public let revision: Int
     public init(revision: Int) { self.revision = revision }
@@ -113,43 +111,38 @@ actor XMPPAsyncGate {
     }
 }
 
-/// The gate serializes persistence despite actor reentrancy. Failed saves never publish a candidate.
-///
-/// The inbound handled counter lives in memory (`handledContiguous`) and is persisted lazily at flush
-/// points. Invariant: an advertised `h` never exceeds the persisted `snapshot.inboundHandled`; the only
-/// sources for an advertised value are `flushHandled()` and a restored snapshot. A persisted counter
-/// that lags memory only makes the server redeliver stanzas whose dispositions are already durable.
+// The gate serializes persistence despite reentrancy; a failed save never publishes a candidate. An advertised `h`
+// never exceeds the persisted `inboundHandled` (only `flushHandled()` or a restored snapshot supply it); a lagging
+// persisted counter only redelivers stanzas whose dispositions are already durable.
 actor StreamManagement {
     static let maxJournalEntries = 5_000
     static let maxReplayableEntries = 2_000
     static let maxReplayableBytes = 4_194_304
     static let inboundWindow: UInt64 = 2_000
     static let handledFlushInterval: UInt64 = 64
-    /// Sanity cap on the server's `<enabled max='…'/>` (XEP-0198 sets no bound): a week, far beyond any default
-    /// (Prosody 600 s, ejabberd 300 s), so a garbled or absurd value cannot keep a dead session looking alive.
+    // XEP-0198 sets no bound on `<enabled max='…'/>`; a week is far beyond any default (Prosody 600 s, ejabberd 300 s),
+    // so a garbled value cannot keep a dead session looking alive.
     static let maxResumeTimeout: UInt32 = 604_800
-    /// How long after the last contact a resume is still attempted, whatever the server advertised. The advertised
-    /// `max` is a floor, not the real lifetime: Prosody's mod_cloud_notify keeps a push-enabled session hibernating up
-    /// to 72 h (`push_max_hibernation_timeout`) while answering `max='600'`. A refused resume costs one round trip and
-    /// falls through to a fresh bind; a skipped one costs the session's push registration and room occupancy.
+    // The advertised `max` is a floor: Prosody's mod_cloud_notify keeps a push-enabled session hibernating up to 72 h
+    // (`push_max_hibernation_timeout`) while answering `max='600'`. A refused resume costs one round trip; a skipped
+    // one costs the push registration and room occupancy.
     static let resumeAttemptWindow: TimeInterval = 259_200
 
     let persistence: any XMPPStreamManagementPersistence
     private let gate = XMPPAsyncGate()
     private var snapshot: XMPPStreamManagementSnapshot?
-    /// The revision of a saved session `load` could not decode; the next `enable` replaces it.
+    // A saved session `load` could not decode; the next `enable` replaces it.
     private var unreadableRevision: Int?
     private var active = false
     private var received: UInt64 = 0
-    /// Always >= the persisted `snapshot.inboundHandled`; every member of `completed` is above it.
+    // Always >= the persisted `snapshot.inboundHandled`; every member of `completed` is above it.
     private var handledContiguous: UInt64 = 0
     private var completed: Set<UInt64> = []
     private var session = UUID()
     init(_ persistence: any XMPPStreamManagementPersistence) { self.persistence = persistence }
 
-    /// The saved session to resume, or nil to bind fresh. A session that is unreadable, fails validation or whose
-    /// replay policy throws is never resumed: binding fresh is always possible, and `enable` replaces it. Throwing
-    /// would fail every connect until the resume window ends. Only a session saved for another account throws.
+    // An unreadable or invalid session, or one whose replay policy throws, binds fresh and `enable` replaces it;
+    // throwing would fail every connect until the resume window ends. Only a session saved for another account throws.
     func restore(accountID: String) async throws -> XMPPStreamManagementSnapshot? {
         await gate.enter()
         do {
@@ -162,7 +155,7 @@ actor StreamManagement {
             }
             var valid = false
             if let saved = loaded {
-                // In normal form: a session saved by a build that kept the typed capitals is still this account's.
+                // Normal form, so a session saved with the typed capitals still matches.
                 guard let account = OMEMOWire.bareJID(accountID), OMEMOWire.bareJID(saved.accountID) == account else { throw XMPPStreamManagementError.invalidState }
                 valid = Self.validates(saved, account: account)
                 if valid { loaded = Self.withHintSlots(saved) } else { Self.log.error("Saved stream session invalid; binding fresh") }
@@ -189,15 +182,14 @@ actor StreamManagement {
                saved.journal.count <= maxJournalEntries,
                replayable.count <= maxReplayableEntries,
                saved.journal.enumerated().allSatisfy({ $0.element.sequence == saved.outboundAcknowledged + UInt64($0.offset) + 1 }),
-               // A message or presence entry must carry bytes; an iq entry may still carry legacy bytes.
+               // A message or presence entry must carry bytes; an iq entry may carry legacy bytes.
                saved.journal.allSatisfy({ $0.kind == .iq || $0.xml != nil }),
                replayable.reduce(0, { $0 + ($1.xml?.utf8.count ?? 0) }) <= maxReplayableBytes else { return false }
         return true
     }
 
-    /// A hint-only `no-store` message (a chat state) as an unreplayed slot. Builds before hint slots journaled chat
-    /// states as messages with an ID, which no replay policy can vouch for: one typing notification refused the resume.
-    /// Only entries naming `no-store` are parsed; encrypted messages carry the `store` hint and stay as they are.
+    // Older journals stored chat states as messages with an ID, which no replay policy can vouch for. Only entries
+    // naming `no-store` are parsed; encrypted messages carry the `store` hint and stay as they are.
     private static func withHintSlots(_ saved: XMPPStreamManagementSnapshot) -> XMPPStreamManagementSnapshot {
         var next = saved
         next.journal = saved.journal.map { entry in
@@ -210,7 +202,7 @@ actor StreamManagement {
 
     static let hintsNamespace = "urn:xmpp:hints"
 
-    /// A message the server must not store that carries nothing but chat states and hints: nothing to deliver late.
+    // `no-store` with nothing but chat states and hints: nothing to deliver late.
     static func isHintOnly(_ node: XMLNode) -> Bool {
         node.name == "message" && node.children.contains { $0.name == "no-store" && $0.namespace == hintsNamespace }
             && node.children.allSatisfy { $0.namespace == hintsNamespace || $0.namespace == XMPPChatState.namespace }
@@ -225,9 +217,8 @@ actor StreamManagement {
 
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "xmpp")
 
-    /// Whether a saved session is worth a `<resume/>`. `expiresAt` is the last contact plus the server's advertised
-    /// timeout, so the last contact is recoverable from it; the attempt window runs from there for the longer of that
-    /// timeout and `resumeAttemptWindow`. A snapshot without a recorded timeout is always tried: the server decides.
+    // `expiresAt` minus the advertised timeout recovers the last contact; the window runs from there for the longer of
+    // that timeout and `resumeAttemptWindow`. Without a recorded timeout, always try: the server decides.
     static func attemptsResume(_ snapshot: XMPPStreamManagementSnapshot, now: Date) -> Bool {
         guard snapshot.streamID != nil else { return false }
         guard let expiresAt = snapshot.expiresAt, let timeout = snapshot.resumeTimeoutSeconds else { return true }
@@ -235,8 +226,8 @@ actor StreamManagement {
         return now < lastContact.addingTimeInterval(max(TimeInterval(timeout), resumeAttemptWindow))
     }
 
-    /// `resumeTimeoutSeconds` is the server's advertised `max` (capped by the caller); every later commit measures
-    /// `expiresAt` from its own time, so it tracks the last contact rather than the last server acknowledgement.
+    // Every later commit measures `expiresAt` from its own time, so it tracks the last contact rather than the last
+    // server acknowledgement.
     func enable(accountID: String, fullJID: String, streamID: String?, resumeTimeoutSeconds: UInt32? = nil) async throws {
         await gate.enter()
         do {
@@ -253,8 +244,7 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Journals one outbound stanza before its socket write. IQs and hint-only messages occupy a sequence slot
-    /// without bytes or an ID.
+    // Journals before the socket write. IQs and hint-only messages take a sequence slot without bytes or an ID.
     func record(_ xml: String) async throws {
         await gate.enter()
         do {
@@ -279,23 +269,17 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Trims by the server's count across all entries and returns the replayable (message and
-    /// presence) remainder in sequence order. IQ entries are trimmed but never returned.
-    ///
-    /// On resume the unacknowledged IQ slots are dropped, because the client never retransmits them
-    /// and the server never received them (its `h` is below them). The replayable remainder is
-    /// renumbered contiguously from the server's count, and `outboundSent` is reset to match, in
-    /// the same commit and before any replayed byte is written. The server then counts exactly the
-    /// stanzas we retransmit, so later `<a h>` values keep trimming the right entries.
+    // On resume, unacknowledged IQ slots are dropped (never retransmitted, never received) and the replayable rest is
+    // renumbered from the server's count with `outboundSent` reset, in one commit before any replayed byte is written,
+    // so later `<a h>` values keep trimming the right entries.
     func acknowledge(_ h: UInt32, resumed: Bool = false) async throws -> [XMPPStreamJournalEntry] {
         await gate.enter()
         do {
             guard (active || resumed), var next = snapshot else { throw XMPPStreamManagementError.invalidState }
             let delta = UInt64(h &- UInt32(truncatingIfNeeded: next.outboundAcknowledged))
             guard delta <= UInt64(next.journal.count) else {
-                // The server counts stanzas we never sent, and would answer a later resume with the same count: retire
-                // the session so the next connect binds fresh. Best effort: if the commit fails, that resume meets the
-                // count again and retires it then.
+                // The server counts stanzas we never sent and would answer a later resume the same way: retire the
+                // session so the next connect binds fresh. If this commit fails, that resume retires it then.
                 active = false
                 if next.streamID != nil {
                     next.streamID = nil
@@ -327,7 +311,7 @@ actor StreamManagement {
         return .init(session: session, sequence: received)
     }
 
-    /// Records one durable disposition in memory; persists only every `handledFlushInterval` advances.
+    // Persists only every `handledFlushInterval` advances.
     func handled(_ token: XMPPInboundToken) async throws {
         await gate.enter()
         do {
@@ -344,8 +328,7 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Records a page's durable dispositions together: validates every token before inserting any,
-    /// advances once and commits once when the counter is ahead of the persisted value.
+    // Validates every token before inserting any; commits once.
     func handled(_ tokens: [XMPPInboundToken]) async throws {
         await gate.enter()
         do {
@@ -358,8 +341,7 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Persists the in-memory contiguous counter if it moved and returns the persisted value.
-    /// The only source for an advertised h. Never commits when SM is inactive or nothing moved.
+    // The only source for an advertised h. Never commits when SM is inactive or nothing moved.
     func flushHandled() async throws -> UInt32 {
         await gate.enter()
         do {
@@ -370,8 +352,8 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// A deliberate disconnect: persists the handled count and the time of this last contact in one commit, even
-    /// when the counter did not move, and returns the persisted count to advertise in a final `<a/>`.
+    // Persists the handled count and the last-contact time in one commit, even when the counter did not move, for the
+    // final `<a/>`.
     func detach() async throws -> UInt32 {
         await gate.enter()
         do {
@@ -385,7 +367,6 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Records what the session just announced, in the snapshot a later resume starts from.
     func recordAvailability(_ availability: XMPPAvailability) async throws {
         await gate.enter()
         do {
@@ -407,14 +388,14 @@ actor StreamManagement {
 
     func persistedHandledCount() -> UInt32 { UInt32(truncatingIfNeeded: snapshot?.inboundHandled ?? 0) }
 
-    /// Our outbound count as the server counts it (modulo 2^32), for a `handled-count-too-high` error.
+    // Modulo 2^32, as the server counts it, for a `handled-count-too-high` error.
     func sentCount() -> UInt32 { UInt32(truncatingIfNeeded: snapshot?.outboundSent ?? 0) }
 
     private func advanceHandled() {
         while handledContiguous < UInt64.max, completed.remove(handledContiguous + 1) != nil { handledContiguous += 1 }
     }
 
-    /// Caller holds the gate.
+    // Caller holds the gate.
     private func commitHandled() async throws {
         guard var next = snapshot, next.inboundHandled != handledContiguous else { return }
         next.inboundHandled = handledContiguous

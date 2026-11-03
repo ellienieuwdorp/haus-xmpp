@@ -1,8 +1,8 @@
 import Foundation
 import MessageStore
 
-/// One in-process sender. The database owns messages and attempt identity, never the socket.
-/// No SM acknowledgment or recipient delivery guarantee is implied by a completed transport write.
+/// One in-process sender. The database owns messages and attempt identity. A completed transport write implies
+/// neither an SM acknowledgement nor recipient delivery.
 public actor OutboxSender {
     private let store: MessageStore
     private var running = false

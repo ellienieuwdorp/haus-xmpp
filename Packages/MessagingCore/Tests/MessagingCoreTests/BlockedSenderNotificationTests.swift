@@ -6,7 +6,7 @@ import XMPPProtocol
 
 private let account = "alice@example.org"
 
-/// A blocked address never alerts or badges, whichever process presents, and its candidates are still claimed.
+// A blocked address never alerts or badges, whichever process presents, and its candidates are still claimed.
 struct BlockedSenderNotificationTests {
     @Test func aRunPostsNothingFromABlockedAddressAndClaimsIt() async throws {
         try await withStore { store in
@@ -40,7 +40,7 @@ struct BlockedSenderNotificationTests {
         }
     }
 
-    /// In a room the chat is not the sender: a blocked member's message is left out, the room's others are not.
+    // In a room the chat is not the sender: a blocked member's message is left out, the room's others are not.
     @Test func aBlockedRoomMemberIsLeftOutButTheRoomIsNot() {
         func candidate(chat: String, sender: String, group: Bool) -> NotificationCandidate {
             let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chat, senderID: sender, body: "Hi",
