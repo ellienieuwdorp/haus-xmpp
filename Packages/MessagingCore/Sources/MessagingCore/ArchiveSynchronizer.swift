@@ -49,9 +49,10 @@ public struct ArchiveSynchronizer: Sendable {
         return try await synchronize(account: account, operations: operations)
     }
 
-    /// Commits each page (messages, cursor, acknowledgement) before the next fetch. Cancellation between pages returns
-    /// `.stopped`; a failure or cancellation inside a page disconnects, because a fetched page may own unhandled
-    /// stream tokens.
+    /// Pages backwards from the archive's backfill cursor, committing each page (messages, cursor, acknowledgement)
+    /// before the next fetch. Cancellation between pages returns `.stopped`; a failure or cancellation inside a page
+    /// disconnects, because a fetched page may own unhandled stream tokens. App only: the notification extension walks
+    /// forward and never backfills.
     public func backfill(account: String, archive: String?, pageBudget: Int, client: XMPPClient, encryption: OMEMOService,
                          progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws -> BackfillOutcome {
         try await backfill(account: account, archive: archive, pageBudget: pageBudget,

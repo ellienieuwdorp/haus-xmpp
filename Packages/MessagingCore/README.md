@@ -16,12 +16,12 @@ Coordination across MessageStore, XMPPProtocol and OMEMO, shared by the app, its
 ## Invariants
 
 - Send and recovery run only under the store's transport lease. Extensions wait for it for a bounded time and never steal or expire it.
-- A completed socket write is unconfirmed. Only an authenticated stream-management acknowledgement marks a message as accepted by the server, and a stale callback cannot regress it. Cancellation returns a claim to the queue only before the transport was invoked.
+- A completed socket write is unconfirmed. Only an authenticated stream-management acknowledgement, or an exact-ciphertext match in the validated own archive, marks a message as accepted by the server, and a stale callback cannot regress it. Cancellation returns a claim to the queue only before the transport was invoked.
 - Retries send the exact saved ciphertext; nothing that may have been sent is regenerated. Resumption replays only journal entries that are exactly one durable outgoing row; anything else binds fresh.
-- An inbound stanza is durably disposed (stored, retained ciphertext, placeholder or rejection) before the stream-management barrier after it is acknowledged. Otherwise the barrier is refused and the stream ends.
+- Every inbound stanza is durably disposed (stored, retained ciphertext, placeholder or rejection) before the stream-management barrier that follows it is acknowledged. A stanza without a durable disposition makes the barrier refuse and the stream end.
 - An archive page's message and pending-ciphertext commits precede its checkpoint, which precedes the page's acknowledgement. On any error or cancellation inside a page the connection is closed, so no unhandled token gap remains on a live stream.
 - A room refusal or membership error ends only that room's walk and leaves its checkpoint unchanged. Malformed responses, storage failures and transport failures abort and disconnect. Room catch-up never joins rooms or approves fingerprints, and a nickname alone never authenticates a sender.
-- Unverifiable or unsupported encrypted content gets a content-free rejection record or placeholder and is never shown as authenticated text. Plaintext is never sent and never shown as authenticated.
+- Unverifiable or unsupported encrypted content gets a content-free rejection record or placeholder and is never shown as authenticated text. Message text is never sent in plaintext. In legacy-profile chats only reactions, receipts and retractions go plain, and nothing plain is shown as authenticated.
 - Notifications carry opaque, account-scoped identifiers only. A notification run that cannot settle shows the generic fallback, never a suppressed alert. With previews off no name, avatar or contact reaches the system.
 
 ## Tests
