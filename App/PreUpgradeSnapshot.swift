@@ -10,7 +10,8 @@ import os
 // copy, because only that copy holds the encryption sessions contacts used since.
 struct PreUpgradeSnapshot: Sendable {
     // The schema the last release writes, the newest a replaced build can open. A store at or below it is copied before
-    // migrating; one above it (a migration that stopped part way) holds nothing a previous build could read back.
+    // migrating. Each migration commits with its user_version, so a store above it was left by an unreleased build,
+    // which no release could open again.
     static let previousReleaseSchema = 27
     // Only suggested: the wall clock can jump and no monotonic clock survives a restart.
     static let suggestedLifetime: TimeInterval = 14 * 24 * 60 * 60
