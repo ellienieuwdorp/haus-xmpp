@@ -1925,13 +1925,13 @@
   "file_length": [
    [
     "",
-    733
+    681
    ]
   ],
   "type_body_length": [
    [
     "final class MacTimelineMessageCell: NSView, NSTextViewDelegate {",
-    406
+    404
    ]
   ]
  },
