@@ -454,8 +454,9 @@ import SwiftUI
             + "widened again \(timeline.table.debugText(of: reader.id, edited: edited))")
     }
 
-    // An animation of the chip and the jump button can cover the window's whole layout, so SwiftUI re-widens the window
-    // every frame until AppKit aborts.
+    // The chip and the jump button come in during a resize: a window-wide animated transaction there would animate the
+    // window's layout, and SwiftUI would re-widen the window every frame until AppKit aborts. Logs whether the width
+    // holds.
     private static func overlayResize(_ argument: String, timeline: MacTimelineController, window: NSWindow?) async {
         let size = argument.split(separator: "x").compactMap { Double($0) }
         guard size.count == 2, let window else {

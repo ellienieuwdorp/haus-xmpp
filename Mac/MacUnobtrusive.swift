@@ -3,8 +3,8 @@ import AppKit
 import ObjectiveC
 import SwiftUI
 
-// `-haus-unobtrusive` (Debug): no Dock icon or menu bar, never active, windows click-through and parked off-screen
-// before first shown; captures still render (`cacheDisplay` draws views). No window is key, so focus is simulated.
+// `-haus-unobtrusive` (Debug): no Dock icon or menu bar, never active, windows transparent, click-through and parked
+// off-screen before first shown; captures still render (`cacheDisplay`). No window is key, so focus is simulated.
 @MainActor enum MacUnobtrusive {
     static let isOn = ProcessInfo.processInfo.arguments.contains("-haus-unobtrusive")
     private static var observers: [any NSObjectProtocol] = []

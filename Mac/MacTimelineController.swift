@@ -12,8 +12,8 @@ import SwiftUI
     @ObservationIgnored private(set) var loadingEarlier = false
     private(set) var isGroup = false
     // This and `dayChip` change from scroll and resize callbacks, so their views use `.animation(_:value:)`, never
-    // `withAnimation`: an animated transaction during a window resize made SwiftUI re-widen the window every frame
-    // until AppKit aborted.
+    // `withAnimation`: an animated transaction during a window resize would make SwiftUI re-widen the window every
+    // frame until AppKit aborts.
     private(set) var showsJumpToNewest = false
     private(set) var highlightedID: String?
     private(set) var dayChip: TimelineScrollPolicy.DayChip?

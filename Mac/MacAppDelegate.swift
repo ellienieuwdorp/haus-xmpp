@@ -33,12 +33,12 @@ import SwiftUI
     }
     #endif
 
-    // Set before launching finishes, so a launch by a click on a notification (or its Reply or Mark as Read) delivers
-    // it.
     func applicationWillFinishLaunching(_ notification: Notification) {
         #if DEBUG
         MacDebugHooks.prepareLaunch()
         #endif
+        // Before launching finishes, so a launch by a click on a notification (or its Reply or Mark as Read) delivers
+        // it here.
         PushRegistration.shared.installNotificationDelegate()
         // The share extension draws its send button in the accent chosen here.
         AppearanceStore.shared.mirror = SharedSession.groupDefaults

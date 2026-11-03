@@ -206,7 +206,8 @@ struct MacDeviceReviewSheet: View {
         device.jid == model.accountID ? "Your account" : isGroup ? device.jid : "\(title)’s device"
     }
 
-    // A device ID can be listed once per version (its OMEMO 2 record holding messages while the chat sends legacy).
+    // A device ID can be listed once per version (its OMEMO 2 record holding messages while the chat sends legacy), so
+    // the spoken label and the key name the version too.
     private func spoken(_ device: EncryptionDevice) -> String { "\(String(device.deviceID)), \(device.profile.label)" }
     private func key(_ device: EncryptionDevice) -> String { "\(device.deviceID).\(device.profile.rawValue)" }
 

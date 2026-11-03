@@ -120,7 +120,7 @@ private struct MacSearchField: NSViewRepresentable {
         return field
     }
 
-    // Left to itself, a hosted field's height follows the proposal, and a narrow column made the bar as tall as the
+    // Left to itself, a hosted field's height follows the proposal, and a narrow column makes the bar as tall as the
     // timeline.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSSearchField, context: Context) -> CGSize? {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 200

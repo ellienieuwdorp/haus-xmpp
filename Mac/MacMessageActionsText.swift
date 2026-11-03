@@ -16,7 +16,7 @@ final class BubbleTextView: NSTextView {
     nonisolated static let narrowestText: CGFloat = 120 - 2 * 12
 
     // Only the bubble under the pointer registers cursor rects: every text in sight re-registering them on each
-    // scrolled frame cost a window-server call per bubble.
+    // scrolled frame would cost a window-server call per bubble.
     var showsCursor = false {
         didSet {
             guard showsCursor != oldValue else { return }
@@ -29,7 +29,7 @@ final class BubbleTextView: NSTextView {
     }
 
     // A text view resized while it holds a caret or a selection scrolls its enclosing scroll view, which in a reused
-    // cell moved the reader's rows.
+    // cell would move the reader's rows.
     override func scrollToVisible(_ rect: NSRect) -> Bool { false }
 
     // TextKit 1 for both the live views and `MacRowMeasurer`, so the two lay lines out alike.

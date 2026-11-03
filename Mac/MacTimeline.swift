@@ -1640,6 +1640,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
 
     func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
 
+    // A message row's height is only looked up or estimated, never measured here: a record and its row's height change
+    // together (`publish`).
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         guard row < entries.count else { return 1 }
         switch entries[row] {
