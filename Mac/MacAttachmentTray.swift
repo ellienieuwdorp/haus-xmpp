@@ -1,4 +1,5 @@
 import AppKit
+import MessageStore
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -69,7 +70,7 @@ struct MacTrayItem: Identifiable {
                 } catch {
                     state.tray.removeAll { $0.id == item.id }
                     guard model.accountID == account else { continue }
-                    model.error = (error as? LocalizedError)?.errorDescription ?? "\(item.label) could not be attached."
+                    model.error = (error as? any LocalizedError)?.errorDescription ?? "\(item.label) could not be attached."
                 }
             }
         }

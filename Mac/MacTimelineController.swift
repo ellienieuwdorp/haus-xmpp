@@ -1,4 +1,5 @@
 import AppKit
+import MessageStore
 import SwiftUI
 
 // Owns the open chat's rows and what the bars and menus read; `MacTimelineTableController` shows them. Each observed

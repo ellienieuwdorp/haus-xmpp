@@ -55,7 +55,7 @@ final class AppearanceUITests: XCTestCase {
         done.tap()
     }
 
-    private func back(_ app: XCUIApplication) {
+    @MainActor private func back(_ app: XCUIApplication) {
         let back = app.navigationBars.buttons["BackButton"].firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 5))
         back.tap()
@@ -63,7 +63,7 @@ final class AppearanceUITests: XCTestCase {
 
     @MainActor private func attach(_ app: XCUIApplication, _ name: String) { capture(app, name, settle: 0.6) }
 
-    private func sample(_ app: XCUIApplication, _ toggle: XCUIElement) -> (track: RGB, background: RGB) {
+    @MainActor private func sample(_ app: XCUIApplication, _ toggle: XCUIElement) -> (track: RGB, background: RGB) {
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6))
         let image = app.screenshot().image

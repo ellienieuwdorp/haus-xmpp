@@ -10,7 +10,7 @@ import MessagingCore
 @MainActor enum NotificationHarness {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("-notification-harness") }
     private nonisolated static let account = "me@preview.local"
-    private static var observer: NSObjectProtocol?
+    private static var observer: (any NSObjectProtocol)?
 
     static func install() {
         guard isRequested, observer == nil else { return }

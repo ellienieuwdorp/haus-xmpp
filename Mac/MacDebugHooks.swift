@@ -1,10 +1,12 @@
 #if DEBUG
 import AppKit
+import MessageStore
 import Security
 import SQLite3
 import MessagingCore
 import OMEMO
 import SwiftUI
+import XMPPProtocol
 
 // Debug-only launch arguments and tour steps for checking the Mac app without driving its UI. The sandboxed app cannot
 // write to a directory named on the command line, so a sandboxed capture writes each file to standard output as
@@ -60,10 +62,7 @@ import SwiftUI
     }
 
     private static func emptyTestStore() {
-        guard let directory = testStoreDirectory() else {
-            log("fresh store: XMPP_UI_TEST_STORE is not a session ID; nothing emptied")
-            return
-        }
+        guard let directory = testStoreDirectory() else { return log("fresh store: XMPP_UI_TEST_STORE is not a session ID; nothing emptied") }
         let id = directory.lastPathComponent
         if FileManager.default.fileExists(atPath: directory.path) {
             do { try FileManager.default.removeItem(at: directory) } catch { log("fresh store: could not empty the session's store: \(error)") }

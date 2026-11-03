@@ -151,13 +151,13 @@ final class MacTimelineTableView: NSTableView, @preconcurrency NSAccessibilityEl
     }
 
     @objc(accessibilityRows) func readingRows() -> [Any]? {
-        readingOrder(super.accessibilityChildren())?.filter { ($0 as? NSObject)?.accessibilityAttributeValue(.role) as? String == NSAccessibility.Role.row.rawValue }
+        readingOrder(super.accessibilityChildren())?.filter { ($0 as? NSObject)?.legacyAccessibilityValue(.role) as? String == NSAccessibility.Role.row.rawValue }
     }
 
     // The table's row elements answer only the older attribute API.
     private static func rowIndex(_ row: Any) -> Int? {
-        guard let row = row as? NSObject, row.accessibilityAttributeValue(.role) as? String == NSAccessibility.Role.row.rawValue else { return nil }
-        return row.accessibilityAttributeValue(.index) as? Int
+        guard let row = row as? NSObject, row.legacyAccessibilityValue(.role) as? String == NSAccessibility.Role.row.rawValue else { return nil }
+        return row.legacyAccessibilityValue(.index) as? Int
     }
 
     @objc(accessibilityVisibleRows) func readingVisibleRows() -> [Any]? {
@@ -412,7 +412,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var tableHasFocus = false
     let replySwipe = MacReplySwipe()
     private var scrollMonitor: Any?
-    private var resignObservers: [NSObjectProtocol] = []
+    private var resignObservers: [any NSObjectProtocol] = []
     private var pendingReload: MacTimelinePlace? = .newest
 
     init() {

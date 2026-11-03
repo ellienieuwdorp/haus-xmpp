@@ -33,7 +33,7 @@ actor LoopbackServer {
         let parameters = NWParameters(tls: tls)
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters)
-        let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+        let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, any Error>) in
             let once = Once(continuation)
             listener.stateUpdateHandler = { state in
                 switch state {
@@ -188,9 +188,9 @@ actor LoopbackServer {
 
 private final class Once<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<Value, Error>?
-    init(_ continuation: CheckedContinuation<Value, Error>) { self.continuation = continuation }
-    func resume(_ result: Result<Value, Error>) {
+    private var continuation: CheckedContinuation<Value, any Error>?
+    init(_ continuation: CheckedContinuation<Value, any Error>) { self.continuation = continuation }
+    func resume(_ result: Result<Value, any Error>) {
         lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
         pending?.resume(with: result)
     }

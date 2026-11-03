@@ -1,5 +1,6 @@
 import OMEMO
 import SwiftUI
+import XMPPProtocol
 
 // Later hides it until what waits changes.
 struct MacDeviceReviewBanner: View {

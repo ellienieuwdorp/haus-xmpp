@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import MessageStore
 import SwiftUI
 
 // Scroll events cannot be staged here (the off-screen window gets none from AppKit), so `drag` moves the clip view as
@@ -8,10 +9,7 @@ import SwiftUI
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         // The window's own cost too, with no chat open.
         if name == "resize-sweep" { return await resizeSweep(argument, window: window) }
-        guard let timeline = MacTimelineController.current else {
-            MacDebugHooks.log("tour \(name): no open timeline")
-            return
-        }
+        guard let timeline = MacTimelineController.current else { return MacDebugHooks.log("tour \(name): no open timeline") }
         switch name {
         case "scroll":
             let key: MacTimelineController.KeyScroll? = switch argument {

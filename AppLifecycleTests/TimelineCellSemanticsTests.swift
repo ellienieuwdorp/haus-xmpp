@@ -1,3 +1,4 @@
+import MessageStore
 import SafariServices
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
@@ -14,7 +15,8 @@ final class TimelineCellSemanticsTests: XCTestCase {
 
     override func setUp() async throws {
         controller = ConversationTimelineController()
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window = UIWindow(windowScene: try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         window.rootViewController = controller
         window.isHidden = false
         controller.view.layoutIfNeeded()

@@ -1,4 +1,5 @@
 import Foundation
+import MessageStore
 import XMPPProtocol
 
 // Trust is stored per device record (owner, version, device ID, identity key) and every chat addresses the account's

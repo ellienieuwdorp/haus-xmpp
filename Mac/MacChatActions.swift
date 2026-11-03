@@ -1,3 +1,4 @@
+import MessageStore
 import SwiftUI
 
 // The sidebar's right-click menu and the Chat menu both list these through `MacChatActionsMenu`, so the two match.

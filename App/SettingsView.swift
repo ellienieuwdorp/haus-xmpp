@@ -1,4 +1,6 @@
+import MessageStore
 import SwiftUI
+import XMPPProtocol
 
 struct SettingsView: View {
     @Bindable var model: AppModel

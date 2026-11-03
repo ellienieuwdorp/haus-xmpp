@@ -214,8 +214,8 @@ private final class NodeParser: NSObject, XMLParserDelegate {
             root = node
         } else { stack[stack.count - 1].children.append(node) }
     }
-    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) { invalid = true }
-    func parser(_ parser: XMLParser, validationErrorOccurred validationError: Error) { invalid = true }
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: any Error) { invalid = true }
+    func parser(_ parser: XMLParser, validationErrorOccurred validationError: any Error) { invalid = true }
     func parser(_ parser: XMLParser, resolveExternalEntityName: String, systemID: String?) -> Data? {
         invalid = true; parser.abortParsing(); return nil
     }

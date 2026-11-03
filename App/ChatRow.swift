@@ -1,3 +1,4 @@
+import MessageStore
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -24,19 +25,21 @@ struct ChatRow: View {
         return Self.dayMonth.string(from: date)
     }
 
-    // Read is the filled rings, not a colour.
-    private var stateGlyph: Text? {
+    private var lastStatus: TimelineMessage.Status? {
         guard chat.lastMessageIsOutgoing else { return nil }
-        let status: TimelineMessage.Status
         switch chat.lastMessageState {
-        case .queued?: status = .queued
-        case .submitting?: status = .submitting
-        case .unconfirmed?: status = .unconfirmed
-        case .failed?: status = .failed
+        case .queued?: return .queued
+        case .submitting?: return .submitting
+        case .unconfirmed?: return .unconfirmed
+        case .failed?: return .failed
         // Archive and carbon copies have no outbox row: the server already holds them.
         case .serverAccepted?, nil:
-            status = chat.lastMessageReceipt == .displayed ? .displayed : chat.lastMessageReceipt == .delivered ? .delivered : .serverAccepted
+            return chat.lastMessageReceipt == .displayed ? .displayed : chat.lastMessageReceipt == .delivered ? .delivered : .serverAccepted
         }
+    }
+
+    // Read is the filled rings, not a colour.
+    private func glyph(_ status: TimelineMessage.Status) -> Text {
         #if os(iOS)
         let scale = UIFontMetrics(forTextStyle: .subheadline).scaledValue(for: MessageStatusArt.designHeight) / MessageStatusArt.designHeight
         #else
@@ -49,14 +52,15 @@ struct ChatRow: View {
         #else
         let image = MessageStatusArt.image(MessageStatusGlyph.glyph(for: status), scale: scale)
         #endif
-        return Text(Image(platformImage: image)).accessibilityLabel(status.accessibilityDescription)
+        return Text(Image(platformImage: image))
     }
 
     private var preview: Text {
         if isBlocked { return Text("Blocked") }
-        let body = Text(chat.preview.isEmpty ? "Start a conversation" : chat.preview)
-        guard let stateGlyph else { return body }
-        return stateGlyph + Text(" ") + body
+        let text = chat.preview.isEmpty ? "Start a conversation" : chat.preview
+        guard let status = lastStatus else { return Text(text) }
+        // A label on the glyph alone is dropped when the row's button combines its text.
+        return Text("\(glyph(status)) \(text)").accessibilityLabel("\(status.accessibilityDescription) \(text)")
     }
 
     var body: some View {

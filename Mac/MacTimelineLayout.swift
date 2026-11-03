@@ -1,6 +1,7 @@
 import AppKit
 import CoreText
 import SwiftUI
+import XMPPProtocol
 
 // Row geometry is held as immutable records keyed by row id, revision and content width, so timeline widths giving the
 // same content width (from about 699 pt, the 560 pt cap) reuse them. Records are made on a serial queue and, for rows

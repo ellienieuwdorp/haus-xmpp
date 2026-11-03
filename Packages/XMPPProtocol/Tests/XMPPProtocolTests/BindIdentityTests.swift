@@ -18,7 +18,7 @@ import Testing
         // Signed in as typed; the server answers with its own spelling.
         let connecting = Task { try await client.connect(host: "127.0.0.1", port: port, domain: "LocalHost", username: "Ellie", password: "synthetic") }
         if accepted {
-            try await connecting.value
+            _ = try await connecting.value
             await client.disconnect()
         } else {
             await #expect(throws: XMPPIdentityError.boundAccountMismatch) { try await connecting.value }

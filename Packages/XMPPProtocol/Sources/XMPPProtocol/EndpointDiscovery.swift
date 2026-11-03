@@ -135,7 +135,7 @@ private final class SRVQuery: @unchecked Sendable {
     private let name: String
     private let timeout: Duration
     private let queue = DispatchQueue(label: "xmpp.srv")
-    private var completion: ((SRVLookup) -> Void)?
+    private var completion: (@Sendable (SRVLookup) -> Void)?
     private var reference: DNSServiceRef?
     private var records: [SRVRecord] = []
     private var retained: Unmanaged<SRVQuery>?
@@ -145,7 +145,7 @@ private final class SRVQuery: @unchecked Sendable {
         self.name = name; self.timeout = timeout
     }
 
-    func start(completion: @escaping (SRVLookup) -> Void) {
+    func start(completion: @escaping @Sendable (SRVLookup) -> Void) {
         queue.async { [self] in
             self.completion = completion
             // A cancellation that arrived first ends the query before it is sent.

@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XMPPProtocol
+import os
 
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
@@ -1620,7 +1621,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         plainTextTop.constant = showsPreview ? -Self.mediaInset : 0
         NSLayoutConstraint.deactivate([footerAfterText, footerAfterMedia])
         (showsPreview && textHeight.isActive ? footerAfterMedia : footerAfterText)?.isActive = true
-        let canRetry = message.isOutgoing && message.status?.canRetry == true
         leading.isActive = !message.isOutgoing
         trailing.isActive = message.isOutgoing
         reactionLeading.isActive = !message.isOutgoing
