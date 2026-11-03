@@ -1,12 +1,8 @@
 #if DEBUG
 import AppKit
 
-/// The keyboard and VoiceOver tour steps (`-haus-tour`; see `MacDebugHooks`). Debug builds only.
-///
-/// Keys are key events handed to the main window in process (`NSWindow.sendEvent`), as AppKit hands it one from the
-/// event queue; nothing is posted through the window server. The accessibility steps read the window's accessibility
-/// tree in process, element by element, as an assistive app reads it through its own API (Accessibility Inspector's
-/// hierarchy), without asking for any permission.
+// Keys go to the main window in process (`NSWindow.sendEvent`), never through the window server; the accessibility
+// tree is read in process, as an assistive app reads it, with no permission asked.
 @MainActor enum MacKeyboardDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         guard let window else { return MacDebugHooks.log("tour \(name): no main window") }
@@ -37,8 +33,8 @@ import AppKit
 
     private static var treeBuilt = false
 
-    /// SwiftUI builds its accessibility elements only once an assistive app asks for them, which it does by setting
-    /// `AXEnhancedUserInterface` or `AXManualAccessibility` on the app; the steps set them themselves, the first time.
+    // SwiftUI builds its accessibility elements only once an assistive app sets `AXEnhancedUserInterface` or
+    // `AXManualAccessibility` on the app, so the steps set them, the first time.
     private static func buildAccessibilityTree() async {
         guard !treeBuilt else { return }
         treeBuilt = true
@@ -47,8 +43,6 @@ import AppKit
         }
         try? await Task.sleep(for: .milliseconds(500))
     }
-
-    // MARK: Keys
 
     private static let keys: [String: (code: UInt16, characters: String, flags: NSEvent.ModifierFlags)] = [
         "tab": (48, "\t", []), "shift-tab": (48, "\u{19}", .shift),
@@ -83,10 +77,6 @@ import AppKit
         return true
     }
 
-    // MARK: Focus
-
-    /// Who has the keyboard: the window's first responder, the timeline's own state, and the element accessibility
-    /// reports as focused.
     static func logFocus(in window: NSWindow, after what: String) {
         let responder = window.firstResponder
         let name: String = switch responder {
@@ -116,10 +106,6 @@ import AppKit
         return found
     }
 
-    // MARK: Accessibility tree
-
-    /// Every element with something to say (a label, title or value, or actions), indented by depth. With a
-    /// text, only the elements whose description contains it, and only the first 400 lines.
     private static func dump(_ window: NSWindow, matching filter: String) {
         var lines = 0, visited = 0
         walk(root(of: window), depth: 0) { element, depth in
@@ -135,9 +121,8 @@ import AppKit
         MacDebugHooks.log("ax: \(lines) of \(visited) element(s)")
     }
 
-    /// Performs the press action of the first element, in the newest sheet over the window or else in the window,
-    /// whose accessibility identifier is one of the texts (or starts with one ending in a dot) or, for a button
-    /// lacking an identifier, whose description contains one, as VoiceOver's VO-Space would. Logs what it pressed and returns whether it found one.
+    // Identifiers match exactly or as a prefix ending in a dot; a button without one matches by description. Pressed as
+    // VoiceOver's VO-Space would, in the newest sheet first.
     @discardableResult static func pressElement(matching texts: [String], in window: NSWindow) async -> Bool {
         await buildAccessibilityTree()
         let label = texts.joined(separator: "|")
@@ -166,8 +151,6 @@ import AppKit
         return false
     }
 
-    /// `ax-action <text> | <action>`: performs the custom action of that name on the first element whose label or value
-    /// contains the text, as VoiceOver's actions menu does.
     private static func performAction(_ argument: String, in window: NSWindow) async {
         await buildAccessibilityTree()
         let parts = argument.components(separatedBy: " | ")
@@ -184,10 +167,9 @@ import AppKit
         MacDebugHooks.log("ax-action '\(argument)': \(result)")
     }
 
-    /// The window's content view: the window itself lists no children until an assistive app has asked for them.
+    // The window itself lists no children until an assistive app has asked for them.
     private static func root(of window: NSWindow) -> Element { window.contentView ?? window }
 
-    /// Depth first; `visit` returns false to stop.
     private static func walk(_ root: Element, depth: Int, visit: (Element, Int) -> Bool) {
         var stopped = false
         func go(_ element: Element, _ depth: Int) {
@@ -212,8 +194,7 @@ import AppKit
         return parts.joined(separator: " ")
     }
 
-    /// An element of the tree: AppKit's views and cells, and SwiftUI's own nodes, which answer the same messages
-    /// without declaring the protocol, so each is asked only what it answers.
+    // SwiftUI's nodes answer the same messages without declaring the protocol, so each is asked only what it answers.
     private typealias Element = NSObject
 
     private static func ask<T>(_ element: Element, _ selector: String) -> T? {
@@ -227,7 +208,7 @@ import AppKit
     private static func label(_ element: Element) -> String? { ask(element, "accessibilityLabel") }
     private static func title(_ element: Element) -> String? { ask(element, "accessibilityTitle") }
     private static func value(_ element: Element) -> Any? { ask(element, "accessibilityValue") as AnyObject? }
-    /// A table's rows answer only the older attribute API, as an assistive app reads them.
+    // A table's rows answer only the older attribute API, as an assistive app reads them.
     private static func children(_ element: Element) -> [Any] {
         if let children: [Any] = ask(element, "accessibilityChildren") { return children }
         return element.accessibilityAttributeValue(.children) as? [Any] ?? []
@@ -244,10 +225,6 @@ import AppKit
         rotor.type == .custom ? rotor.label : "system \(rotor.type.rawValue)"
     }
 
-    // MARK: Rotors
-
-    /// Each custom rotor in the window, with the entries VoiceOver would step through: up to 40, each as the element it
-    /// lands on describes itself.
     private static func logRotors(in window: NSWindow) {
         walk(root(of: window), depth: 0) { element, _ in
             for rotor in rotors(element) {

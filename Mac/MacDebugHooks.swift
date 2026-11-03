@@ -6,157 +6,9 @@ import MessagingCore
 import OMEMO
 import SwiftUI
 
-/// Launch arguments for checking the Mac app without driving its UI: captures of its own windows, a timed quit, the
-/// window state a capture needs, and a storage self-check. Debug builds only; nothing here ships.
-///
-/// The app is sandboxed, so it cannot write to a directory named on the command line. Captures go there when it can
-/// (an unsandboxed run); otherwise each file is written to standard output as one line,
-/// `HAUS-FILE <relative path> <base64>`, for whatever launched the app to decode into the directory.
-///
-/// - `-haus-capture <dir>`: once the chats (and a selected chat's messages) are loaded and laid out, every visible
-///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
-/// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards,
-///   with any other open window (Settings) drawn over its centre and its popovers where they hang; a sheet's words are
-///   logged instead.
-/// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
-///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
-///   `inspector on|off`, `inspector-page details|encryption`, `inspector-race [<width>x<height>]` (the inspector shown,
-///   hidden and shown again 60 ms apart in a window of that size, then the window widened and, with the inspector
-///   hidden, narrowed, logging whether each width stuck), `prebuild-quiet <chat>` (chooses a chat other than the open
-///   one, puts a modifier key's change 0.4 s later and a pointer move 0.45 s later on the app's own event queue, and
-///   logs when the closed inspector built its details ahead), `prebuild-tracking <chat> [<release seconds>]` (the same
-///   with a press 0.05 s after choosing it whose drags and release, by default at 0.45 s, a tracking loop takes, then a
-///   pointer move), `settings general|appearance|about`, `close-settings`,
-///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
-///   the caret as typing would), `mark <text>` (an input method's composition, left open), `send` (as the Send
-///   button), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
-///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
-///   container>` (handed to the composer as a drop would), `drop photo|slow-photo|file|scan` (item providers dropped on
-///   the chat), `paste photo|file|scan|<text>` and `import photo|scan` (Continuity Camera's handover), both from a
-///   private pasteboard, `remove-attachment <index>`, `copy-image <message id>|newest` (to a private pasteboard, logging
-///   its types), `save-over` (Save As… over an existing file in the app's temporary directory, logging whether it
-///   survives a failed copy) (`MacAttachmentTour`), `drop-highlight on|off` (the chat's highlight for files dragged
-///   over it), `connecting on|off` (the toolbar's connection progress, as while the account connects or catches up),
-///   `toolbar` (logs each toolbar item's frame in the window and whether it shows), and `snap <name>`, which captures
-///   the main window as `<name>.png` into `-haus-capture`'s directory.
-///   Message actions by message ID in the open chat, as the bubble's menu performs them:
-///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
-///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
-///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). Changes to a sample message as
-///   the model makes them, with no dialog or composer: `model-edit <id> <text>`, `model-unsend <id>`, `model-retry <id>`
-///   and `receipt <id> delivered|displayed` (a sample peer's receipt or read marker). `minimums` (logs the minimum
-///   size of the window's content and of each hosting view in it, the split view's columns among them). Keyboard and
-///   VoiceOver steps (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or
-///   another, the timeline's focus and focused message, the focused accessibility element and whether Full Keyboard Access
-///   is on), `press <key> [<key>…]`
-///   (key events handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up,
-///   command-down, page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged
-///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
-///   description contains the text), `ax-press <identifier or text>` (VoiceOver's press on the first element with that
-///   accessibility identifier, or whose description contains the text, in the newest sheet first),
-///   `ax-action <text> | <action>` (VoiceOver's action of that name on the first element whose label or value contains the text),
-///   `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
-///   timeline keyboard focus as Tab into it does, and reports it focused, which SwiftUI does not reliably do in a
-///   window that is never key). Timeline steps (`MacTimelineDebug`): `capture <name>`
-///   (the main window and any other open window as `<name>.png` beside the frames),
-///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
-///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
-///   a quote naming that message does), `resize <width>x<height>`, `timeline` (logs the reader's row and distances),
-///   `knob [<seconds>]` (logs the scroller's frame and knob, then on each refresh for that long while the next steps
-///   play),
-///   `resize-sweep <width>x<height> <width>x<height> <steps> [live]` (a resize from one size to the other, timing each
-///   step, in a live resize with `live`; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms
-///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
-///   gesture's phases or none, running while the next steps play), `swipe <message id> <points> [<vertical points>]
-///   [hold|wheel]` (a two-finger gesture over the message handed straight to the timeline's reply swipe, logging what
-///   it did; `hold` leaves it under way for a `capture` and `swipe-end [cancel|resign|elsewhere|reset]` finishes it), `bind-reader` (kept for older tours: the table
-///   binds nothing and says so), `older` (the next older page, as the
-///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
-///   arrival is, which the model never has; `arrive-long [<characters>]` one with a long text; `arrive-extras <count>
-///   [older]` messages with a quote and a large link card, below the others or above the oldest as an older page;
-///   `show-row typing|group-typing|loading` the typing bubble or the loading row likewise; `settle` applies the model's
-///   rows again), `mismatch` (each row's cached text height against a live bubble text view's at the current width,
-///   then each cell's record against its row's height, its extras against SwiftUI's size for them and its footer
-///   against the size it last drew whole at),
-///   `hit-reaction <message id>` (the window's hit test at the message's first reaction pill, and a click handed to
-///   what it hits in process), `reuse-media` (one cell given a photo, then another message's photo, sampling which
-///   shows), `extras-cache` (a quote's size measured twice for one message as its quote changes), `update-race` (two
-///   updates measured on the queue with a reload between them), `gesture-update` (an update whose records land
-///   during a gesture), `resize-drag [<width>x<height> <points> <seconds>]` (a resize, then at once a gesture over its
-///   end pass, the cells and rows against their records sampled through it), `edit-race` (the reader's row edited
-///   on the queue, its cell made again before the edit lands, a gesture holding it and a width change after it) and
-///   `overlay-resize [<width>x<height>]` (the jump button and the day chip coming in as the window resizes in the same
-///   turn, the window's width sampled after).
-///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
-///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
-///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
-///   `-haus-capture-frames` a short time so its renders are done before the sweep. Frames may be `0` seconds for a tour
-///   that only captures by name. Performance steps (`MacPerfProbe`, whose header says how to build for them, which tours
-///   make the baseline and what the numbers do not mean): `perf start` and `perf stop <label>` (main-thread time per
-///   run-loop pass, 120 Hz timer gaps and the timeline's counters in between, and each timeline update's phases),
-///   `display-count` (layer displays by class and owner in the next `perf stop`), `layers` (the window's views and
-///   layers), `sidebar` (View › Hide Sidebar's toggle, timed), `sidebar-sweep <steps>` (the sidebar's divider moved
-///   step by step), `force-noop <count>` (the timeline's forced layout with nothing pending), `split [label]` and `split-watch <seconds>` (the split views' items and widths, once or on every pass that changes them). Bubble text steps
-///   (`MacBubbleTextTour`): `appearance automatic|light|dark`, `accent <name>`, `text-select <message id> <location>
-///   <length>`, `text-rescale` and `text-layers <name>` (each text in sight: how it draws and redraws, its layer rendered).
-///   Search steps
-///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `find-esc` (as Esc in the
-///   timeline), `starred on|off` and `show-result <message id>` (as a click on that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
-///   Chat, Message and Window menus: each item, its shortcut and whether it is enabled), `command <menu>/<item>[/<item>]`
-///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
-///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's label and where the model
-///   last sent the icon badge), `block <chat>` and `unblock <chat>` (sample conversations only, as `-haus-block`) and
-///   `close-window` (closes the main window, as its close button does), `hide` and `unhide` (the app, without activating
-///   it on unhide; hidden, the inspector opens and closes without animating). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
-///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
-///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
-///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
-///   and `close-sheet` (the newest sheet's Done or Close), each pressed as VoiceOver would, and `snap-sheet <name>` (the
-///   newest sheet alone as `<name>.png`). `store <chat>` logs what a lab account's store holds for it, as the lifecycle
-///   step of that name does.
-///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
-///   Messages act on the main window there as though it were (`MacCommands`).
-/// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
-///   also in the sample conversations, where previews are otherwise off.
-/// - `-haus-timeline-trace`: logs each timeline update that kept the reader's rows, with the reader's row's drift right
-///   after it and over the next 30 refreshes.
-/// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
-///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
-/// - `-haus-quit-after <seconds>`: quits that long after launch.
-/// - `-haus-connecting`: the toolbar shows connection progress from launch, as a launch that connects does, until a
-///   tour's `connecting off`.
-/// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
-/// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
-///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup|group-join`, `-haus-settings general|appearance|about`,
-///   `-haus-close-window <seconds>`:
-///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
-///   group.
-/// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
-/// - `-haus-contact-link <chat> <name>`: links a sample conversation to a made-up contact by name only (sample data
-///   only), for captures of a linked chat; Contacts is neither asked for nor read.
-/// - `-haus-notification-settings`: Settings shows its Notifications section without a signed-in account, for captures
-///   with sample data.
-/// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
-/// - `-haus-share-sheet <link>`, `-haus-share-to <chat>`, `-haus-share-send`: the Share extension's screen in a window of
-///   the app (`MacShareDebug`).
-/// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
-///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
-/// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
-/// - `-haus-restore-transfer <code>`: restores the transfer file the app reads from standard input (the sandbox opens
-///   no other file the user did not pick). `-haus-transfer start|delete|resume`: prepares a transfer of the
-///   signed-in account, or settles a moved install (deletes its data, or takes it back).
-/// - `-haus-dump-menus`: the main menu's items and shortcuts.
-/// - `-haus-fresh-store`: with `XMPP_UI_TEST_STORE` set, empties that session's store and preferences at launch, so a
-///   run starts as a new install would. The shared App Group store is left alone.
-/// - `-haus-store-schema <n>`: with `XMPP_UI_TEST_STORE` set, stamps that session's existing store with schema `n`
-///   before it opens, as a newer build would have left it (for the screen an older build shows over newer data).
-/// - `-haus-unobtrusive`: see `MacUnobtrusive`.
-/// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above, or after the tour
-///   (`MacLifecycleDebug`).
-/// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them;
-///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`), which
-///   without either posts nothing and says so at launch.
-/// - Push and notification extension checks: see `MacPushProbe`.
+// Debug-only launch arguments and tour steps for checking the Mac app without driving its UI. The sandboxed app cannot
+// write to a directory named on the command line, so a sandboxed capture writes each file to standard output as
+// `HAUS-FILE <relative path> <base64>` for the launcher to decode.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
 
@@ -167,15 +19,14 @@ import SwiftUI
 
     static func has(_ flag: String) -> Bool { arguments.contains(flag) }
 
-    /// Quits as the menu's Quit does. `NSApp.terminate` called inside a main-actor job would keep that job, and with it
-    /// the main queue, waiting in AppKit's loop for `reply(toApplicationShouldTerminate:)`, so the quiesce that sends
-    /// the reply could never run (seen: the app hung until killed). The menu's Quit comes from an event, outside any
-    /// job; this asks for it from the run loop the same way.
+    // `NSApp.terminate` inside a main-actor job keeps the main queue waiting in AppKit's loop for
+    // `reply(toApplicationShouldTerminate:)`, so the quiesce that sends the reply never runs and the app hangs. The
+    // menu's Quit comes from an event, outside any job; this asks from the run loop the same way.
     static func quit() {
         NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
     }
 
-    /// From `applicationWillFinishLaunching`, before any window exists and before the model opens its store.
+    // Before any window exists and before the model opens its store.
     static func prepareLaunch() {
         MacUnobtrusive.install()
         if has("-haus-fresh-store") { emptyTestStore() }
@@ -186,7 +37,7 @@ import SwiftUI
         if let schema = value(after: "-haus-store-schema").flatMap(Int32.init) { stampTestStore(schema: schema) }
     }
 
-    /// The UI test session's own store, never the shared one.
+    // The UI test session's own store, never the shared one.
     private static func testStoreDirectory() -> URL? {
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"], let id = UUID(uuidString: value)?.uuidString,
               let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
@@ -208,7 +59,6 @@ import SwiftUI
         log("store schema: stamped \(schema), result \(result)")
     }
 
-    /// The UI test session's own store (`SharedStorage.directory(testSessionID:)`) and preferences suite.
     private static func emptyTestStore() {
         guard let directory = testStoreDirectory() else {
             log("fresh store: XMPP_UI_TEST_STORE is not a session ID; nothing emptied")
@@ -226,7 +76,8 @@ import SwiftUI
     }
 
     static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {
-        // An earlier build wrote relative capture directories into the container; take them out again.
+        // Sandboxed captures go to standard output, so a relative capture directory in the container is stale: remove
+        // it.
         if sandboxed {
             for flag in ["-haus-capture", "-haus-capture-frames"] {
                 if let directory = value(after: flag), !directory.hasPrefix("/") { try? FileManager.default.removeItem(atPath: directory) }
@@ -337,21 +188,14 @@ import SwiftUI
         }
     }
 
-    // MARK: Captures
-
-    /// Opens the Settings window; captured from the main window's content by `MacDebugPresentation`.
     static var openSettings: OpenSettingsAction?
 
-    /// The Settings pane a tour asks for; `MacSettingsView` follows it.
     @Observable @MainActor final class Tour {
         var settingsPane: MacSettingsView.Pane?
-        /// A message action for the open conversation, or for one row, to perform; `serial` makes a repeat a change.
+        // `serial` makes a repeated request a change.
         var messageRequest: MessageRequest?
-        /// The message whose hover toolbar shows as though the pointer were over it.
         var hoveredMessage: String?
-        /// The chat shows its drop highlight as though files were dragged over it.
         var dropHighlight = false
-        /// The toolbar shows connection progress as though the account were connecting.
         var connecting = false
         func setMessageRequest(_ request: MessageRequest) {
             messageRequest = request
@@ -371,16 +215,13 @@ import SwiftUI
 
     static let tour = Tour()
 
-    /// The open chat's details (`details`) or its devices and encryption page (`encryption`, group details for a group),
-    /// on the inspector's own path, as a route from a message's menu would open them.
     private static func showInspectorPage(_ page: String, window: MacWindowState, model: AppModel) {
         guard let chatID = window.selection else { return }
         window.inspectorPath = page == "encryption" ? [model.isGroup(chatID) ? .groupDetails(chatID) : .encryption(chatID)] : []
     }
 
-    /// Toggles quicker than the inspector's animations, in a window too narrow for the column, so that opening it widens
-    /// the window and a close that interrupts the open narrows it back. Overlapping, the animations once left the
-    /// conversation's width pinned: the window went back to its old width after every resize.
+    // Toggles faster than the inspector animates, in a window too narrow for it, so opening widens the window and an
+    // interrupting close narrows it back; overlapping animations can leave the conversation's width pinned.
     private static func inspectorRace(_ argument: String, window: MacWindowState, main: NSWindow?) async {
         let size = argument.split(separator: "x").compactMap { Double($0) }
         guard size.count == 2, let main, window.selection != nil else {
@@ -411,10 +252,8 @@ import SwiftUI
             + "got \(narrow): \(stuck ? "STUCK" : "ok")")
     }
 
-    /// The build ahead waits for half a second with no key, click or scroll. A pointer move just after a key once
-    /// hid the key from it (`NSApplication.currentEvent` was the move), and the build landed 0.2 s after the key.
-    /// The events go on the app's own queue (`NSApplication.postEvent`), never through the window server, and there is
-    /// no key window to take the modifier's change.
+    // The build ahead waits for half a second with no key, click or scroll; a pointer move right after a key can hide
+    // the key from it (`currentEvent` is the move). Events go on the app's own queue, never through the window server.
     private static func prebuildQuiet(_ chat: String, window: MacWindowState, main: NSWindow?) async {
         guard let main, !chat.isEmpty, window.selection != chat else {
             return log("tour prebuild-quiet \(chat): needs the main window and a chat other than the open one")
@@ -444,12 +283,9 @@ import SwiftUI
         log("prebuild-quiet \(chat): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - key)) s after the key: \(verdict)")
     }
 
-    /// A tracking loop (a control's, a resize's) takes the drags and the release after a press without the app handing
-    /// them out, so the input monitor sees only the press. A pointer move after the release once left the build ahead
-    /// with the press alone, and it landed 0.2 s after the release; with the deadline inside a long press, it landed
-    /// during it. The press goes through `NSApplication.sendEvent`, with no window to land in, at 0.05 s; drags at 0.1,
-    /// 0.2 and 0.3 s and the release (at 0.45 s unless given) go on the app's own queue and the step's loop takes them,
-    /// in the tracking mode as a control would; the pointer move follows the release by 10 ms.
+    // A tracking loop takes a press's drags and release without the app handing them out, so the input monitor sees
+    // only the press. The press goes through `sendEvent`; the drags and the release go on the app's queue for the
+    // step's loop to take in the tracking mode, as a control would.
     private static func prebuildTracking(_ argument: String, window: MacWindowState, main: NSWindow?) async {
         let words = argument.split(separator: " ").map(String.init)
         let chat = words.first ?? "", release = words.dropFirst().first.flatMap(Double.init) ?? 0.45
@@ -501,7 +337,6 @@ import SwiftUI
         log("prebuild-tracking \(argument): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - released)) s after the release: \(verdict)")
     }
 
-    /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
         if let directory = value(after: "-haus-capture-frames"), let seconds = value(after: "-haus-capture-frames", offset: 2).flatMap(Double.init) {
@@ -577,8 +412,7 @@ import SwiftUI
             case "block" where model.isDemo: await model.block(argument)
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
-            // Hidden, the window changes without animating, as the inspector does: for a screen locked meanwhile, where
-            // animations never end.
+            // Hidden, the inspector changes without animating: on a screen locked meanwhile, animations never end.
             case "hide": NSApp.hide(nil)
             case "unhide": NSApp.unhideWithoutActivation()
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
@@ -595,18 +429,16 @@ import SwiftUI
         log("tour done; selected \(window.selection ?? "none"), messages loaded for \(model.messagesLoadedFor ?? "none")")
     }
 
-    /// The composer's tour steps, through the same paths the keyboard and the message actions take.
     private static func composerStep(_ step: String, _ argument: String, model: AppModel) {
         guard let textView = MacComposerTour.textView, let intent = MacComposerTour.intent else { log("tour \(step): no composer"); return }
         switch step {
         case "type":
             textView.insertText(argument, replacementRange: textView.selectedRange())
         case "mark":
-            // An input method's composition, left open.
             textView.setMarkedText(argument, selectedRange: NSRange(location: (argument as NSString).length, length: 0),
                                    replacementRange: textView.selectedRange())
         case "send":
-            // What the Send button does; unlike Return, it does not wait for a composition to end.
+            // Unlike Return, the Send button does not wait for a composition to end.
             textView.actions?.send()
         case "key":
             let keys: [String: (Selector, NSEvent.ModifierFlags)] = [
@@ -632,9 +464,8 @@ import SwiftUI
         log("composer \(step) \(argument): field \(textView.string.count) characters, marked \(textView.hasMarkedText()), draft \(draft.count) characters, replying \(intent.replyingTo?.id ?? "-"), editing \(intent.editing?.id ?? "-")")
     }
 
-    /// A scripted scroll through the open timeline, timed on the main thread. The window is off-screen, so no display
-    /// link runs: the ticks of a 120 Hz timer stand in for refreshes, and a tick that comes late means the main thread
-    /// was busy (laying out and building the rows that scrolled in). Render-server work is not in it.
+    // The window is off-screen, so no display link runs: a 120 Hz timer's ticks stand in for refreshes, and a late tick
+    // means the main thread was busy. Render-server work is not measured.
     @MainActor final class ScrollProbe: NSObject {
         private let scrollView: NSScrollView
         private let seconds: Double
@@ -650,7 +481,7 @@ import SwiftUI
             self.seconds = seconds
         }
 
-        /// The timeline is the scroll view with the tallest document: the chat list holds a few rows.
+        // The timeline is the scroll view with the tallest document.
         static func sweep(in window: NSWindow, seconds: Double, paging: Bool) async {
             func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
             guard let root = window.contentView,
@@ -661,7 +492,7 @@ import SwiftUI
             let probe = ScrollProbe(scrollView: scrollView, seconds: seconds)
             let before = footprint()
             log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
-            // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
+            // As a gesture would, so the timeline pages in older history when the sweep nears the top.
             if paging { MacTimelineController.current?.debugLiveScroll(true) }
             await withCheckedContinuation { continuation in
                 probe.finished = continuation
@@ -684,7 +515,6 @@ import SwiftUI
             self.timer = timer
         }
 
-        /// Up from the bottom for the first half, back down for the second.
         private func tick() {
             let now = CACurrentMediaTime()
             intervals.append(now - last)
@@ -703,7 +533,6 @@ import SwiftUI
             finished = nil
         }
 
-        /// The clip view's origins from one end of the content to the other, its insets included.
         static func range(of scrollView: NSScrollView) -> ClosedRange<CGFloat> {
             let insets = scrollView.contentInsets
             let flipped = scrollView.documentView?.isFlipped ?? true
@@ -714,7 +543,7 @@ import SwiftUI
 
         private static func megabytes(_ bytes: UInt64) -> Double { Double(bytes) / 1_048_576 }
 
-        /// The memory the system charges the app for, as Activity Monitor's Memory column shows it.
+        // As Activity Monitor's Memory column shows it.
         private static func footprint() -> UInt64 {
             var info = task_vm_info_data_t()
             var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
@@ -725,7 +554,6 @@ import SwiftUI
         }
     }
 
-    /// The bubble's menu for one message of the open chat, as `MacMessageMenu` lists it, and its VoiceOver actions.
     private static func logMenu(for id: String, model: AppModel, window: MacWindowState) {
         let messages = window.selection.map { ConversationPresenter(source: model, chatID: $0, title: $0).timelineMessages } ?? []
         guard let message = messages.first(where: { $0.id == id }) else {
@@ -744,8 +572,7 @@ import SwiftUI
         }
     }
 
-    /// The Chat and Message menus as the menu bar would show them once opened: validated first, so a disabled item is
-    /// what a click would find disabled.
+    // Validated first, so a disabled item is what a click would find disabled.
     private static func logMenuBar(model: AppModel, window: MacWindowState) {
         func walk(_ menu: NSMenu, path: String) {
             open(menu)
@@ -764,7 +591,6 @@ import SwiftUI
         }
     }
 
-    /// `Chat/Mute/For 1 hour`: the item at that path, performed through its menu as a click would.
     private static func performMenuItem(_ path: String) {
         var titles = path.split(separator: "/").map(String.init)
         guard !titles.isEmpty, var menu = NSApp.mainMenu else { return }
@@ -784,8 +610,7 @@ import SwiftUI
         log("command \(path): performed")
     }
 
-    /// What opening the menu does before it shows: its delegate (SwiftUI's) brings the items up to date, then each
-    /// item is validated.
+    // As before the menu shows: SwiftUI's menu delegate brings the items up to date, then each item is validated.
     static func open(_ menu: NSMenu) {
         menu.delegate?.menuNeedsUpdate?(menu)
         menu.update()
@@ -803,7 +628,6 @@ import SwiftUI
         NSApp.windows.first { $0.isVisible && $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
     }
 
-    /// Visible windows other than the main window and its sheets: the Settings window.
     private static var otherWindows: [NSWindow] {
         NSApp.windows.filter { window in
             window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil && !isRemote(window)
@@ -811,8 +635,7 @@ import SwiftUI
         }
     }
 
-    /// A window the system draws from another process, such as the text input indicator beside a focused text view:
-    /// it renders blank here and is left out of captures.
+    // Windows the system draws from another process (the text input indicator) render blank, so captures skip them.
     private static func isRemote(_ window: NSWindow) -> Bool {
         window.contentView?.subviews.contains { String(describing: type(of: $0)) == "NSRemoteView" } == true
     }
@@ -846,7 +669,6 @@ import SwiftUI
 
     private static var loggedSheets: Set<ObjectIdentifier> = []
 
-    /// Each sheet's text and buttons, once, as frames show it blank.
     private static func logSheets(of window: NSWindow) {
         func texts(in view: NSView) -> [String] {
             let own: [String] = if let field = view as? NSTextField, !field.stringValue.isEmpty { [field.stringValue] }
@@ -858,18 +680,13 @@ import SwiftUI
         }
     }
 
-    /// The window's frame view, so the title bar and toolbar are in the picture with the content. Liquid Glass is
-    /// drawn by the window server, so `cacheDisplay` leaves every glass view (the sidebar, toolbar buttons) blank with
-    /// its content missing. Each one is painted over with a flat stand-in for its material, and its content is
-    /// rendered on top of that; glass therefore reads as a flat fill in captures.
+    // Liquid Glass is drawn by the window server, so `cacheDisplay` leaves glass views blank: each is painted with a
+    // flat stand-in for its material and its content rendered on top, so glass reads as a flat fill in captures.
     static func render(_ window: NSWindow) -> Data? {
         renderRep(window)?.representation(using: .png, properties: [:])
     }
 
-    /// The main window with any other open window (Settings) drawn over its centre with a shadow, roughly where it
-    /// would sit in front of the main window, and its popovers (the emoji picker) where they are attached. All are
-    /// rendered from their own views. A sheet (a dialog) draws its content outside the views and would show blank, so
-    /// its words are logged instead (`logSheets`).
+    // A sheet draws its content outside the views and would render blank, so its words are logged instead.
     private static func renderWithOverlays(_ window: NSWindow) -> Data? {
         guard let main = renderRep(window) else { return nil }
         let overlays = otherWindows.compactMap { renderRep($0) }
@@ -969,8 +786,9 @@ import SwiftUI
                             NSGraphicsContext.saveGraphicsState()
                             visible.clip()
                             if let selected = row as? NSTableRowView, selected.isSelected, let layer = row.layer {
-                                // The selection is a vibrant fill too and caches as black: a flat stand-in (the inactive
-                                // window's selection, as the window is never key here) under the row without it.
+                                // The selection is a vibrant fill too and caches as black: a flat stand-in (the
+                                // inactive window's selection, as the window is never key here) under the row without
+                                // it.
                                 NSColor.unemphasizedSelectedContentBackgroundColor.setFill()
                                 NSBezierPath(roundedRect: row.convert(row.bounds, to: view).insetBy(dx: 10, dy: 0), xRadius: 10, yRadius: 10).fill()
                                 let fills = descendants(of: layer).filter { $0.backgroundColor != nil && $0.compositingFilter.map { "\($0)".contains("vibrant") } == true }
@@ -994,15 +812,9 @@ import SwiftUI
         return output
     }
 
-    /// `cacheDisplay` renders the layers in this process (`CALayer.render(in:)`), not as the window server does, and
-    /// draws no Liquid Glass. A SwiftUI glass shape that is tinted and fully opaque (the composer's Send once there is
-    /// something to send) also masks its tint with a layer composited `destIn`, and while that layer is in the tree the
-    /// in-process render leaves out the entire hosting view around it: a capture showed the conversation and the
-    /// composer blank from the first typed character until the send, though their views and layers were all in place,
-    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. A
-    /// scroll edge's fade is such a mask too (a gradient layer over the inspector's top, which left its picture and
-    /// buttons out). The masks are hidden while caching; the glass they belong to is blank in a capture either way, and
-    /// an edge is captured without its fade.
+    // The in-process render (`CALayer.render(in:)`) drops the whole hosting view around a layer composited `destIn`:
+    // the mask of an opaque tinted glass shape (an enabled Send) or of a scroll edge's fade. The masks are hidden while
+    // caching; their glass is blank in captures either way.
     private static func cacheDisplay(_ view: NSView, to rep: NSBitmapImageRep) {
         let masks = view.layer.map(descendants(of:))?.filter { layer in
             !layer.isHidden && layer.compositingFilter.map { "\($0)" } == "destIn"
@@ -1018,11 +830,9 @@ import SwiftUI
 
     private static func draw(_ part: NSView, into view: NSView) {
         guard let rep = part.bitmapImageRepForCachingDisplay(in: part.bounds) else { return }
-        // Vibrant text and fills (the sidebar's labels, the search field) are masks through which the window server
-        // tints what lies behind them with a colour matrix; `cacheDisplay` skips that filter, which left them black or
-        // white. Those layers are left out of the cache and drawn on their own: the stand-in behind each through the
-        // same matrix, in the layer's shape, fills under the cached image and text over it. Table rows are cached on
-        // their own (see `renderRep`), so a table's container leaves their layers alone.
+        // Vibrant text and fills are masks the window server tints through a colour matrix, which `cacheDisplay` skips
+        // (they come out black or white). Each is drawn on its own: the stand-in behind it through the same matrix, in
+        // the layer's shape. Table rows are cached separately (`renderRep`), so their layers are skipped here.
         let rows = Set(descendants(of: part).compactMap { $0 is NSTableRowView ? $0.layer.map(ObjectIdentifier.init) : nil })
         let vibrant = part.layer.map { vibrantLayers(in: $0, skipping: rows) } ?? []
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -1051,8 +861,7 @@ import SwiftUI
             if !layer.isGeometryFlipped { shapeContext.translateBy(x: 0, y: layer.bounds.height); shapeContext.scaleBy(x: 1, y: -1) }
             layer.render(in: shapeContext)
             guard let shape = shapeContext.makeImage() else { continue }
-            // Where the layer sits in the part's view (a backing layer shares its view's coordinates), then in the
-            // captured view.
+            // A backing layer shares its view's coordinates.
             var frame = part.convert(root.convert(layer.bounds, from: layer), to: view)
             // A toolbar button's symbol is in a layer tree of its own, which converts to the window's origin: the
             // button's cached image has it already.
@@ -1073,7 +882,7 @@ import SwiftUI
         }
     }
 
-    /// One pixel of a bitmap context (user space, y up), as sRGB components 0…1 without alpha.
+    // User space is y up; components are sRGB 0…1 without alpha.
     private static func pixel(of context: CGContext, at point: CGPoint) -> [Float] {
         let device = point.applying(context.userSpaceToDeviceSpaceTransform)
         guard let data = context.data, context.bitsPerPixel == 32 else { return [0.5, 0.5, 0.5] }
@@ -1084,7 +893,7 @@ import SwiftUI
         return [Float(bytes[0]) / 255, Float(bytes[1]) / 255, Float(bytes[2]) / 255]
     }
 
-    /// Layers drawn through a vibrant colour matrix, with that matrix (4 × 5, row-major, bias last in each row).
+    // The matrix is 4 × 5, row-major, bias last in each row.
     private static func vibrantLayers(in root: CALayer, skipping skipped: Set<ObjectIdentifier>) -> [(layer: CALayer, matrix: [Float])] {
         var found: [(CALayer, [Float])] = []
         func walk(_ layer: CALayer) {
@@ -1110,7 +919,7 @@ import SwiftUI
         (layer.sublayers ?? []).flatMap { [$0] + descendants(of: $0) }
     }
 
-    /// Set by the system for a sandboxed process, whose relative paths resolve inside its own container.
+    // Set by the system for a sandboxed process, whose relative paths resolve inside its own container.
     private static let sandboxed = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
 
     static func emit(_ data: Data, directory: String, file: String) {
@@ -1119,7 +928,6 @@ import SwiftUI
             if (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
                (try? data.write(to: folder.appending(path: file))) != nil { return }
         }
-        // Sandboxed: hand the file to whoever reads standard output.
         let line = "HAUS-FILE \(file) \(data.base64EncodedString())\n"
         FileHandle.standardOutput.write(Data(line.utf8))
     }
@@ -1128,8 +936,6 @@ import SwiftUI
         let allowed = text.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
         return String(allowed).split(separator: "-").joined(separator: "-")
     }
-
-    // MARK: Checks
 
     private static func labSignIn(_ model: AppModel) async {
         let environment = ProcessInfo.processInfo.environment
@@ -1141,9 +947,9 @@ import SwiftUI
         log("lab sign-in: \(connected ? "connected" : "failed: \(model.session.label)")")
     }
 
-    /// What the plan asks of a signed build: the store opens inside the App Group container, SharedStorage's container
-    /// probe passes, and a data-protection Keychain item round-trips (and the encryption key, once one exists, is
-    /// readable from the app's access group).
+    // A signed build's storage: the store opens in the App Group container, the container probe passes, and a
+    // data-protection Keychain item round-trips (the encryption key readable from the app's access group once it
+    // exists).
     private static func selfCheck(_ model: AppModel) async {
         var report: [String] = []
         do {
@@ -1205,8 +1011,6 @@ import SwiftUI
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
     }
 
-    /// Each toolbar item's place in the window, as its own view or the button the toolbar made for it, and whether it
-    /// shows.
     private static func logToolbar(_ window: NSWindow) {
         guard let toolbar = window.toolbar, let root = window.contentView?.superview else { return log("toolbar: none") }
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
@@ -1218,9 +1022,8 @@ import SwiftUI
         }
     }
 
-    /// The window's content minimum and each SwiftUI hosting view's minimum width and height. The split view's panes
-    /// report none (`MacSplitController`); a minimum that follows its own view's width makes AppKit lay the window out
-    /// again and again.
+    // The split view's panes report no minimum (`MacSplitController`): one that follows its own view's width makes
+    // AppKit lay the window out again and again.
     private static func logMinimums(_ window: NSWindow) {
         log("minimums: window content \(window.contentLayoutRect.size), content min \(window.contentMinSize)")
         func walk(_ view: NSView) {
@@ -1247,14 +1050,12 @@ import SwiftUI
         if let menu = NSApp.mainMenu { walk(menu, depth: 0) }
     }
 
-    // MARK: Helpers
-
     private static func waitUntil(seconds: Double, _ condition: @MainActor () -> Bool) async {
         let clock = ContinuousClock(), end = clock.now + .seconds(seconds)
         while !condition(), clock.now < end { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
-    /// One `HAUS` line, stamped with the UTC time so it lines up with a lab peer's and the server's logs.
+    // Stamped with UTC time to line up with a lab peer's and the server's logs.
     static func log(_ text: String) {
         FileHandle.standardOutput.write(Data("HAUS \(stamp.string(from: Date())) \(text)\n".utf8))
     }
@@ -1268,17 +1069,13 @@ import SwiftUI
     }()
 }
 
-/// Opens the Settings window when `-haus-settings` asks for it; Settings is opened through the environment, so this
-/// sits on the main window's content.
+// Settings opens through the environment, so this sits on the main window's content.
 struct MacDebugPresentation: ViewModifier {
     let model: AppModel
     let window: MacWindowState
     @Environment(\.openSettings) private var openSettings
-    /// `-haus-sheet fingerprint`: a sample device's fingerprint comparison, as a device row opens it.
     @State private var fingerprint: EncryptionDevice?
-    /// `-haus-sheet backup`: a sample previous version's backup, as Settings opens it when there is one.
     @State private var backup: PreUpgradeSnapshot.Manifest?
-    /// `-haus-sheet group-join`: the group join form as a group link in a message opens it.
     @State private var joiningGroup = false
 
     func body(content: Content) -> some View {
@@ -1311,7 +1108,7 @@ struct MacDebugPresentation: ViewModifier {
         }
     }
 
-    /// Taken a day ago, so the footer reads as for a fresh backup.
+    // A day old, so the footer reads as for a fresh backup.
     private static var sampleBackup: PreUpgradeSnapshot.Manifest? {
         let json = """
         {"id": "sample", "takenAt": \(Date().addingTimeInterval(-86_400).timeIntervalSinceReferenceDate),

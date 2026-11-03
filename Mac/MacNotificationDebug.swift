@@ -5,13 +5,9 @@ import MessagingCore
 import Synchronization
 import UserNotifications
 
-/// `-haus-log-notifications` and `-haus-post-notifications`: the model's notifications, message requests and reply
-/// notices alike, are logged (thread, category and which fields are set; never a title, and a body only when it is
-/// fixed text), and with `-haus-post-notifications` also posted as usual. Either flag
-/// lets a test session (`--fresh-store`) post, which it otherwise never does, so banner checks can leave the shared App
-/// Group store alone. `-haus-log-notifications` posts nothing and asks for no permission (which would put a system
-/// prompt on screen); `-haus-post-notifications` needs authorization, which `-haus-request-provisional` grants without
-/// a prompt.
+// `-haus-log-notifications` logs the model's notifications (set fields; a body only when it is fixed text) and posts
+// nothing, so no permission prompt appears; `-haus-post-notifications` also posts. Either lets a `--fresh-store` test
+// session post, which it otherwise never does.
 enum MacDebugNotificationLog {
     enum Mode { case log, post }
 
@@ -21,13 +17,11 @@ enum MacDebugNotificationLog {
         return arguments.contains("-haus-log-notifications") ? .log : nil
     }()
 
-    /// A test session without either flag posts and logs nothing, so a banner check that forgot the flag would read
-    /// silence as "no banner". Said at launch and in `notify state`.
+    // A banner check that forgot the flag would read this silence as "no banner", so it is said at launch.
     static var silencesTestSession: Bool {
         mode == nil && ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"].flatMap(UUID.init(uuidString:)) != nil
     }
 
-    /// The poster the model uses in place of `system`; nil without either flag.
     static func poster(posting system: any NotificationPosting, avatarData: @escaping @Sendable (String) -> Data?) -> (any NotificationPosting)? {
         switch mode {
         case .log?: LoggingPoster(forwarding: nil, avatarData: avatarData)
@@ -36,9 +30,7 @@ enum MacDebugNotificationLog {
         }
     }
 
-    /// A notice the model adds to the notification centre itself (a notification reply's outcome) rather than through
-    /// `poster`: logged as the poster logs a request, and to be posted only with `-haus-post-notifications`. True when
-    /// the caller should post it.
+    // Notices the model adds itself (a reply's outcome) bypass `poster`; true when the caller should post it.
     static func shouldPost(notice request: UNNotificationRequest) -> Bool {
         guard let mode else { return true }
         let content = request.content
@@ -47,13 +39,11 @@ enum MacDebugNotificationLog {
         return mode == .post
     }
 
-    /// The newest `message` request of this run, for `MacNotificationDebug`'s actions when nothing is posted.
     static var newestMessage: PlannedNotification? { newest.withLock { $0 } }
     private static let newest = Mutex<PlannedNotification?>(nil)
 
     struct LoggingPoster: NotificationPosting {
         let forwarding: (any NotificationPosting)?
-        /// The poster's source of the sender's pre-scaled avatar, to log whether the request carries an image.
         let avatarData: @Sendable (String) -> Data?
 
         func add(_ request: PlannedNotification) async throws {
@@ -75,7 +65,7 @@ enum MacDebugNotificationLog {
         func preparationAllowance(for request: PlannedNotification) -> Duration { forwarding?.preparationAllowance(for: request) ?? .zero }
     }
 
-    /// Which fields are set. A body is quoted only when it is one of the fixed generic texts.
+    // A body is quoted only when it is one of the fixed generic texts.
     private static func describe(_ request: PlannedNotification, avatarData: (String) -> Data?) -> String {
         let fixed = [NotificationPlanner.hiddenBody, NotificationPlanner.hiddenReactionBody, NotificationPlanner.fallbackBody]
         let body = request.body.isEmpty ? "empty" : fixed.contains(request.body) ? "\"\(request.body)\"" : "\(request.body.count) chars"
@@ -87,7 +77,6 @@ enum MacDebugNotificationLog {
             + "body \(body), \(sender), destination \(request.destination == nil ? "none" : "set"), sound \(request.playsSound ? "yes" : "no")"
     }
 
-    /// As `MacDebugHooks.log`, from outside the main actor.
     private static func write(_ text: String) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -97,20 +86,8 @@ enum MacDebugNotificationLog {
     }
 }
 
-/// `MacLifecycleDebug`'s `notify …` steps, for a lab account: what a click on a notification's Reply or Mark as Read
-/// does, and the settings that change what is posted.
-///
-/// - `notify reply [<text>]`, `notify read`: the action on the newest message notification, handed to
-///   `NotificationActionCenter` as the notification centre's delegate hands over a clicked one, and its outcome. With
-///   `-haus-log-notifications` the newest logged request; otherwise the newest delivered one in Notification Center.
-/// - `notify delivered`: what Notification Center holds for the app (see `MacPushProbe`).
-/// - `notify state`: each chat's unread count and notification setting, the selected chat, the Dock tile's label and
-///   where the icon badge went, and whether this test session posts nothing (no `-haus-log-notifications`).
-/// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction and transport state,
-///   time, body length, why unreadable), never their text.
-/// - `notify previews on|off`, `notify reactions on|off`: the Settings switches.
-/// - `notify mute <chat>` (for an hour), `notify unmute <chat>`, `notify mentions <chat>`, `notify all <chat>`: the
-///   chat's notification menu.
+// `notify …` steps of `MacLifecycleDebug`, for a lab account. Reply and Mark as Read go through
+// `NotificationActionCenter` as a clicked notification's response does.
 @MainActor enum MacNotificationDebug {
     static func run(_ argument: String, model: AppModel, window: MacWindowState) async {
         let words = argument.split(separator: " ", maxSplits: 1).map(String.init)
@@ -139,7 +116,6 @@ enum MacDebugNotificationLog {
         }
     }
 
-    /// Reply or Mark as Read, parsed from the request's user info and category as the delegate parses a response.
     private static func act(_ action: String, text: String?) async {
         let content: (userInfo: [AnyHashable: Any], category: String)?
         if MacDebugNotificationLog.mode == .log {

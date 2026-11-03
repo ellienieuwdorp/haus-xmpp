@@ -2,12 +2,8 @@
 import AppKit
 import SwiftUI
 
-/// The timeline's tour steps and measurements (`-haus-tour`, `-haus-timeline-trace`; see `MacDebugHooks`). Debug
-/// builds only.
-///
-/// Drift is how far the reader's row moved from where it was before an update, sampled on each of the next 30
-/// refreshes. Scroll events cannot be staged here (the window is off-screen, so AppKit gives them no window): `drag`
-/// moves the clip view as a gesture would, inside the table's live scroll, as a gesture's phases start and end it.
+// Scroll events cannot be staged here (the off-screen window gets none from AppKit), so `drag` moves the clip view as
+// a gesture would, inside the table's live scroll. Drift is how far the reader's row moved, over the next 30 refreshes.
 @MainActor enum MacTimelineDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         // The window's own cost too, with no chat open.
@@ -56,7 +52,6 @@ import SwiftUI
         case "swipe-end":
             await swipeEnd(argument, timeline: timeline)
         case "bind-reader":
-            // The table keeps the reader's rows itself; there is no scroll position to bind.
             MacDebugHooks.log("timeline bound nothing: the table keeps the reader's rows itself")
         case "mismatch":
             MacDebugHooks.log("timeline mismatch: \(timeline.table.debugMismatch())")
@@ -81,8 +76,8 @@ import SwiftUI
         case "extras-cache":
             MacDebugHooks.log("timeline extras-cache: \(timeline.table.debugExtrasCache())")
         case "update-race":
-            // Two updates measured on the queue with a reload between them, as a new accent makes one: the second applies
-            // its own rows, and the first's records, landing after the reload, nothing.
+            // Two updates measured on the queue with a reload between them, as a new accent makes one: the second
+            // applies its own rows, and the first's records, landing after the reload, nothing.
             var first = timeline.content
             first.rows.append(arrival("debug-race-first", longText(2_000)))
             timeline.table.update(first)
@@ -132,11 +127,8 @@ import SwiftUI
         }
     }
 
-    /// `resize-sweep <width>x<height> <width>x<height> <steps> [live]`: resizes the main window from the first size to the
-    /// second in even steps, one a frame, as a live resize would, and logs how long each step held the main thread: the
-    /// resize with its layout and display, and what ran in the turns after it before the next frame was due; and the
-    /// resize's CPU time, which leaves out waiting for a core on a busy machine. With `live` after the steps the window
-    /// is in a live resize throughout, as under the pointer (`inLiveResize` is true, and what waits for its end waits).
+    // One step per frame; CPU time is logged too, as it leaves out waiting for a core. With `live`, `inLiveResize` is
+    // true throughout, so what waits for a live resize's end waits.
     private static func resizeSweep(_ argument: String, window: NSWindow?) async {
         let parts = argument.split(separator: " ")
         let sizes = parts.prefix(2).map { $0.split(separator: "x").compactMap { Double($0) } }
@@ -172,8 +164,6 @@ import SwiftUI
         MacDebugHooks.log("timeline resize-sweep \(argument): \(steps + 1) steps\(inLiveResize ? " in a live resize" : ""); resize and layout \(summary(synchronous)); step with the next frame \(summary(whole)); setContentSize \(summary(phases[0])), layout \(summary(phases[1])), display \(summary(phases[2])); resize and layout CPU \(summary(cpu))")
     }
 
-    /// `knob [<seconds>]`: the timeline's scroller against the scroll view and its insets, and its knob, now and then on
-    /// each refresh for `seconds` while the next steps play.
     private static func knob(_ seconds: Double, timeline: MacTimelineController) {
         let scrollView = timeline.table.scrollView
         func sample(_ label: String) {
@@ -197,10 +187,8 @@ import SwiftUI
         }
     }
 
-    /// `drag <points> <seconds> [phaseless]`: moves the timeline's clip view by `points` (positive towards older messages)
-    /// over `seconds` on a 120 Hz timer, as the reader's scroll: a gesture's phases around it, or none with `phaseless`,
-    /// as a wheel or the scroller may report. It runs while the next steps play, so a resize can land mid-scroll, and
-    /// logs the reader's row when it starts and when it ends.
+    // Runs while the next steps play, so a resize can land mid-scroll; `phaseless` sends no gesture phases, as a wheel
+    // or the scroller may.
     private static func drag(_ argument: String, timeline: MacTimelineController, window: NSWindow?) {
         let parts = argument.split(separator: " ")
         func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
@@ -222,7 +210,7 @@ import SwiftUI
             (self.scrollView, self.timeline, self.points, self.seconds, self.phases, self.label) = (scrollView, timeline, points, seconds, phases, label)
         }
 
-        /// Keeps itself alive through its timer until the drag ends.
+        // Kept alive by its timer until the drag ends.
         func start() {
             report(timeline, "drag \(label) start")
             if phases { timeline.debugLiveScroll(true) }
@@ -249,19 +237,11 @@ import SwiftUI
         }
     }
 
-    // MARK: Reply swipe
-
-    /// The message and the point of a swipe `swipe … hold` left open, for `swipe-end`.
     private static var heldSwipe: (id: String, point: NSPoint, fingerX: CGFloat)?
 
-    /// `swipe <message id> <points> [<vertical points>] [hold|wheel]`: a two-finger gesture over the message's bubble,
-    /// handed straight to the table's reply swipe as the window's event monitor would hand it on (no event goes through
-    /// the window server): `mayBegin`, then the fingers moving `points` right (negative: left) and the vertical points
-    /// down in whole-point steps of about 4 pt, 8 ms apart, then `ended` and a short momentum. With `hold` it stops before
-    /// `ended`, so a `capture` can show the swipe under way, and `swipe-end` finishes it. `wheel` sends one
-    /// notched mouse wheel event instead. What the swipe does not keep is counted, not sent on: an off-screen window's
-    /// scroll view cannot track a gesture (its responsive scrolling needs a screen). Logs whether the swipe took the
-    /// gesture, how far the bubble went, whether it replied and the composer's reply.
+    // Handed straight to the table's reply swipe as the window's event monitor would, never through the window server.
+    // What the swipe does not keep is counted, not sent on: an off-screen scroll view cannot track a gesture
+    // (responsive scrolling needs a screen).
     private static func swipe(_ argument: String, timeline: MacTimelineController) async {
         let words = argument.split(separator: " ").map(String.init)
         let numbers = words.dropFirst().compactMap { Double($0) }.map { CGFloat($0) }
@@ -293,12 +273,9 @@ import SwiftUI
         await logSwipe(id, argument, timeline: timeline)
     }
 
-    /// `swipe-end [cancel|resign|elsewhere|reset]`: the fingers of a held swipe lift, or the gesture is cancelled.
-    /// `resign` and `elsewhere` leave the fingers down and the end never comes, as when a window opens under the pointer:
-    /// another window resigns key, then the timeline's, posted as AppKit posts it (no window changes key); or another
-    /// window's momentum, then its fingers' scroll, handed to the table as its event monitor would. The swipe should go on
-    /// after the first of each and end after the second. `reset` lifts the fingers and, while the bubble settles, resets
-    /// the cell at once as its reuse for another message does.
+    // `resign` and `elsewhere` leave the fingers down so the end never comes, as when a window opens under the pointer:
+    // the swipe should go on after the first event of each and end after the second. `reset` resets the cell
+    // mid-settle.
     private static func swipeEnd(_ argument: String, timeline: MacTimelineController) async {
         guard let held = heldSwipe else { return MacDebugHooks.log("tour swipe-end: no swipe held") }
         heldSwipe = nil
@@ -332,7 +309,6 @@ import SwiftUI
         await logSwipe(held.id, "end \(argument)", timeline: timeline)
     }
 
-    /// The fingers lift (or the gesture is cancelled), and the momentum that follows a quick lift runs out.
     private static func endGesture(_ x: CGFloat, cancel: Bool, at point: NSPoint, timeline: MacTimelineController) async {
         try? await Task.sleep(for: .milliseconds(8))
         send(scrollEvent(x: 0, y: 0, phase: cancel ? .cancelled : .ended, momentum: .none), at: point, timeline: timeline)
@@ -354,7 +330,6 @@ import SwiftUI
             + "composer replying to \(MacComposerTour.intent?.replyingTo?.id ?? "none")")
     }
 
-    /// One event through the table's reply swipe; held events it hands back are counted.
     private static func send(_ event: NSEvent?, at point: NSPoint, timeline: MacTimelineController) {
         guard let event else { return MacDebugHooks.log("tour swipe: no scroll event") }
         if event.phase == .began || event.phase.isEmpty && event.momentumPhase.isEmpty {
@@ -364,8 +339,6 @@ import SwiftUI
         _ = timeline.table.handleScroll(event, at: point) { _ in timeline.table.replySwipe.debugReleased += 1 }
     }
 
-    /// A trackpad's scroll event (a wheel's, with `continuous` false) for the fingers moving `x` right and `y` down,
-    /// whatever this Mac's scroll-direction setting.
     private static func scrollEvent(x: CGFloat, y: CGFloat, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase, continuous: Bool = true) -> NSEvent? {
         func make(_ sign: CGFloat) -> NSEvent? {
             let dx = x * sign, dy = y * sign
@@ -387,8 +360,7 @@ import SwiftUI
         return event.isDirectionInvertedFromDevice || !continuous ? event : make(-1)
     }
 
-    /// A received message added below the others through the table's update path, as an arrival is; the model never
-    /// has it, so the next change of the model's rows takes it away again.
+    // The model never has it, so the next change of the model's rows takes it away again.
     private static func arrive(_ text: String, timeline: MacTimelineController) async {
         var content = timeline.content
         let row = arrival("debug-arrival-\(content.rows.count)", text)
@@ -401,8 +373,7 @@ import SwiftUI
         MacDebugHooks.log("timeline arrive heights: \(timeline.table.debugHeights(of: row.message.id))")
     }
 
-    /// `arrive-extras <count> [older]`: messages with a quote and a large link card, which the queue can only guess the
-    /// height of, added below the others, or above the oldest as an older page. Like `arrive`, the model never has them.
+    // The queue can only guess these rows' heights.
     private static func arriveExtras(_ argument: String, timeline: MacTimelineController) async {
         let words = argument.split(separator: " ")
         let count = words.first.flatMap { Int($0) } ?? 8, older = words.contains("older")
@@ -423,9 +394,7 @@ import SwiftUI
         report(timeline, "arrive-extras \(argument)")
     }
 
-    /// `resize-drag [<width>x<height> <points> <seconds>]` (760x800 4500 2 without them): a resize, then at once a
-    /// gesture, so the records of the resize's end pass land while it scrolls. Every 50 ms through the gesture and
-    /// half a second after it, the cells and the rows against the records they show and have their heights from.
+    // The records of the resize's end pass land while the gesture scrolls.
     private static func resizeDrag(_ argument: String, timeline: MacTimelineController, window: NSWindow?) async {
         let parts = argument.split(separator: " ").map(String.init)
         guard parts.count == 3, let seconds = Double(parts[2]) else {
@@ -451,10 +420,8 @@ import SwiftUI
             + "\(after.shownStandIns.count) standing in, \(after.staged) staged")
     }
 
-    /// `edit-race`: the reader's row edited to a text long enough to be measured on the queue, its cell made again for
-    /// the row as it was before the edit lands, a gesture holding the edit, then the window narrowed to 760 pt, which
-    /// lays the row out again from its input at a narrower bubble, and widened back. The edit must not show before it applies, and once applied must
-    /// stay in the record, the input and the cell's text.
+    // The edit must not show before it applies, and once applied must stay in the record, the input and the cell's
+    // text.
     private static func editRace(timeline: MacTimelineController, window: NSWindow?) async {
         guard let window, let reader = timeline.table.readerRow(), let index = timeline.content.rows.firstIndex(where: { $0.message.id == reader.id }) else {
             return MacDebugHooks.log("tour edit-race: needs an open timeline with a reader's row")
@@ -487,10 +454,8 @@ import SwiftUI
             + "widened again \(timeline.table.debugText(of: reader.id, edited: edited))")
     }
 
-    /// `overlay-resize [<width>x<height>]`: in one turn, the reader's scroll to the newest message and 2,000 pt up from it,
-    /// which brings in the day chip and the jump button, and the window resized; then the window's width every 100 ms.
-    /// Their animation once covered the window's whole layout: the split view's columns kept the old width, and SwiftUI
-    /// widened the window by the resize again every frame until AppKit aborted.
+    // An animation of the chip and the jump button can cover the window's whole layout, so SwiftUI re-widens the window
+    // every frame until AppKit aborts.
     private static func overlayResize(_ argument: String, timeline: MacTimelineController, window: NSWindow?) async {
         let size = argument.split(separator: "x").compactMap { Double($0) }
         guard size.count == 2, let window else {
@@ -514,7 +479,6 @@ import SwiftUI
         TimelineRow(message: TimelineMessage(id: id, body: text, isOutgoing: false, isStarred: false, sentAt: .now), dateHeader: nil, startsRun: true, endsRun: true)
     }
 
-    /// A text of about `count` characters that wraps.
     private static func longText(_ count: Int) -> String {
         String(String(repeating: "A long message with wrapping text. ", count: count / 35 + 1).prefix(count))
     }
@@ -527,8 +491,6 @@ import SwiftUI
             + "jump button \(timeline.showsJumpToNewest), day chip \(timeline.dayChip?.text ?? "none")")
     }
 
-    /// After an update that kept the reader's rows: the reader's row's drift right after the update and over the next
-    /// 30 refreshes.
     static func held(_ reader: TimelineScrollPolicy.PlacedRow, by table: MacTimelineTableController) {
         guard MacDebugHooks.has("-haus-timeline-trace") else { return }
         let immediate = table.debugTop(of: reader.id).map { $0 - reader.top }
@@ -552,9 +514,7 @@ import SwiftUI
         }
     }
 
-    /// `stalls [label]`: logs the main thread's stalls since the last `stalls` step (the first one starts the probe), each
-    /// a gap of over 50 ms between the ticks of a 120 Hz timer on the main run loop, which runs in every run loop mode,
-    /// event tracking and live resize included.
+    // The 120 Hz timer runs in every run loop mode, event tracking and live resize included.
     @MainActor final class StallProbe {
         static let shared = StallProbe()
         private var last: CFTimeInterval = 0

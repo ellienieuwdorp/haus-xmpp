@@ -4,30 +4,10 @@ import MessagingCore
 import OMEMO
 import SwiftUI
 
-/// Debug checks of the Mac lifecycle (`MacLifecycle`, `MacLifecycleDriver`). Debug builds only.
-///
-/// Every event `MacLifecycle` applies is logged with the four signals, what AppKit reported, the transition it runs and
-/// the scene phase each window's content last reported. `-haus-lifecycle-steps "<step>; <step>; …"` then plays a
-/// scenario once the launch hooks are done. Nothing here sleeps, locks or logs out the Mac: sleep, wake, the screen lock
-/// and idleness are simulated by calling the same handlers the system's events call, and focus by `simulatedActive`
-/// (an unobtrusive window is never key and always occluded). Closing, minimising and hiding are real.
-///
-/// Steps: `wait <seconds>`, `activate` / `deactivate` (simulated focus; the first one turns simulation on), `real`
-/// (AppKit's own focus again), `hide`, `unhide`, `minimise`, `close`, `open`, `lock`, `unlock`, `idle <minutes>` (the last
-/// input that long ago, in place of the real input clock; `idle 0` is input just now), `input` (the real clock again),
-/// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
-/// `wake`, `select <chat>`, `accept <jid>|<room>` (accepts that lab or staging contact's undecided devices, as the
-/// Devices page would, or a joined lab room's members' undecided devices, as Group details would), `draft <text>` (the
-/// open chat's composer changed), `report` (lease and session), `store <chat>` (a lab account's retained ciphertext, the
-/// room's devices and the chat's stored messages, without content), `notify <step>` (notification actions and settings,
-/// `MacNotificationDebug`), `drop-socket` (the live stream stops reading and writing without an error, as on a dead
-/// network path: the app notices only through its liveness probes, so a push the server then sends reaches the
-/// extension, whose liveness ring makes the app probe and reconnect), `hold-acks <seconds>` (the live stream leaves the
-/// server's acknowledgement requests unanswered that long, default 35, then answers once and goes on: the server pushes
-/// for a healthy session, and the app's probe is answered without a reconnect), `sign-out` (as Settings' Sign Out, which
-/// turns push off at the gateway and the server, so a staging run ends clean), `quit`.
+// `-haus-lifecycle-steps "<step>; …"` plays a scenario after the launch hooks, logging each event applied. Sleep,
+// wake, lock and idle call the system events' own handlers and focus is `simulatedActive` (no window here is key);
+// closing, minimising and hiding are real. Nothing here sleeps, locks or logs out the Mac.
 @MainActor enum MacLifecycleDebug {
-    /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
     private static var applied: LifecycleSignals?
 
@@ -77,8 +57,6 @@ import SwiftUI
         return parts.isEmpty ? "no transport, presence or CSI work" : parts.joined(separator: ", ")
     }
 
-    // MARK: Steps
-
     static func run(_ script: String, lifecycle: MacLifecycle, model: AppModel, window: MacWindowState) async {
         let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         for step in steps {
@@ -119,6 +97,9 @@ import SwiftUI
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
             case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
+            // `drop-socket` stops the stream without an error, as on a dead path, so only liveness probes notice;
+            // `hold-acks` leaves the server's ack requests unanswered that long, then answers once, so the probe needs
+            // no reconnect.
             case "drop-socket": MacDebugHooks.log("step drop-socket: \(await model.debugSilenceTransport() ? "stream silenced" : "no stream online")")
             case "hold-acks":
                 let seconds = Double(argument) ?? 35
@@ -137,10 +118,8 @@ import SwiftUI
         NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
     }
 
-    /// What the Devices page's Accept does, for a contact on a lab or staging server only: a lab run cannot click it.
-    /// For a joined lab room, what Group details' Accept does for each undecided device of another member: a room is
-    /// OMEMO 2 only, while a contact's own page lists the version their 1:1 chat uses, which may be the other record of
-    /// the same device ID.
+    // Lab or staging contacts only: a lab run cannot click Accept. A room is OMEMO 2 only, while a contact's own page
+    // lists the version their 1:1 chat uses, which may be the other record of the same device ID.
     private static func accept(_ address: String, model: AppModel) async {
         let parts = address.split(separator: "@")
         let isLabContact = parts.count == 2 && AppModel.labDomains.contains(String(parts[1]))
@@ -163,7 +142,6 @@ import SwiftUI
     }
 }
 
-/// Logs the scene phase a window's content sees, for `MacLifecycleDebug`.
 struct MacScenePhaseLog: ViewModifier {
     let window: String
     @Environment(\.scenePhase) private var scenePhase
