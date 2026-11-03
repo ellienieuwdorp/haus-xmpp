@@ -63,6 +63,7 @@
 		1999B9272F5C3F45B080D1AD /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		1A6C51E1B53648D2DF495CC6 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = B73817A40C13029F33A2A1FF /* LICENSE */; };
 		1B87AF3E5B9BDBDE3E1D59EA /* AppModel+ConversationSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D58701C743B4C1C79D20B9 /* AppModel+ConversationSource.swift */; };
+		1C44D9563C3E23FAE97C6124 /* MessageActionMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */; };
 		1C72888FC2E46A6675F5C432 /* ConnectionSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */; };
 		1CC9DA7058CE33F111E14448 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BD52830F320F4C99E25EBF /* SharedStorage.swift */; };
 		1CF0C69F0D1E02B2DE2270E9 /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24971C9AFE6065119E87D945 /* CoalescedReload.swift */; };
@@ -153,6 +154,7 @@
 		41C29B242E156C08CC5FEFDE /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
 		420D2799BCD6EB84F57C10F4 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174D8D2CD8272853B0A9593D /* NotificationAccount.swift */; };
 		4252187DDA2F36C261ED55C1 /* schema-23.sql in Resources */ = {isa = PBXBuildFile; fileRef = 344DD29BDD09CBA5CC731137 /* schema-23.sql */; };
+		42CCC02F868E9A63E733AE36 /* TimelineMessageFocusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCF48ABDE1B7D75DFCDDE88 /* TimelineMessageFocusTests.swift */; };
 		439AA2B03241D3866DF90D86 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0E44F860DD39928F7313B2 /* AppModel.swift */; };
 		449034EA7BCD5338A47D701A /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174D8D2CD8272853B0A9593D /* NotificationAccount.swift */; };
 		45F32FADBAA832E3C453EB81 /* MacToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A13172218752625D22B5412 /* MacToolbar.swift */; };
@@ -165,6 +167,7 @@
 		49DA94B7059AA5366789D503 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = E89DDE5B5B265C75D0C06C29 /* README.md */; };
 		4A5356525D8C703155480E40 /* ComposerLinkPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACC875416BD53381417321D /* ComposerLinkPreview.swift */; };
 		4AFD18FF078C33AD827D4A9A /* Typing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA646B2D3BEC5BEF134632A /* Typing.swift */; };
+		4B08F198A8B72DB6D4E99E7F /* MacTimelineCellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 488F162EE2057C5649335EEE /* MacTimelineCellTests.swift */; };
 		4BC45A96C471D73C719C628B /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B16B2BDD3A5B351589430FC /* EncryptionUITests.swift */; };
 		4BFC0FE167BA82F43480F1E3 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 67FA64D3B73799DEEC911F37 /* XMPPProtocol */; };
 		4C46D191AD04D18F292237D9 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 92605AB94F49C7CE3B12CCB4 /* MessagingCore */; };
@@ -300,6 +303,7 @@
 		972BA0FB0311856F62AB20E0 /* ChatRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */; };
 		978A1720D0A722FE4826517C /* AppLiveness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 536C5D6120792D6EE9A57510 /* AppLiveness.swift */; };
 		98522509C03F0A2E2EC5DDC8 /* PushTokenCallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5E39D1304108242CD5C4E3 /* PushTokenCallbackTests.swift */; };
+		98F22DF4EC1A8FA7A3B19203 /* MacTestHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24AAFD0EE3961A8BBFAEEB11 /* MacTestHostTests.swift */; };
 		98FB71CCAF76B2D84307427B /* PreUpgradeHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78ECA4DBDACE97E7A0AA2EE /* PreUpgradeHold.swift */; };
 		9948BB61F784F40ABC7A3D6F /* PreviousVersionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF039A38BC671DF02393E41 /* PreviousVersionViews.swift */; };
 		997F9133FEBC082A9CE11584 /* AttachmentDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E9D1EA17C8008D91B2D600 /* AttachmentDispatchTests.swift */; };
@@ -488,6 +492,7 @@
 		F8183D3D7DFC25A9569869FE /* NotificationAccessGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 697CE48AFD71A7D39DBA7C50 /* NotificationAccessGateTests.swift */; };
 		F90CB4AC0427868B04E02AA3 /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
 		F90D2978D1DDF5F8E365A428 /* ConnectionSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */; };
+		FA9445454400DECFAE5AAD27 /* TimelineScrollPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CBE10482F2CC6B1546794B /* TimelineScrollPolicyTests.swift */; };
 		FB3F5E80E6175891B84AF6BE /* EmojiCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696DE68458926F970F77D355 /* EmojiCatalogTests.swift */; };
 		FB486B51108AB76AECA6A998 /* ContactName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2806958D2C698E69232C9A /* ContactName.swift */; };
 		FBA7C7E44471D6109AFC404A /* PreUpgradeHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78ECA4DBDACE97E7A0AA2EE /* PreUpgradeHold.swift */; };
@@ -524,6 +529,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = DBD356337FC2BB66123E6D2D;
 			remoteInfo = HausXMPP;
+		};
+		3C10B16A0D49CF4369F1E352 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 67EEF7E21A8BA2508A95CA69 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 07B447C3F34236371B40FE69;
+			remoteInfo = HausXMPPMac;
 		};
 		A1E48EC8AC70D07859C175A8 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -618,6 +630,8 @@
 		2444BE96E62C6A76EDE00EDC /* GroupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupUITests.swift; sourceTree = "<group>"; };
 		24457939D26275779CFB05C1 /* AttachmentDownloadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadState.swift; sourceTree = "<group>"; };
 		24971C9AFE6065119E87D945 /* CoalescedReload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReload.swift; sourceTree = "<group>"; };
+		24AAFD0EE3961A8BBFAEEB11 /* MacTestHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTestHostTests.swift; sourceTree = "<group>"; };
+		25CA82A609E4B08E19E108F3 /* HausXMPPMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HausXMPPMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		25E35CC4DCAC6DAF5D90836E /* MacChatList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatList.swift; sourceTree = "<group>"; };
 		262C24D8BC85FD3D3A8D858F /* ContactLinkUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactLinkUITests.swift; sourceTree = "<group>"; };
 		26B2C44074131A0283EB0679 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -657,6 +671,7 @@
 		4619659D22BDBCA952995241 /* LinkScan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkScan.swift; sourceTree = "<group>"; };
 		464421A26724B3E5A1ED4034 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
+		488F162EE2057C5649335EEE /* MacTimelineCellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTimelineCellTests.swift; sourceTree = "<group>"; };
 		4ACC875416BD53381417321D /* ComposerLinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerLinkPreview.swift; sourceTree = "<group>"; };
 		4AE59BD38D134F3C88543871 /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
 		4B9874217D52661F7EE6E746 /* LinkPreviewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewModels.swift; sourceTree = "<group>"; };
@@ -1177,6 +1192,7 @@
 				44C90062EE37B85EB502A94B /* HausXMPP.app */,
 				CC30C3C5ADBCDBC64B174C60 /* HausXMPPLifecycleTests.xctest */,
 				8ADA11CACE298D38E00B7372 /* HausXMPPMac.app */,
+				25CA82A609E4B08E19E108F3 /* HausXMPPMacTests.xctest */,
 				3BAC3EB28A3AF370298473D3 /* HausXMPPUITests.xctest */,
 				D6CA8152B21BE66BD1AEA1DD /* XMPPNotificationService.appex */,
 				EB9DE78DDB637C851451A0A9 /* XMPPNotificationServiceMac.appex */,
@@ -1198,6 +1214,7 @@
 				56680ECA49EFEDE4F90BD640 /* Config */,
 				226B395E0F4E82C9F218EEAB /* Fixtures */,
 				1731328C2EF4FB2AD2B00018 /* Mac */,
+				CE6998899FCAA341EA757558 /* MacTests */,
 				4A958325B6F78B0E2E3101CB /* NotificationService */,
 				991CB343AD702ED3E525A7C7 /* NotificationServiceMac */,
 				EC72C774CAE1A4702AFCDCC6 /* OMEMOCrypto */,
@@ -1358,6 +1375,15 @@
 				3FEA9AED98D6D9D58F880157 /* UITestSupport.swift */,
 			);
 			path = AppTests;
+			sourceTree = "<group>";
+		};
+		CE6998899FCAA341EA757558 /* MacTests */ = {
+			isa = PBXGroup;
+			children = (
+				24AAFD0EE3961A8BBFAEEB11 /* MacTestHostTests.swift */,
+				488F162EE2057C5649335EEE /* MacTimelineCellTests.swift */,
+			);
+			path = MacTests;
 			sourceTree = "<group>";
 		};
 		D075D49C1FB1D9058BC92DAC /* Frameworks */ = {
@@ -1544,6 +1570,24 @@
 			productReference = D6CA8152B21BE66BD1AEA1DD /* XMPPNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		D1E4E982D00BB7240B7D11FB /* HausXMPPMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F4D304F1D952CF0958F4C300 /* Build configuration list for PBXNativeTarget "HausXMPPMacTests" */;
+			buildPhases = (
+				F0D4C937EFC7DFF3C5560868 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				126FCDB55681B9CE1CC30F21 /* PBXTargetDependency */,
+			);
+			name = HausXMPPMacTests;
+			packageProductDependencies = (
+			);
+			productName = HausXMPPMacTests;
+			productReference = 25CA82A609E4B08E19E108F3 /* HausXMPPMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		DBD356337FC2BB66123E6D2D /* HausXMPP */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 731EB1A67F7AEBDB6462E20A /* Build configuration list for PBXNativeTarget "HausXMPP" */;
@@ -1608,6 +1652,10 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					D1E4E982D00BB7240B7D11FB = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 					DBD356337FC2BB66123E6D2D = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -1641,6 +1689,7 @@
 				76A951736B0FA0335C264E8D /* HausShare */,
 				6AF5C55E6473EF98DD6696CA /* HausShareMac */,
 				4A77021075A58939E1A7D758 /* HausXMPPLifecycleTests */,
+				D1E4E982D00BB7240B7D11FB /* HausXMPPMacTests */,
 				14D3D0CAD76D4336A63D3F9C /* HausXMPPUITests */,
 			);
 		};
@@ -2063,6 +2112,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F0D4C937EFC7DFF3C5560868 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				98F22DF4EC1A8FA7A3B19203 /* MacTestHostTests.swift in Sources */,
+				4B08F198A8B72DB6D4E99E7F /* MacTimelineCellTests.swift in Sources */,
+				1C44D9563C3E23FAE97C6124 /* MessageActionMenuTests.swift in Sources */,
+				42CCC02F868E9A63E733AE36 /* TimelineMessageFocusTests.swift in Sources */,
+				FA9445454400DECFAE5AAD27 /* TimelineScrollPolicyTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FF3345DD83395893866B7714 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2220,6 +2281,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		126FCDB55681B9CE1CC30F21 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 07B447C3F34236371B40FE69 /* HausXMPPMac */;
+			targetProxy = 3C10B16A0D49CF4369F1E352 /* PBXContainerItemProxy */;
+		};
 		5D2EB5264F7E0BCF5B312420 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 9525E4CDE92299DCF5C51564 /* XMPPNotificationService */;
@@ -2267,6 +2333,44 @@
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = HausXMPP;
+			};
+			name = Release;
+		};
+		0364DF37293AD087928187A3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.HausXMPPMacTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(HAUS_DISPLAY_NAME).app/Contents/MacOS/$(HAUS_DISPLAY_NAME)";
+			};
+			name = Debug;
+		};
+		4C6F5A96846DDE2E040FF26E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.HausXMPPMacTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(HAUS_DISPLAY_NAME).app/Contents/MacOS/$(HAUS_DISPLAY_NAME)";
 			};
 			name = Release;
 		};
@@ -2806,6 +2910,15 @@
 			buildConfigurations = (
 				F2CA0702EF9A6CE2C12387E8 /* Debug */,
 				4FDBFDD65FBBB943C0ACD827 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F4D304F1D952CF0958F4C300 /* Build configuration list for PBXNativeTarget "HausXMPPMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0364DF37293AD087928187A3 /* Debug */,
+				4C6F5A96846DDE2E040FF26E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
