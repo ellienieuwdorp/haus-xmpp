@@ -9,9 +9,9 @@ import os
 // preferences and Keychain records back so that build can be reinstalled; it first keeps this build's data as a second
 // copy, because only that copy holds the encryption sessions contacts used since.
 struct PreUpgradeSnapshot: Sendable {
-    // Newest schema the replaced build can open. A store at or below it is copied before migrating; one above it (a
-    // migration that stopped part way) holds nothing a previous build could read back.
-    static let previousReleaseSchema = 25
+    // The schema the last release writes, the newest a replaced build can open. A store at or below it is copied before
+    // migrating; one above it (a migration that stopped part way) holds nothing a previous build could read back.
+    static let previousReleaseSchema = 27
     // Only suggested: the wall clock can jump and no monotonic clock survives a restart.
     static let suggestedLifetime: TimeInterval = 14 * 24 * 60 * 60
     static let spaceMargin: Int64 = 32 << 20
