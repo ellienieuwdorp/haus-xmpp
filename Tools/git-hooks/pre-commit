@@ -1,0 +1,4 @@
+#!/bin/bash
+# Enabled per checkout with `git config core.hooksPath Tools/git-hooks`. Checks the staged Swift files as they are in
+# the working tree; CI runs the same checks on every file.
+exec "$(git rev-parse --show-toplevel)/Tools/check.sh" changed --staged

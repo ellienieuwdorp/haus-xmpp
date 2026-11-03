@@ -88,6 +88,18 @@ Suites named `…LabTests` need a live test server and disposable accounts, set 
 
 App tests run in Xcode: the `HausXMPPLifecycle` scheme for hosted unit tests ([AppLifecycleTests/README.md](AppLifecycleTests/README.md)) and the `HausXMPP` scheme for UI tests ([AppTests/README.md](AppTests/README.md)).
 
+## Checks
+
+`Tools/check.sh` runs the static checks that CI runs: SwiftLint 0.65.1 (`brew install swiftlint`), `slop-check` for the comment rules, the import boundaries between the packages, and a check that nothing machine-specific gets published. `Tools/check.sh changed` checks the Swift files you changed, in under a second; `Tools/check.sh full` checks every file. To run it on each commit:
+
+```sh
+git config core.hooksPath Tools/git-hooks
+```
+
+Comments say what the code can't: a constraint, a protocol quirk or a non-obvious reason, in three lines or fewer. `///` documentation is for `public`, `package` and `open` API only.
+
+Violations that predate the checks are listed in `.swiftlint-baseline.json` and `.slop-baseline.json`. New code is held to every rule, and the baselines only shrink: `Tools/check.sh shrink` drops the entries you fixed, and `Tools/check.sh baseline` rewrites both from the current code. CI fails a pull request whose baselines grew unless a maintainer adds the `baseline-growth-approved` label.
+
 ## Project layout
 
 | Path | Contents |
@@ -102,6 +114,7 @@ App tests run in Xcode: the `HausXMPPLifecycle` scheme for hosted unit tests ([A
 | `Packages/MessagingCore` | Sending, sync, archive recovery and notification planning |
 | `Config/` | Shared and local build settings |
 | `TestPlans/` | UI test plans |
+| `Tools/` | Static checks and the git hook that runs them |
 
 ## Licence
 
