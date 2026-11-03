@@ -55,7 +55,9 @@ enum Words {
     // Text that parses as Swift statements, other than a bare name, is commented-out code.
     static func looksLikeCode(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let hasCodeShape = trimmed.rangeOfCharacter(from: CharacterSet(charactersIn: "(){}=;[]")) != nil
+        // Parentheses alone are prose unless they follow a name directly, as in a call: "a key (PEM)" is not code.
+        let hasCodeShape = trimmed.rangeOfCharacter(from: CharacterSet(charactersIn: "{}=;[]")) != nil
+            || trimmed.range(of: #"\w\("#, options: .regularExpression) != nil
             || ["return ", "let ", "var "].contains { trimmed.hasPrefix($0) }
         guard trimmed.count > 2, hasCodeShape else { return false }
         let tree = Parser.parse(source: trimmed)

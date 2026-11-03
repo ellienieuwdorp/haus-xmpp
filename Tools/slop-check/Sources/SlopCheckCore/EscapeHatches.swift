@@ -70,10 +70,24 @@ enum EscapeHatches {
         }
     }
 
-    // A reason is a prose comment of three or more words.
+    // A reason is a prose comment of three or more words; a run of `//` lines on consecutive lines counts as one.
     private static func reasonLines(_ comments: [Comment]) -> Set<Int> {
-        let reasons = comments.filter { Words.split($0.text).count >= 3 && !Words.looksLikeCode($0.text) }
-        return Set(reasons.flatMap { $0.line...$0.endLine })
+        var lines = Set<Int>()
+        var run: [Comment] = []
+        for comment in comments where !Words.looksLikeCode(comment.text) {
+            if let last = run.last, comment.line == last.endLine + 1 {
+                run.append(comment)
+            } else {
+                lines.formUnion(reasonRun(run))
+                run = [comment]
+            }
+        }
+        return lines.union(reasonRun(run))
+    }
+
+    private static func reasonRun(_ run: [Comment]) -> [Int] {
+        guard Words.split(run.map(\.text).joined(separator: " ")).count >= 3 else { return [] }
+        return run.flatMap { $0.line...$0.endLine }
     }
 
     // The reason sits on the line above the enclosing statement or declaration, or on its first lines.

@@ -42,6 +42,13 @@ struct FileCheckerTests {
         #expect(rules("nonisolated(unsafe) var x = 1\n") == [Rule.nonisolatedUnsafe])
         #expect(rules("final class C: @unchecked Sendable {}\n") == [Rule.uncheckedSendable])
         #expect(rules("// The lock in `state` serialises every access.\nfinal class C: @unchecked Sendable {}\n").isEmpty)
+        #expect(rules("// The system finishes uploads for a suspended app; the ids persist for\n// relaunch.\nfinal class C: @unchecked Sendable {}\n").isEmpty)
+    }
+
+    @Test func commentedOutCodeIsFlagged() {
+        #expect(rules("// let x = compute(1)\nlet y = 2\n") == [Rule.commentedOutCode])
+        #expect(rules("// render(row)\nlet y = 2\n") == [Rule.commentedOutCode])
+        #expect(rules("//   HAUS_LAB_CA (PEM)\nlet y = 2\n").isEmpty)
     }
 
     @Test func restatedNamesAreFlagged() {
