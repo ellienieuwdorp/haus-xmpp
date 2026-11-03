@@ -338,8 +338,7 @@ targets:
     platform: iOS
     sources:
       - AppLifecycleTests
-      # The 045ca73 build's schema-21 store, the f563365 build's schema-23 store and main's schema-24 (4df394a) and
-      # schema-25 (7159f37) stores, shared with the MessageStore package tests.
+      # Released builds' stores, one per schema, shared with the MessageStore package tests.
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-21.sql
         buildPhase: resources
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-23.sql
@@ -347,6 +346,10 @@ targets:
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-24.sql
         buildPhase: resources
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-25.sql
+        buildPhase: resources
+      - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-26.sql
+        buildPhase: resources
+      - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-27.sql
         buildPhase: resources
     dependencies:
       - target: HausXMPP

@@ -44,7 +44,7 @@ func sqliteExecute(url: URL, sql: String) -> Bool {
 }
 
 // Writes the real dump of a store an earlier schema left, in WAL mode: 21 holds three synthetic messages of
-// `Ellie@Example.org`, as typed, with `bob@example.org`; 23 the same three normalised plus a group message; 24 and 25
+// `Ellie@Example.org`, as typed, with `bob@example.org`; 23 the same three normalised plus a group message; 24 to 27
 // that store migrated forward.
 func writePreviousReleaseStore(at url: URL, schema: Int = 21) throws {
     let fixture = try #require(Bundle.module.url(forResource: "schema-\(schema)", withExtension: "sql", subdirectory: "Fixtures"))
