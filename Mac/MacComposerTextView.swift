@@ -2,34 +2,23 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What the composer's text view asks of the composer: the keys that act on the message rather than the text, and the
-/// files or images pasted or dropped into it.
 @MainActor struct MacComposerKeyActions {
-    /// Return, Enter or Command-Return with no marked text.
     var send: () -> Void
-    /// Up-arrow in an empty draft; true when it started an edit.
     var editLast: () -> Bool
-    /// Esc with no marked text; true when it cancelled a reply or an edit.
     var cancel: () -> Bool
-    /// True when the composer took them; false leaves the paste or drop to the text view.
     var attach: (MacComposerAttachments) -> Bool
-    /// Whether `attach` would take files now; Continuity Camera offers its items only then.
+    // Continuity Camera offers its items only while this is true.
     var canAttach: () -> Bool
-    /// Shift-Tab: where keyboard focus goes back to, when the composer knows; the window's key view loop otherwise.
     var focusPrevious: (() -> Void)? = nil
 }
 
-/// Files or an image handed to the composer by a paste, a drop or Continuity Camera.
 enum MacComposerAttachments {
     case files([URL])
-    /// An image on the pasteboard with no file behind it (a screenshot, an image copied from a page, a photo taken on
-    /// an iPhone).
     case image(Data, UTType)
-    /// A PDF with no file behind it: a document scanned on an iPhone.
     case pdf(Data)
 
-    /// File URLs win (Finder also puts the file's name as text and its icon as an image); text wins over an image
-    /// rendition of itself (Pages, Notes and browsers put both); an image without text is an image. nil pastes text.
+    // File URLs win (Finder also puts the file's name as text and its icon as an image); text wins over an image
+    // rendition of itself (Pages, Notes and browsers put both); an image without text is an image. nil pastes text.
     static func read(from pasteboard: NSPasteboard) -> MacComposerAttachments? {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             return .files(urls)
@@ -49,20 +38,16 @@ enum MacComposerAttachments {
     static let pasteboardTypes: [NSPasteboard.PasteboardType] = [.fileURL] + imageTypes.map(\.0) + [.pdf]
 }
 
-/// The composer's text field: a plain-text `NSTextView` in an `NSScrollView`, sized to its text up to `maxLines` and
-/// scrolling inside itself beyond that. Spelling, the system's autocorrection and text replacement, Writing Tools and
-/// undo are the text view's own. The draft goes to `state` on every change and comes back only when the composer
-/// replaces it (a send, an edit filling it in, a failed send putting it back).
+// The draft goes to `state` on every change and comes back only when the composer replaces it.
 struct MacComposerTextField: NSViewRepresentable {
     @Bindable var state: MacComposerState
     let placeholder: String
     let actions: MacComposerKeyActions
-    /// Changes whenever the text view should take keyboard focus.
     let focusRequests: Int
 
     static let font = NSFont.preferredFont(forTextStyle: .body)
     static let maxLines = 8
-    /// Space above and below the text, so one line sits in the middle of the field's 44 pt minimum.
+    // Centres one line in the field's 44 pt minimum.
     static let verticalInset: CGFloat = 13
     static let lineHeight: CGFloat = NSLayoutManager().defaultLineHeight(for: font)
 
@@ -109,8 +94,7 @@ struct MacComposerTextField: NSViewRepresentable {
         }
     }
 
-    /// One line high when empty, then the text's height up to `maxLines`. Measured from the text alone: resizing the
-    /// text view here would invalidate the layout SwiftUI is in the middle of.
+    // Measured from the text alone: resizing the text view here would invalidate the layout SwiftUI is in.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView, context: Context) -> CGSize? {
         let text = (scrollView.documentView as? NSTextView)?.string ?? state.draft
         let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? scrollView.frame.width
@@ -118,7 +102,6 @@ struct MacComposerTextField: NSViewRepresentable {
         return CGSize(width: proposal.width ?? width, height: height + 2 * Self.verticalInset)
     }
 
-    /// The laid-out height of `text` at `width`, counting the empty line after a trailing newline.
     static func textHeight(_ text: String, width: CGFloat) -> CGFloat {
         guard !text.isEmpty, width > 0 else { return lineHeight }
         let bounds = NSAttributedString(string: text, attributes: [.font: font])
@@ -129,15 +112,14 @@ struct MacComposerTextField: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         let state: MacComposerState
         var focusRequests = 0
-        /// The composer's own undo stack, not the window's: a draft's history stays with its chat, and a send clears it.
+        // Not the window's: a draft's history stays with its chat, and a send clears it.
         let undo = UndoManager()
         weak var textView: MacComposerTextView?
 
         init(state: MacComposerState) {
             self.state = state
             super.init()
-            // Undo and redo outside the Edit menu's path change the text without `textDidChange`; read it back after
-            // either, so the draft never goes stale.
+            // Undo and redo outside the Edit menu skip `textDidChange`; reading the text back keeps the draft current.
             for name in [NSNotification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
                 NotificationCenter.default.addObserver(self, selector: #selector(undoChanged), name: name, object: undo)
             }
@@ -159,7 +141,6 @@ struct MacComposerTextField: NSViewRepresentable {
 
 final class MacComposerTextView: NSTextView {
     var actions: MacComposerKeyActions?
-    /// The key event being interpreted, for its modifiers.
     private var keyEvent: NSEvent?
 
     func configure() {
@@ -178,8 +159,7 @@ final class MacComposerTextView: NSTextView {
         textContainerInset = NSSize(width: 0, height: MacComposerTextField.verticalInset)
         minSize = .zero
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
-        // Spelling marks always; corrections, text replacement and smart punctuation follow the system's settings
-        // (Keyboard > Text Input), which a new text view already reads.
+        // Corrections, text replacement and smart punctuation follow the system settings, which a new text view reads.
         isContinuousSpellCheckingEnabled = true
         writingToolsBehavior = .complete
         setAccessibilityLabel("Message")
@@ -187,14 +167,12 @@ final class MacComposerTextView: NSTextView {
         setAccessibilityIdentifier("messageComposer")
     }
 
-    /// Makes the text view the window's first responder once it is in a window.
     func focus() {
         guard let window else { wantsFocus = true; return }
         wantsFocus = false
         if window.firstResponder !== self { window.makeFirstResponder(self) }
     }
 
-    /// Asked for before it was in a window (a chat opening).
     private var wantsFocus = true
 
     override func viewDidMoveToWindow() {
@@ -211,8 +189,6 @@ final class MacComposerTextView: NSTextView {
         }
     }
 
-    // MARK: Keys
-
     override func keyDown(with event: NSEvent) {
         keyEvent = event
         defer { keyEvent = nil }
@@ -224,14 +200,12 @@ final class MacComposerTextView: NSTextView {
         super.keyDown(with: event)
     }
 
-    /// Runs after the input method has seen the key, so a Return or Esc that confirms or cancels a composition never
-    /// gets here; `hasMarkedText()` covers text marked without one.
+    // Runs after the input method saw the key, so a Return or Esc confirming a composition never gets here.
     override func doCommand(by selector: Selector) {
         if handleCommand(selector, modifiers: (keyEvent ?? NSApp.currentEvent)?.modifierFlags ?? []) { return }
         super.doCommand(by: selector)
     }
 
-    /// The composer's meaning of a key command; false leaves it to the text view.
     func handleCommand(_ selector: Selector, modifiers: NSEvent.ModifierFlags) -> Bool {
         switch selector {
         case #selector(insertNewline(_:)):
@@ -258,8 +232,6 @@ final class MacComposerTextView: NSTextView {
         }
     }
 
-    // MARK: Paste and drop
-
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         MacComposerAttachments.pasteboardTypes + super.readablePasteboardTypes
     }
@@ -275,8 +247,7 @@ final class MacComposerTextView: NSTextView {
         return super.readSelection(from: pasteboard, type: type)
     }
 
-    /// Continuity Camera (Take Photo, Scan Documents, Add Sketch from an iPhone or iPad) asks the responder chain for
-    /// one that takes images or PDFs; what it brings comes back through `readSelection(from:)` to `attach`.
+    // Continuity Camera asks the responder chain for a view taking images or PDFs, then calls `readSelection(from:)`.
     override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
         if sendType == nil, let returnType, returnType != .fileURL, MacComposerAttachments.pasteboardTypes.contains(returnType), actions?.canAttach() == true {
             return self
@@ -288,7 +259,7 @@ final class MacComposerTextView: NSTextView {
         MacComposerAttachments.pasteboardTypes + super.acceptableDragTypes
     }
 
-    /// Overriding `acceptableDragTypes` does not register them; without this a file drag is never routed here.
+    // Overriding `acceptableDragTypes` does not register them; without this a file drag is never routed here.
     override func updateDragTypeRegistration() {
         super.updateDragTypeRegistration()
         registerForDraggedTypes(acceptableDragTypes)

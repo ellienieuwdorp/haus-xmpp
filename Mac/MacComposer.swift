@@ -4,28 +4,23 @@ import PhotosUI
 import SwiftUI
 import XMPPProtocol
 
-/// A chat's draft, kept apart from everything the timeline reads, so typing redraws the composer and never the
-/// messages. One per chat while the app runs (`MacComposerDrafts`), outliving the composer: a send that fails after the
-/// user moved to another chat puts its text back where they will find it.
+// Kept apart from what the timeline reads, so typing redraws the composer and never the messages. It outlives the
+// composer, so a send that fails after the user moved to another chat puts its text back where they will find it.
 @MainActor @Observable final class MacComposerState {
     var draft = ""
-    /// True from Send until the files and the text are queued; the tray is frozen meanwhile.
+    // From Send until the files and the text are queued; the tray is frozen meanwhile.
     var sending = false
-    /// Files waiting for Send, in the order they were picked, pasted or dropped (`MacAttachmentIntake`).
     var tray: [MacTrayItem] = []
-    /// The tray's files being prepared, one after another so they land in order.
+    // One file after another, so they land in order.
     @ObservationIgnored var preparation: Task<Void, Never>?
-    /// The text view showing this draft, which the attach menu makes first responder for Continuity Camera.
     @ObservationIgnored weak var textView: MacComposerTextView?
-    /// The card for the first link in the draft; Send freezes it into the message.
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
-    /// The edit a successful Send just finished: its draft was already cleared, and anything typed since stays.
+    // Its draft was already cleared, so anything typed since stays.
     @ObservationIgnored var finishedEdit: String?
-    /// The edit whose text the draft holds, so the composer coming back after search hid it keeps what was typed since.
+    // So the composer coming back after search hid it keeps what was typed since.
     @ObservationIgnored var loadedEdit: String?
 
-    /// Ends an input method's composition still open in the field and keeps its text, so a Send takes what the field
-    /// shows: the text view hands marked text to the draft only once it is committed.
+    // The text view hands marked text to the draft only once committed, so Send ends a composition first.
     func commitComposition() {
         guard let textView, textView.hasMarkedText() else { return }
         textView.unmarkText()
@@ -33,9 +28,8 @@ import XMPPProtocol
         draft = textView.string
     }
 
-    /// Empties the field and the draft in one step. The field takes a new draft only while no input method composes
-    /// (`MacComposerTextField.updateNSView`), so a Send clicked mid-composition would leave the sent text showing over
-    /// an empty draft, with Send disabled, and the composition ending would put all of it back.
+    // The field takes a new draft only while no input method composes (`updateNSView`), so a Send clicked
+    // mid-composition would leave the sent text over an empty draft: field and draft are emptied in one step.
     func clearDraft() {
         if let textView, !textView.string.isEmpty {
             textView.inputContext?.discardMarkedText()
@@ -48,8 +42,7 @@ import XMPPProtocol
     }
 }
 
-/// Each chat's composer state while the app runs, so switching chats and coming back finds the draft where it was.
-/// Kept in memory only, so a draft never reaches the disk, and for one account: another account's chats start empty.
+// In memory only, so a draft never reaches the disk, and for one account: another account's chats start empty.
 @MainActor enum MacComposerDrafts {
     private static var account = ""
     private static var states: [String: MacComposerState] = [:]
@@ -69,8 +62,8 @@ import XMPPProtocol
 }
 
 extension MacComposer {
-    /// An edit ends with its chat: its text is the message's, not a draft to come back to. Called as the conversation
-    /// closes, not as the composer goes: search hides the composer and keeps the edit, as on the iPhone.
+    // Called as the conversation closes, not as the composer goes: search hides the composer and keeps the edit, as on
+    // the iPhone.
     static func endEditing(_ intent: MacComposerIntent, account: String, chatID: String) {
         guard intent.editing != nil else { return }
         intent.cancelEditing()
@@ -80,16 +73,12 @@ extension MacComposer {
     }
 }
 
-/// The composer under the Mac conversation: the reply or edit bar, the attach button, the tray of files, the link
-/// preview card, the text field and Send. Return sends, Shift-Return and Option-Return start a new line, Esc cancels a
-/// reply or an edit, and Up-arrow in an empty field edits the newest message that offers Edit. Sends as the iPhone
-/// composer does: the same gating, the same files-then-caption plan (`ComposerPlan`), the same reply, preview and edit
-/// handling, and typing notifications from the draft (`AppModel.draftChanged`).
+// Sends as the iPhone composer does: the same gating, the same files-then-caption plan (`ComposerPlan`), and typing
+// notifications from the draft (`AppModel.draftChanged`).
 struct MacComposer: View {
     let model: AppModel
     let chatID: String
     @Bindable var intent: MacComposerIntent
-    /// Shift-Tab from the field, past the composer's own controls: keyboard focus goes back to the timeline above.
     let focusTimeline: (() -> Void)?
     @State private var state: MacComposerState
     @FocusState private var control: MacComposerControl?
@@ -107,7 +96,7 @@ struct MacComposer: View {
         _state = State(initialValue: MacComposerDrafts.state(account: model.accountID, chat: chatID))
     }
 
-    /// Built bare, so the bars read only what an author line needs.
+    // Built bare, so the bars read only what an author line needs.
     private var presenter: ConversationPresenter {
         ConversationPresenter(source: model, chatID: chatID, title: model.chatName(for: chatID))
     }
@@ -120,12 +109,10 @@ struct MacComposer: View {
         return ComposerPlan.trayPlaceholder(reply: intent.replyingTo) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
     }
 
-    /// Where the iPhone shows its attach button: a direct chat on a server that takes uploads (any sample chat).
+    // As on the iPhone: a direct chat on a server that takes uploads (any sample chat).
     private var showsAttach: Bool { !model.isGroup(chatID) && model.canSendAttachments }
     private var attachEnabled: Bool { intent.editing == nil && !state.sending && !model.isSending }
-    /// Paste and drop add files whenever the button shows, except while an edit rewrites text.
     private var canAttach: Bool { showsAttach && intent.editing == nil }
-    /// The tray is set aside while an edit rewrites text.
     private var showsTray: Bool { intent.editing == nil && !state.tray.isEmpty }
     private var preparing: Bool { state.tray.contains { $0.prepared == nil } }
 
@@ -136,9 +123,8 @@ struct MacComposer: View {
         return ComposerPlan.hasContent(draft: state.draft, editing: intent.editing, hasFiles: showsTray)
     }
 
-    /// What the link preview card follows, as on the iPhone: the draft, the setting (never in the sample
-    /// conversations), whether the chat can carry a preview (modern OMEMO), and whether this message may carry one (not
-    /// with files, not an edit).
+    // As on the iPhone: never in the sample conversations, only where the chat can carry a preview (modern OMEMO), not
+    // with files and not for an edit.
     private var linkPreviewInput: LinkPreviewInput {
         #if DEBUG
         if MacComposerTour.samplePreview { return LinkPreviewInput(draft: state.draft, enabled: true, suppressed: showsTray || intent.editing != nil) }
@@ -233,7 +219,6 @@ struct MacComposer: View {
             .padding(.leading, 16)
     }
 
-    /// The fixed 30 pt circle at the field's trailing edge; its glyph turns into a checkmark for an edit.
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: intent.editing == nil ? "arrow.up" : "checkmark").font(.system(size: 14, weight: .bold))
@@ -245,7 +230,6 @@ struct MacComposer: View {
         .accessibilityIdentifier("sendMessage")
     }
 
-    /// The strip above the field: the message a send quotes, or the one it rewrites.
     private func contextBar(_ message: ChatMessage, isEdit: Bool) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3)
@@ -272,7 +256,6 @@ struct MacComposer: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// The quoted photo or video, for a small still beside the quote (its file once on disk); nil shows the text alone.
     private func replyStill(_ source: ChatMessage) -> TimelineAttachment? {
         guard let attachment = source.attachment, attachment.isImage || attachment.isVideo else { return nil }
         return TimelineAttachment(name: attachment.name, mediaType: attachment.mediaType, size: attachment.size, width: attachment.width,
@@ -284,14 +267,12 @@ struct MacComposer: View {
                               focusPrevious: focusTimeline.map { focusTimeline in { focusBeforeField(else: focusTimeline) } })
     }
 
-    /// Shift-Tab from the field: with Full Keyboard Access, the control just before it, as the key view loop would
-    /// reach it (from there SwiftUI moves focus on itself); else, or with none, the timeline.
+    // With Full Keyboard Access, the control just before the field, as the key view loop would reach it; else the
+    // timeline.
     private func focusBeforeField(else focusTimeline: () -> Void) {
         if NSApp.isFullKeyboardAccessEnabled, let previous = controlBeforeField { control = previous } else { focusTimeline() }
     }
 
-    /// The composer's controls in reverse reading order: the tray's last remove button, the link preview's, Attach,
-    /// then the reply or edit bar's cancel button.
     private var controlBeforeField: MacComposerControl? {
         if showsTray, !state.sending, let last = state.tray.last { return .removeAttachment(last.id) }
         if state.linkPreview.state != .none { return .removeLinkPreview }
@@ -317,8 +298,7 @@ struct MacComposer: View {
         return true
     }
 
-    /// Files and images pasted, dropped or imported from an iPhone into the field arrive here and join the tray. Where
-    /// the chat cannot take files, the text view pastes or drops them as text would.
+    // Where the chat cannot take files, the text view pastes or drops them as text.
     private func attach(_ attachments: MacComposerAttachments) -> Bool {
         guard canAttach else { return false }
         MacAttachmentIntake.add(MacAttachmentIntake.jobs(for: attachments, limit: model.attachmentLimit), to: state, model: model)
@@ -376,7 +356,6 @@ struct MacComposer: View {
     }
 }
 
-/// A control of the composer's that keyboard focus can be moved to: Shift-Tab from the field reaches the one before it.
 enum MacComposerControl: Hashable {
     case cancelBar
     case attach
@@ -390,13 +369,11 @@ private struct LinkPreviewInput: Equatable {
     let suppressed: Bool
 }
 
-/// The preview of the link being typed, above the text inside the composer's glass, as on the iPhone: the host with
-/// an activity indicator while it loads, then the small-thumbnail card, with a button that removes it.
 struct MacComposerLinkPreviewCard: View {
     let state: ComposerLinkPreview.State
     var focus: FocusState<MacComposerControl?>.Binding
     let onRemove: () -> Void
-    /// Decoded once per card image, not on every composer render; its slot is held from the start.
+    // Decoded once per card image, not on every composer render.
     @State private var thumbnail: CGImage?
 
     private var thumbnailData: Data? {
@@ -453,12 +430,9 @@ struct MacComposerLinkPreviewCard: View {
 }
 
 #if DEBUG
-/// What `-haus-tour`'s composer steps act on (`MacDebugHooks`): the open chat's text view and intent.
 @MainActor enum MacComposerTour {
     static weak var textView: MacComposerTextView?
     static weak var intent: MacComposerIntent?
-    /// `-haus-sample-link-preview`: the composer shows a canned card for any link, also in the sample conversations,
-    /// without fetching anything.
     static let samplePreview = MacDebugHooks.has("-haus-sample-link-preview")
 
     final class SamplePreviewSource: ComposerLinkPreviewSource {
@@ -470,7 +444,6 @@ struct MacComposerLinkPreviewCard: View {
                                         summary: "Meet at the old lighthouse at ten; the route follows the quay.", thumbnail: Self.thumbnail)
         }
 
-        /// A small gradient JPEG standing in for a page's image.
         private static let thumbnail: Data? = {
             let side = 96
             guard let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,

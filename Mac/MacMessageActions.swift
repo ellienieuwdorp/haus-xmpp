@@ -1,19 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// What a bubble's actions do, handed to each row by the conversation: the shared menu's actions (`MessageActionMenu`)
-/// and reactions. The row keeps what stays inside it (Select Text, the emoji picker) and passes the rest here.
+// The row keeps what stays inside it (Select Text, the emoji picker) and passes the rest here.
 struct MacMessageHandlers {
-    /// One of the menu's actions on a message; `link` is the link the menu was opened on, for the link's own items.
+    // `link` is the link the menu was opened on, for its own items.
     let perform: (MessageAction.Kind, TimelineMessage, URL?) -> Void
-    /// Adds the emoji as the user's reaction, or takes it back when it is already theirs.
+    // Takes the reaction back when it is already the user's.
     let react: (String, TimelineMessage) -> Void
 }
 
-/// One bubble's menu: the quick reactions over the shared menu's items, the pressed link's first, then the file's own
-/// (`MacAttachmentMenu`) when it is on this Mac. The right-click menu (SwiftUI over the bubble, AppKit over its text),
-/// the hover toolbar's More menu and the row's VoiceOver actions all read it, so they list the same things in the same
-/// order.
+// The right-click menus (SwiftUI over the bubble, AppKit over its text), the hover toolbar's More menu and VoiceOver
+// actions all read this, so they list the same things in the same order.
 struct MacMessageMenu {
     let message: TimelineMessage
     var link: URL? = nil
@@ -22,7 +19,6 @@ struct MacMessageMenu {
 
     var attachment: MacAttachmentMenu? { MacAttachmentMenu(message: message) }
 
-    /// A placeholder is a notice, with nothing to react to.
     var showsReactions: Bool { !message.showsPlaceholder }
 
     var reactions: [(emoji: String, title: String, isSelected: Bool)] {
@@ -30,7 +26,7 @@ struct MacMessageMenu {
         return TimelineReaction.choices.map { ($0, MessageActionMenu.reactionTitle($0, selected: selected.contains($0)), selected.contains($0)) }
     }
 
-    /// The iPhone's titles, with the Mac's ellipsis on the ones that ask something before they act.
+    // The Mac's ellipsis on the titles that ask something before they act.
     static func title(for item: MessageActionMenu.Item) -> String {
         switch item.kind {
         case .retry, .unsend, .report: item.title + "…"
@@ -40,14 +36,12 @@ struct MacMessageMenu {
 
     static let moreReactionsTitle = "More reactions"
 
-    /// Whether a separator follows `items[index]`: it is the pressed link's last item and the message's own follow.
     static func separatesLink(at index: Int, in items: [MessageActionMenu.Item]) -> Bool {
         func isLink(_ kind: MessageAction.Kind) -> Bool { [.openLink, .messageNumber, .copyLink, .shareLink].contains(kind) }
         return isLink(items[index].kind) && items.indices.contains(index + 1) && !isLink(items[index + 1].kind)
     }
 }
 
-/// `MacMessageMenu` as SwiftUI menu content, for the bubble's context menu and the hover toolbar's More menu.
 struct MacMessageMenuContent: View {
     let menu: MacMessageMenu
     let perform: (MessageAction.Kind, URL?) -> Void
@@ -90,8 +84,7 @@ struct MacMessageMenuContent: View {
     }
 }
 
-/// `MacMessageMenu` as an `NSMenu`, for a right-click on the bubble's text, where AppKit and not SwiftUI handles the
-/// click and knows which link it landed on.
+// For a right-click on the bubble's text, where AppKit, not SwiftUI, handles the click and knows which link it hit.
 @MainActor enum MacMessageNSMenu {
     static func make(_ menu: MacMessageMenu, perform: @escaping (MessageAction.Kind, URL?) -> Void, react: @escaping (String) -> Void,
                      moreReactions: @escaping () -> Void) -> NSMenu {
@@ -142,7 +135,7 @@ struct MacMessageMenuContent: View {
         return result
     }
 
-    /// A menu item that runs a closure; it is its own target, and the menu keeps it alive.
+    // Its own target; the menu keeps it alive.
     private final class ActionItem: NSMenuItem {
         private let handler: () -> Void
 
@@ -159,7 +152,7 @@ struct MacMessageMenuContent: View {
     }
 }
 
-/// An emoji drawn as an image, for the places that take an image and not text: palette items in a menu.
+// For the places that take an image, not text: palette items in a menu.
 @MainActor enum MacEmojiImage {
     private static var cache: [String: NSImage] = [:]
 
