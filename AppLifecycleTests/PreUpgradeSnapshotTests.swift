@@ -327,12 +327,12 @@ import XMPPProtocol
     private var upgradedSchemas: [Int] { releasedSchemas.filter { $0 >= 23 && $0 < MessageStore.currentSchemaVersion } }
 
     // A store above `previousReleaseSchema` is migrated without a snapshot, so it must be the schema the last release
-    // writes: one with a fixture, never one this build has not reached.
+    // writes: the newest fixture, never one this build has not reached.
     func testThePreviousReleaseSchemaHasAFixtureAndIsNotAheadOfThisBuild() {
         let schema = PreUpgradeSnapshot.previousReleaseSchema
-        XCTAssertLessThanOrEqual(schema, MessageStore.currentSchemaVersion,
-                                 "previousReleaseSchema \(schema) is above MessageStore.currentSchemaVersion")
+        XCTAssertLessThanOrEqual(schema, MessageStore.currentSchemaVersion, "previousReleaseSchema \(schema) is above MessageStore.currentSchemaVersion")
         XCTAssertTrue(releasedSchemas.contains(schema), "previousReleaseSchema \(schema) has no schema-\(schema).sql fixture")
+        XCTAssertEqual(schema, releasedSchemas.filter { $0 <= MessageStore.currentSchemaVersion }.max(), "previousReleaseSchema \(schema) is not the newest released schema with a fixture")
     }
 
     func testEveryReleasedSchemasStoreIsSnapshottedBeforeMigrating() async throws {
