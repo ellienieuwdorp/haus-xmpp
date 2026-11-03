@@ -188,13 +188,13 @@ struct ContactLinkTests {
         try await store.saveContactLink(link("carol@x", account: "b", identifier: "contact-2", imageHash: other))
         try await store.close()
 
-        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url)
+        #expect(try MessageStore.removeDeviceLocalRows(fromSnapshotAt: url)
                 == [ContactLinkPhoto(accountID: "a", hash: photo), ContactLinkPhoto(accountID: "b", hash: other)])
         #expect(sqliteRows(url: url, sql: "SELECT count(*) FROM contact_links") == [["0"]])
         #expect(try StoreSnapshotSummary(snapshotAt: url).rowCounts["contact_links"] == 0)
-        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url).isEmpty)
+        #expect(try MessageStore.removeDeviceLocalRows(fromSnapshotAt: url).isEmpty)
         #expect(sqliteExecute(url: url, sql: "DROP TABLE contact_links; PRAGMA user_version=26"))
-        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url).isEmpty)
+        #expect(try MessageStore.removeDeviceLocalRows(fromSnapshotAt: url).isEmpty)
     }
 
     @Test func namePrecedenceAndAvatarPrecedence() {

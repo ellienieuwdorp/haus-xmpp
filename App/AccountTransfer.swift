@@ -192,8 +192,8 @@ struct AccountTransfer: Sendable {
         let deviceLocalPhotos: [ContactLinkPhoto]
         do {
             _ = try await store.writeSnapshot(to: copy)
-            // Contact links name this device's contacts and are not transferred, nor the photos only they named.
-            deviceLocalPhotos = try MessageStore.removeContactLinks(fromSnapshotAt: copy)
+            // What a transfer omits (`AccountTable`, contact links) stays here, and so do the photos only links named.
+            deviceLocalPhotos = try MessageStore.removeDeviceLocalRows(fromSnapshotAt: copy)
             summary = try StoreSnapshotSummary(snapshotAt: copy)
             try PreUpgradeSnapshot.protect(copy)
         } catch { try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging); throw error }
@@ -373,8 +373,8 @@ struct AccountTransfer: Sendable {
             let summary = try JSONDecoder().decode(StoreSnapshotSummary.self, from: records[Name.summary] ?? Data())
             guard summary.schemaVersion == manifest.schemaVersion else { throw TransferArchiveError.damaged }
             try MessageStore.verifySnapshot(at: database, matches: summary)
-            // Older builds packed contact links naming another device's contacts; they go before the commit.
-            for file in Self.photoFiles(try MessageStore.removeContactLinks(fromSnapshotAt: database), root: messaging) {
+            // An archive from an older build may hold rows a transfer omits; they go before the commit.
+            for file in Self.photoFiles(try MessageStore.removeDeviceLocalRows(fromSnapshotAt: database), root: messaging) {
                 try PreUpgradeSnapshot.removeIfPresent(file)
             }
             // The snapshot copy is in rollback-journal mode.

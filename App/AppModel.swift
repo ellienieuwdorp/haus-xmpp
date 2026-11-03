@@ -277,7 +277,7 @@ final class AppModel {
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
     var canSendAttachments: Bool { isDemo || uploadService != nil }
-    @ObservationIgnored private let testSessionID: String? = {
+    @ObservationIgnored let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
               let id = UUID(uuidString: value) else { return nil }
@@ -286,7 +286,7 @@ final class AppModel {
         return nil
         #endif
     }()
-    @ObservationIgnored private lazy var preferences: UserDefaults = {
+    @ObservationIgnored private(set) lazy var preferences: UserDefaults = {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
@@ -724,6 +724,7 @@ final class AppModel {
         case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
+        case is SignOutCleanup.Owed: "Couldn’t finish signing out this account. Try again."
         case is CancellationError: "Connection cancelled."
         case XMPPIdentityError.boundAccountMismatch: "The server signed in a different account than the one entered."
         default: "Could not reach the server."
@@ -764,13 +765,9 @@ final class AppModel {
         await forgetAccount()
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
-        uploads.forget(account: account)
-        serverProfiles.forget(account: account)
-        BlockedAddresses.forget(accountID: account, defaults: sessionDefaults)
-        ShareSuggestionSetting.forget(accountID: account, defaults: sessionDefaults)
         reconnection = ReconnectPolicy()
         selectAccount("")
-        preferences.removeObject(forKey: "lastAccount")
+        AccountResource.forgetPreferencesAtSignOut(of: account, app: preferences, group: sessionDefaults)
     }
 
     func disconnect() async {
@@ -786,6 +783,7 @@ final class AppModel {
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
         let account = accountID
+        SignOutCleanup(defaults: preferences).owe(account)
         let enabled = testSessionID == nil ? sessionAccount?.push : nil
         let connection = client
         var localFailure: String?
@@ -830,20 +828,8 @@ final class AppModel {
             }
         }
         guard generation == token else { return }
-        await quiesceTransport()
+        await quiesceTransport(signingOut: true)
         if let localFailure { self.error = localFailure }
-    }
-
-    // Re-entering credentials keeps an existing server subscription and the SCRAM pin (a server that drops SCRAM must
-    // not get PLAIN by making the user retype the password); only signing out lifts them. Nothing crosses accounts.
-    static func retainingSavedState(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
-        guard let previous, previous.accountID == replacement.accountID, previous.domain == replacement.domain,
-              previous.username == replacement.username else { return replacement }
-        let keepEndpoint = replacement.discoversEndpoint && previous.discoversEndpoint && !previous.host.isEmpty
-        let endpoint = keepEndpoint ? previous : replacement
-        return NotificationAccount(accountID: replacement.accountID, host: endpoint.host, port: endpoint.port, security: endpoint.security,
-            discoversEndpoint: replacement.discoversEndpoint, requiresSCRAM: previous.requiresSCRAM || replacement.requiresSCRAM,
-            domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 
     // Nothing else changes the lifecycle signals.
@@ -1345,13 +1331,13 @@ final class AppModel {
         return try result.get()
     }
 
-    // Kept or taken, never by force: false when another process holds it for ten seconds.
-    private func takeLease(_ store: MessageStore) async -> Bool {
+    // Kept or taken, never by force: false when another process holds it for ten seconds, or once transport is unwanted.
+    private func takeLease(_ store: MessageStore, whileWanted: Bool = false) async -> Bool {
         var leased = await store.holdsTransportOwnership
-        for _ in 0..<40 where !leased {
+        for _ in 0..<40 where !leased && (!whileWanted || transportWanted) {
             do { try await store.acquireTransportOwnership(); leased = true }
             catch MessageStoreError.transportOwnedElsewhere { guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
-            catch { break }
+            catch { Self.lifecycleLog.error("lease not taken: \(String(describing: error), privacy: .public)"); break }
         }
         return leased
     }
@@ -1367,12 +1353,18 @@ final class AppModel {
         BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
     }
 
-    private func quiesceTransport() async {
+    private func quiesceTransport(signingOut: Bool = false) async {
         await stopTransportWork()
         // A restore holds the lease until it closes the store, and releases it itself if it is refused.
         guard !restoringData else { return }
         hasTransportOwnership = false
         guard let store else { return }
+        guard signingOut else { return await releaseLeaseInBackground(store) }
+        // The rows go under the lease, so no extension run writes them meanwhile. Until the lease is released again a
+        // background transition joins this and connect waits; in the background the rows stay owed.
+        let background = BackgroundActivity("Sign out"); quiescing = true; acquiringOwnership = true
+        defer { quiescing = false; acquiringOwnership = false; background.end() }
+        if transportWanted, await takeLease(store, whileWanted: true) { await settleSignOut(store) } else { SignOutCleanup.log.error("sign-out rows stay owed: no lease") }
         await releaseLeaseInBackground(store)
     }
 
@@ -1447,6 +1439,8 @@ final class AppModel {
             guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
             do {
                 try await store.acquireTransportOwnership()
+                // An account whose sign-out rows are still owed never gets a session.
+                guard await SignOutCleanup(defaults: preferences).settle(store: store, connecting: accountID) else { await releaseLeaseInBackground(store); throw SignOutCleanup.Owed() }
                 guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
                 return

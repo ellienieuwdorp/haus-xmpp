@@ -10,11 +10,11 @@ import XMPPProtocol
 // real OMEMO identity with a trusted peer, so the OMEMO service reading the target's store with the target's own
 // Keychain item proves the same identity arrived.
 @MainActor final class AccountTransferTests: XCTestCase {
-    private let account = "ellie@localhost"
+    let account = "ellie@localhost"
     private let peer = "bob@localhost"
-    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+    let now = Date(timeIntervalSince1970: 1_790_000_000)
 
-    @MainActor private final class Install {
+    @MainActor final class Install {
         let root: URL
         let id = UUID().uuidString
         let locations: AccountTransfer.Locations
@@ -68,7 +68,7 @@ import XMPPProtocol
         }
     }
 
-    private func makeInstall() throws -> Install {
+    func makeInstall() throws -> Install {
         let made = try Install()
         addTeardownBlock { await made.remove() }
         return made
@@ -131,7 +131,7 @@ import XMPPProtocol
         return Signed(store: store, overview: overview, messages: try await store.messages(accountID: account, chatID: peer), photo: photo)
     }
 
-    private func export(_ install: Install, store: MessageStore, code: TransferCode) async throws -> AccountTransfer.Moved {
+    func export(_ install: Install, store: MessageStore, code: TransferCode) async throws -> AccountTransfer.Moved {
         try await store.acquireTransportOwnership()
         return try await install.transfer.export(store: store, accountID: account, code: code, now: now)
     }
