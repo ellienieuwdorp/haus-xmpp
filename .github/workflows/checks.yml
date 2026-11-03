@@ -1,5 +1,5 @@
 # Static checks: Tools/check.sh full (SwiftLint and slop-check against their baselines, import boundaries, public
-# hygiene), baselines that only shrink, and a secret scan. Nothing is built but the slop-check tool.
+# hygiene), a guard that the baselines and the checks only get stricter, and a secret scan. Only slop-check is built.
 #
 # Security properties, for anyone changing this file:
 # - The job runs on a GitHub-hosted runner, a fresh VM per job; no job may target a self-hosted runner.
@@ -47,9 +47,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Show the toolchain
+        id: toolchain
         run: |
           xcodebuild -version
           swift --version
+          echo "hash=$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      # A pull request is checked out as its merge commit, whose first parent is the base branch as merged.
+      - name: Find the base
+        id: base
+        if: github.event_name == 'pull_request'
+        run: echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
       - name: Install SwiftLint and gitleaks
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
@@ -65,26 +72,33 @@ jobs:
           "$RUNNER_TEMP/bin/swiftlint" version
           "$RUNNER_TEMP/bin/gitleaks" version
       # A cold build of slop-check compiles swift-syntax, a few minutes. A checker change reuses the swift-syntax build
-      # from the newest cache with the same Package.resolved.
+      # from the newest cache with the same toolchain and Package.resolved.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Tools/slop-check/.build
-          key: slop-check-${{ runner.os }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-${{ hashFiles('Tools/slop-check/Package.swift', 'Tools/slop-check/Sources/**', 'Tools/slop-check/Tests/**') }}
-          restore-keys: slop-check-${{ runner.os }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-
+          key: slop-check-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-${{ hashFiles('Tools/slop-check/Package.swift', 'Tools/slop-check/Sources/**', 'Tools/slop-check/Tests/**') }}
+          restore-keys: slop-check-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-
       - name: Test slop-check
         # Its own scratch path: a debug build in the release build's directory makes the next release build start over.
         run: swift test --package-path Tools/slop-check --scratch-path Tools/slop-check/.build/tests
       - name: Check
         run: Tools/check.sh full
-      - name: Baselines only shrink
-        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'baseline-growth-approved')
+      # The base's own copy of the guard runs, so a pull request cannot loosen the guard that judges it. With the
+      # baseline-growth-approved label it still runs and prints what grew, but does not fail the job.
+      - name: Checks only get stricter
+        if: (success() || failure()) && github.event_name == 'pull_request'
+        continue-on-error: ${{ contains(github.event.pull_request.labels.*.name, 'baseline-growth-approved') }}
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: python3 -I Tools/baseline-guard.py "$BASE"
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          git show "$BASE:Tools/baseline-guard.py" > "$RUNNER_TEMP/baseline-guard.py" 2>/dev/null \
+            || cp Tools/baseline-guard.py "$RUNNER_TEMP/baseline-guard.py"
+          python3 -I "$RUNNER_TEMP/baseline-guard.py" "$BASE"
       # A pull request's own commits; on main and by hand, the whole history.
       - name: Scan for secrets
+        if: success() || failure()
         env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          BASE: ${{ steps.base.outputs.sha }}
         run: |
           if [ -n "$BASE" ]; then
             gitleaks git --no-banner --redact --log-opts="$BASE..HEAD" .
