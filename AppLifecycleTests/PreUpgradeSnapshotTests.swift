@@ -7,7 +7,7 @@ import XMPPProtocol
 @testable import HausXMPP
 
 // Runs `PreUpgradeSnapshot` against a temporary App Group root, throwaway preference domains and Keychain services,
-// never the app's real data. Previous builds' stores are real schema dumps (`schema-21.sql` … `schema-25.sql`).
+// never the app's real data. Previous builds' stores are real schema dumps (`schema-N.sql`).
 @MainActor final class PreUpgradeSnapshotTests: XCTestCase {
     private let typed = "Ellie@Example.org"
     private let account = "ellie@example.org"
@@ -131,7 +131,7 @@ import XMPPProtocol
         try keychainAdd(service, "\(id)|account", Data("{\"accountID\":\"\(owner)\"}".utf8))
         try keychainAdd(service, "\(id)|push|\(owner)", try pushRecord(owner, node: "older-node"))
         let manifest = PreUpgradeSnapshot.Manifest(id: id, takenAt: now.addingTimeInterval(-7 * 86_400), database: summary,
-                                                   installation: generation == nil ? "/install/6664869" : generation == 24 ? "/install/58b543a" : "/install/7159f37",
+                                                   installation: "/install/generation-\(generation.map(String.init) ?? "unnumbered")",
                                                    folders: [], notificationsDisabled: false, accountRecord: true, pushRegistrations: [owner])
         try JSONEncoder().encode(manifest).write(to: folder.appending(path: "snapshot.json"))
         try FileManager.default.removeItem(at: scratch)
@@ -314,18 +314,30 @@ import XMPPProtocol
         XCTAssertLessThan(manifest.suggestDeletionAfter, later)
     }
 
-    // MARK: Schemas 23, 24 and 25 as the previous version
+    // MARK: Every released schema as the previous version
 
-    func testAStoreTheSchema23BuildLeftIsSnapshottedBeforeMigrating() async throws {
-        try await assertSnapshottedBeforeMigrating(schema: 23)
+    // Each `schema-N.sql` fixture is the store a released build leaves.
+    private var releasedSchemas: [Int] {
+        let names = Bundle(for: Self.self).urls(forResourcesWithExtension: "sql", subdirectory: nil)?
+            .map { $0.deletingPathExtension().lastPathComponent } ?? []
+        return names.compactMap { $0.hasPrefix("schema-") ? Int($0.dropFirst("schema-".count)) : nil }.sorted()
     }
 
-    func testAStoreTheSchema24BuildLeftIsSnapshottedBeforeMigrating() async throws {
-        try await assertSnapshottedBeforeMigrating(schema: 24)
+    // What an update to this build finds. Schema 21 is the default store of the tests above.
+    private var upgradedSchemas: [Int] { releasedSchemas.filter { $0 >= 23 && $0 < MessageStore.currentSchemaVersion } }
+
+    // A store above `previousReleaseSchema` is migrated without a snapshot, so it must be the schema the last release
+    // writes: one with a fixture, never one this build has not reached.
+    func testThePreviousReleaseSchemaHasAFixtureAndIsNotAheadOfThisBuild() {
+        let schema = PreUpgradeSnapshot.previousReleaseSchema
+        XCTAssertLessThanOrEqual(schema, MessageStore.currentSchemaVersion,
+                                 "previousReleaseSchema \(schema) is above MessageStore.currentSchemaVersion")
+        XCTAssertTrue(releasedSchemas.contains(schema), "previousReleaseSchema \(schema) has no schema-\(schema).sql fixture")
     }
 
-    func testAStoreTheSchema25BuildLeftIsSnapshottedBeforeMigrating() async throws {
-        try await assertSnapshottedBeforeMigrating(schema: 25)
+    func testEveryReleasedSchemasStoreIsSnapshottedBeforeMigrating() async throws {
+        XCTAssertFalse(upgradedSchemas.isEmpty)
+        for schema in upgradedSchemas { try await assertSnapshottedBeforeMigrating(schema: schema) }
     }
 
     private func assertSnapshottedBeforeMigrating(schema: Int, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -333,7 +345,7 @@ import XMPPProtocol
         try await previousBuildData(in: installation, schema: schema)
         let locations = installation.locations
         guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else {
-            return XCTFail("not ready", file: file, line: line)
+            return XCTFail("schema \(schema): not ready", file: file, line: line)
         }
         try await store.close()
         let manifest = try XCTUnwrap(installation.snapshots.manifest, file: file, line: line)
@@ -349,17 +361,12 @@ import XMPPProtocol
     }
 
     // The older backup's folder and Keychain copies go, so nothing is left under the names the older build's backup
-    // code acts on.
-    func testTheOlderBuildsBackupIsRetiredForTheSchema23One() async throws {
-        try await assertOlderBackupRetired(schema: 23, olderGeneration: nil, olderSchema: 21)
-    }
-
-    func testMainsBackupIsRetiredForTheSchema24One() async throws {
-        try await assertOlderBackupRetired(schema: 24, olderGeneration: 24, olderSchema: 23)
-    }
-
-    func testMainsBackupIsRetiredForTheSchema25One() async throws {
-        try await assertOlderBackupRetired(schema: 25, olderGeneration: 25, olderSchema: 24)
+    // code acts on. That backup holds the store of the release before.
+    func testEveryReleasedSchemasOlderBackupIsRetired() async throws {
+        for schema in upgradedSchemas {
+            let olderSchema = try XCTUnwrap(releasedSchemas.last { $0 < schema })
+            try await assertOlderBackupRetired(schema: schema, olderGeneration: generation(ofBuildAt: schema), olderSchema: olderSchema)
+        }
     }
 
     private func assertOlderBackupRetired(schema: Int, olderGeneration: Int?, olderSchema: Int,
@@ -369,7 +376,7 @@ import XMPPProtocol
         let older = try await olderBuildBackup(in: installation, generation: olderGeneration, of: olderSchema)
         let locations = installation.locations
         guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else {
-            return XCTFail("not ready", file: file, line: line)
+            return XCTFail("schema \(schema): not ready", file: file, line: line)
         }
         try await store.close()
         let manifest = try XCTUnwrap(installation.snapshots.manifest, file: file, line: line)
@@ -385,16 +392,8 @@ import XMPPProtocol
     // The previous build has this backup code too. Had the restore left its marker or this version's kept copy under
     // that build's names, it would show the restored screen as if it were the newer build, so the restored data is
     // exactly the backup's, in its WAL mode, and nothing of this build's backups is under the previous build's names.
-    func testRestoredSchema23DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
-        try await assertRestoredDataIsLeftToThePreviousBuild(schema: 23)
-    }
-
-    func testRestoredSchema24DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
-        try await assertRestoredDataIsLeftToThePreviousBuild(schema: 24)
-    }
-
-    func testRestoredSchema25DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
-        try await assertRestoredDataIsLeftToThePreviousBuild(schema: 25)
+    func testEveryReleasedSchemasRestoredDataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
+        for schema in upgradedSchemas { try await assertRestoredDataIsLeftToThePreviousBuild(schema: schema) }
     }
 
     private func assertRestoredDataIsLeftToThePreviousBuild(schema: Int, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -421,7 +420,7 @@ import XMPPProtocol
         // This build still finds its restored state, and its extension stays away.
         XCTAssertTrue(PreUpgradeHold.isHeld(groupRoot: locations.groupRoot), file: file, line: line)
         guard case let .restored(untouched) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else {
-            return XCTFail("reopened", file: file, line: line)
+            return XCTFail("schema \(schema): reopened", file: file, line: line)
         }
         XCTAssertFalse(untouched.previousVersionRan, file: file, line: line)
         XCTAssertNotNil(untouched.thisVersion, file: file, line: line)
@@ -430,14 +429,14 @@ import XMPPProtocol
         let reinstalled = try installation.reinstalled(as: "/install/C")
         let later = now.addingTimeInterval(86_400)
         guard case let .restored(state) = try await reinstalled.snapshots.open(upgradeAllowed: true, now: later) else {
-            return XCTFail("upgraded without asking", file: file, line: line)
+            return XCTFail("schema \(schema): upgraded without asking", file: file, line: line)
         }
         XCTAssertTrue(state.previousVersionRan, file: file, line: line)
         XCTAssertEqual(state.sentOnPreviousVersion, ["Bob"], file: file, line: line)
         let returned = try await reinstalled.snapshots.returnToThisVersion(now: later)
         XCTAssertEqual(returned, .done, file: file, line: line)
         guard case let .ready(store) = try await reinstalled.snapshots.open(upgradeAllowed: true, now: later) else {
-            return XCTFail("not ready", file: file, line: line)
+            return XCTFail("schema \(schema): not ready", file: file, line: line)
         }
         let ids = try await store.messages(accountID: account, chatID: "bob@example.org").map(\.id)
         try await store.close()

@@ -1219,7 +1219,7 @@
   "file_length": [
    [
     "",
-    687
+    685
    ]
   ],
   "force_unwrapping": [
@@ -1245,7 +1245,7 @@
   "type_body_length": [
    [
     "@MainActor final class PreUpgradeSnapshotTests: XCTestCase {",
-    678
+    676
    ]
   ],
   "unneeded_throws_rethrows": [
