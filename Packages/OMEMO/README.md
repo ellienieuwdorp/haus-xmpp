@@ -23,7 +23,7 @@ Encrypted messaging policy: device discovery, fingerprint trust, profile selecti
 
 - Legacy OMEMO (`eu.siacs.conversations.axolotl`) encrypts the body only. OMEMO 2 (`urn:xmpp:omemo:2`) encrypts a bounded XEP-0420 SCE envelope and checks the sender and recipient affixes it carries.
 - Both profiles share one identity pair per device ID, with separate prekeys and sessions. State whose profiles disagree on the identity fails closed and is never repaired by replacing an identity.
-- A chat's profile is chosen once and never silently downgraded; prepared ciphertext keeps its profile. A device published only in the other profile is never encrypted to: it is left out of the envelope and reported through `EncryptionOverview`.
+- A chat's profile is chosen once and never silently downgraded; prepared ciphertext keeps its profile. In a direct chat, a device published only in the other profile is never encrypted to: it is left out of the envelope and reported through `EncryptionOverview`. In a room it fails discovery with `unsupportedProfile`.
 - Fingerprints are the 32-byte Curve25519 form; trust is bound to the full identity key, owner, profile and device ID. New or changed keys are `.undecided` until the user decides. Accepted means encryption is allowed; verified records an out-of-band comparison. A key that returns (A→B→A) needs review again.
 - A rejected device is excluded from sends; its incoming ciphertext is never opened and becomes a quiet placeholder.
 - Session repair rebuilds only the selected fingerprint's session and keeps the old one for delayed messages. Retiring an own device rereads the lists, checks the fingerprint in every profile before changing anything, and cannot wipe or stop the remote installation.

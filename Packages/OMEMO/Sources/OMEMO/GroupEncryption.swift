@@ -278,6 +278,7 @@ extension OMEMOService {
                     stored = nil; reaction = nil
                 } else {
                     guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
+                    // A room correction is stored as a new row; only its alert as a new message is suppressed.
                     isCorrection = content.correction != nil
                     stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
                         body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
