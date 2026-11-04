@@ -27,6 +27,7 @@ only_rules:
   - cyclomatic_complexity
   - function_parameter_count
   - nesting
+  - line_length
   # Escape hatches. A disable needs a reason, which slop-check enforces: `// swiftlint:disable:next force_try - why`
   - force_try
   - force_cast
@@ -77,6 +78,12 @@ function_parameter_count:
 nesting:
   type_level: 2
   function_level: 3
+# A long line is wrapped, never packed with statements to meet file_length. Comments and URLs are exempt.
+line_length:
+  warning: 160
+  error: 160
+  ignores_urls: true
+  ignores_comments: true
 no_empty_block:
   # Empty closures and functions are often required by an API; an empty `catch {}` or `if … {}` never is.
   disabled_block_types: [function_bodies, initializer_bodies, closure_blocks]
