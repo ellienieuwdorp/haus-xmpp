@@ -95,7 +95,7 @@
   "file_length": [
    [
     "",
-    3878
+    3863
    ]
   ],
   "function_body_length": [
@@ -173,7 +173,7 @@
   "type_body_length": [
    [
     "final class AppModel {",
-    3383
+    3368
    ]
   ]
  },
