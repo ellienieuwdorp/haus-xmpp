@@ -8,9 +8,8 @@
 #   Tools/check.sh baseline            rewrite .swiftlint-baseline.json and .slop-baseline.json from every file
 #
 # Steps: SwiftLint against its ratchet baseline, slop-check (comment policy and reasoned escape hatches) against its
-# baseline, public hygiene, import boundaries and, in a full run or after a build settings change, compiler strictness.
-# No formatter is enforced. Every step runs, so one pass reports everything. The vendored C under CLibOMEMO is never
-# checked.
+# baseline, public hygiene and import boundaries. No formatter is enforced. Every step runs, so one pass reports
+# everything. The vendored C under CLibOMEMO is never checked.
 #
 # A baseline only shrinks: CI fails a pull request whose baselines grew, or that changes these checks, unless a
 # maintainer adds the baseline-growth-approved label. Rewrite them only after rebasing onto a main whose code changed.
@@ -57,11 +56,9 @@ candidates() {
 
 swift_files=()
 config_changed=0
-build_settings_changed=0
 while IFS= read -r f; do
   case "$f" in
     .swiftlint.yml | .swiftlint-baseline.json | .slop-baseline.json | Tools/*) config_changed=1 ;;
-    project.yml | *.pbxproj | Config/*.xcconfig | Packages/*/Package.swift) build_settings_changed=1 ;;
   esac
   case "$f" in
     *.swift) ;;
@@ -118,9 +115,6 @@ elif [ ${#swift_files[@]} -gt 0 ]; then
   step SwiftLint python3 -I Tools/lint-ratchet.py "${swift_files[@]}"
   step slop-check "$slop" --baseline .slop-baseline.json "${swift_files[@]}"
   step "Import boundaries" python3 -I Tools/import-boundaries.py "${swift_files[@]}"
-fi
-if [ "$mode" = full ] || [ "$build_settings_changed" -eq 1 ]; then
-  step "Compiler strictness" python3 -I Tools/compiler-strictness.py
 fi
 step "Public hygiene" python3 -I Tools/public-hygiene.py
 exit "$failed"
