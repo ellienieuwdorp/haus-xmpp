@@ -2,12 +2,15 @@
 """Fail if the checks were loosened since BASE: python3 -I Tools/baseline-guard.py BASE [HEAD]
 
 Baselines only ever lose entries: a new file, rule or entry, or a larger recorded size, fails. So does a new line
-in the crypto import allowlist, and any change to the checks themselves (.swiftlint.yml, Tools/, the Checks
-workflow) once BASE has them. A renamed file keeps its entries under the new path. A person who agrees with the
-change labels the pull request `baseline-growth-approved`, saying why in the description. Exit 2 means BASE or
-HEAD is not a commit, or a baseline does not parse.
+in the crypto import allowlist, any change to the checks themselves (.swiftlint.yml, Tools/, the Checks workflow)
+once BASE has them, and, in project.yml, the Xcode project or a Packages/*/Package.swift that both commits have, a
+strict compiler setting line (warnings as errors, upcoming features, OTHER_SWIFT_FLAGS) removed or changed or a
+target's `swiftSettings: swiftSettings` dropped. A renamed file keeps its entries under the new path. A person who
+agrees with the change labels the pull request `baseline-growth-approved`, saying why in the description. Exit 2
+means BASE or HEAD is not a commit, or a baseline does not parse.
 """
 import json
+import re
 import subprocess
 import sys
 
@@ -15,6 +18,10 @@ SWIFTLINT = ".swiftlint-baseline.json"
 SLOP = ".slop-baseline.json"
 ALLOWLIST = "Tools/crypto-imports.txt"
 GATE = ("Tools/", ".swiftlint.yml", ".github/workflows/checks.yml")
+BUILD_SETTINGS = re.compile(r"^(project\.yml|HausXMPP\.xcodeproj/project\.pbxproj|Packages/[^/]+/Package\.swift)$")
+STRICT_LINE = re.compile(r"TREAT_WARNINGS_AS_ERRORS|SWIFT_UPCOMING_FEATURE_|OTHER_SWIFT_FLAGS|treatAllWarnings|"
+                         r"UpcomingFeature|ExperimentalFeature|unsafeFlags")
+SHARED_SETTINGS = "swiftSettings: swiftSettings"
 # The one slop-check rule whose entry is a recorded value rather than a fingerprint.
 SLOP_MEASURED = {"comment.density"}
 
@@ -135,6 +142,26 @@ def check_gate(base, changed, additions):
     return problems
 
 
+# A line may be added, which only makes the build stricter or covers a new target; removing or editing one may not.
+def strict_settings_removed(base, head, changed):
+    if show(base, "Tools/baseline-guard.py") is None:
+        return []
+    problems = []
+    for status, paths in changed:
+        path = paths[-1]
+        if status[0] == "D" or not BUILD_SETTINGS.match(path):
+            continue
+        old_text, new_text = show(base, paths[0]) or "", show(head, path) or ""
+        old = [line.strip() for line in old_text.splitlines() if STRICT_LINE.search(line)]
+        new = [line.strip() for line in new_text.splitlines() if STRICT_LINE.search(line)]
+        for text in sorted(set(old)):
+            if old.count(text) > new.count(text):
+                problems.append(f"{path}: strict compiler setting removed or changed: '{text[:80]}'")
+        if old_text.count(SHARED_SETTINGS) > new_text.count(SHARED_SETTINGS):
+            problems.append(f"{path}: a target no longer takes `{SHARED_SETTINGS}`")
+    return problems
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         print(__doc__, file=sys.stderr)
@@ -146,7 +173,8 @@ def main():
     problems = (check_baseline(SWIFTLINT, grown_swiftlint, base, head, renames)
                 + check_baseline(SLOP, grown_slop, base, head, renames)
                 + [f"{ALLOWLIST}: added {line}" for line in additions]
-                + check_gate(base, changed, additions))
+                + check_gate(base, changed, additions)
+                + strict_settings_removed(base, head, changed))
     if problems:
         print("The checks may only get stricter:\n" + "\n".join(problems))
         print("\nFix the new violations instead of recording them. If the change is right, a maintainer adds the"
