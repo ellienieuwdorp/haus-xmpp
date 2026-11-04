@@ -3,9 +3,11 @@
 
 Baselines only ever lose entries: a new file, rule or entry, or a larger recorded size, fails. So does a new line
 in the crypto import allowlist, any change to the checks themselves (.swiftlint.yml, Tools/, the Checks workflow)
-once BASE has them, and, in project.yml, the Xcode project or a Packages/*/Package.swift that both commits have, a
-strict compiler setting line (warnings as errors, upcoming features, OTHER_SWIFT_FLAGS) removed or changed or a
-target's `swiftSettings: swiftSettings` dropped. A renamed file keeps its entries under the new path. A person who
+once BASE has them. In project.yml, the Xcode project, Config/*.xcconfig and Packages/*/Package.swift, so does a
+strict compiler setting line (warnings as errors, upcoming features, OTHER_SWIFT_FLAGS) removed or changed, a
+target's `swiftSettings: swiftSettings` dropped, or a line added that undoes strictness: -no-warnings-as-errors,
+-Wwarning, -disable-upcoming-feature, SWIFT_SUPPRESS_WARNINGS or GCC_WARN_INHIBIT_ALL_WARNINGS set to YES, or a
+warning group or all warnings treated `as: .warning`. A renamed file keeps its entries under the new path. A person who
 agrees with the change labels the pull request `baseline-growth-approved`, saying why in the description. Exit 2
 means BASE or HEAD is not a commit, or a baseline does not parse.
 """
@@ -18,9 +20,12 @@ SWIFTLINT = ".swiftlint-baseline.json"
 SLOP = ".slop-baseline.json"
 ALLOWLIST = "Tools/crypto-imports.txt"
 GATE = ("Tools/", ".swiftlint.yml", ".github/workflows/checks.yml")
-BUILD_SETTINGS = re.compile(r"^(project\.yml|HausXMPP\.xcodeproj/project\.pbxproj|Packages/[^/]+/Package\.swift)$")
+BUILD_SETTINGS = re.compile(r"^(project\.yml|HausXMPP\.xcodeproj/project\.pbxproj|Config/[^/]+\.xcconfig|"
+                            r"Packages/[^/]+/Package\.swift)$")
 STRICT_LINE = re.compile(r"TREAT_WARNINGS_AS_ERRORS|SWIFT_UPCOMING_FEATURE_|OTHER_SWIFT_FLAGS|treatAllWarnings|"
                          r"UpcomingFeature|ExperimentalFeature|unsafeFlags")
+UNDOING_LINE = re.compile(r"-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature|as:\s*\.warning\b|"
+                          r"(SWIFT_SUPPRESS_WARNINGS|GCC_WARN_INHIBIT_ALL_WARNINGS)\S*\s*[:=]\s*[\"']?(?i:yes|true)")
 SHARED_SETTINGS = "swiftSettings: swiftSettings"
 # The one slop-check rule whose entry is a recorded value rather than a fingerprint.
 SLOP_MEASURED = {"comment.density"}
@@ -142,8 +147,9 @@ def check_gate(base, changed, additions):
     return problems
 
 
-# A line may be added, which only makes the build stricter or covers a new target; removing or editing one may not.
-def strict_settings_removed(base, head, changed):
+# A strict line may be added, which only makes the build stricter or covers a new target; removing or editing one
+# may not. A line that undoes strictness may not be added, in a new file either.
+def strict_settings_loosened(base, head, changed):
     if show(base, "Tools/baseline-guard.py") is None:
         return []
     problems = []
@@ -152,6 +158,13 @@ def strict_settings_removed(base, head, changed):
         if status[0] == "D" or not BUILD_SETTINGS.match(path):
             continue
         old_text, new_text = show(base, paths[0]) or "", show(head, path) or ""
+        old_undoing = [line.strip() for line in old_text.splitlines() if UNDOING_LINE.search(line)]
+        new_undoing = [line.strip() for line in new_text.splitlines() if UNDOING_LINE.search(line)]
+        for text in sorted(set(new_undoing)):
+            if new_undoing.count(text) > old_undoing.count(text):
+                problems.append(f"{path}: added a setting that undoes strictness: '{text[:80]}'")
+        if not old_text:
+            continue
         old = [line.strip() for line in old_text.splitlines() if STRICT_LINE.search(line)]
         new = [line.strip() for line in new_text.splitlines() if STRICT_LINE.search(line)]
         for text in sorted(set(old)):
@@ -174,7 +187,7 @@ def main():
                 + check_baseline(SLOP, grown_slop, base, head, renames)
                 + [f"{ALLOWLIST}: added {line}" for line in additions]
                 + check_gate(base, changed, additions)
-                + strict_settings_removed(base, head, changed))
+                + strict_settings_loosened(base, head, changed))
     if problems:
         print("The checks may only get stricter:\n" + "\n".join(problems))
         print("\nFix the new violations instead of recording them. If the change is right, a maintainer adds the"
