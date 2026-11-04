@@ -11,8 +11,8 @@ import os
     nonisolated static let key = "signOutRowsOwed"
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
     let defaults: UserDefaults
-    // Runs once a settle deleted an account's rows: an extension run that held the lease may have posted for it since
-    // sign-out cleared the notifications.
+    // An extension run that held the lease may have posted since sign-out cleared the notifications. Sign-out's own
+    // settle (no `connecting`) runs this every time; the settle before a session, once it deleted an account's rows.
     var clearNotifications: @MainActor () -> Void = {}
 
     var owed: [String] { defaults.stringArray(forKey: Self.key) ?? [] }
@@ -40,7 +40,7 @@ import os
         } else {
             defaults.set(left, forKey: Self.key)
         }
-        if !settled.isEmpty { clearNotifications() }
+        if connecting == nil || !settled.isEmpty { clearNotifications() }
         return connecting.map { !left.contains($0) } ?? left.isEmpty
     }
 
