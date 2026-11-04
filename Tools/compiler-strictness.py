@@ -7,8 +7,9 @@ upcoming features, and no target or xcconfig turns any of that off: a target's O
 $(inherited). Packages (every Packages/*/Package.swift, read through `swift package dump-package`): each Swift target
 sets treatAllWarnings(as: .error) and the three upcoming features unconditionally, and each C target other than the
 vendored library treats warnings as errors. Nowhere, conditions included, may a flag (-no-warnings-as-errors,
--Wwarning, -disable-upcoming-feature), SWIFT_SUPPRESS_WARNINGS or GCC_WARN_INHIBIT_ALL_WARNINGS set to YES, or a
-treatWarning or treatAllWarnings(as: .warning) setting undo that. Needs macOS (plutil) and a Swift toolchain.
+-Wwarning, -disable-upcoming-feature, -Wno-error, -w), SWIFT_SUPPRESS_WARNINGS or GCC_WARN_INHIBIT_ALL_WARNINGS set
+to YES, or a treatWarning or treatAllWarnings(as: .warning) setting undo that. Needs macOS (plutil) and a Swift
+toolchain.
 """
 import glob
 import json
@@ -32,8 +33,10 @@ FLAGS = "OTHER_SWIFT_FLAGS"
 SUPPRESSING = ("SWIFT_SUPPRESS_WARNINGS", "GCC_WARN_INHIBIT_ALL_WARNINGS")
 GATED = (*XCODE_SETTINGS, FLAGS)
 SCANNED = (*GATED, *SUPPRESSING)
-# Compiler flags that turn warnings-as-errors or an upcoming feature back off.
-UNDOING = re.compile(r"(?<![\w-])(-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature)(?![\w-])")
+# Compiler flags that turn warnings-as-errors or an upcoming feature back off, Swift's and then C's.
+UNDOING = re.compile(r"(?<![\w-])(-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature|-Wno-error|-w)(?![\w-])")
+# A setting, its conditions included, assigned in an xcconfig: the assignment's `=` is the first outside brackets.
+XCCONFIG_ASSIGNMENT = re.compile(r"^(\w+(?:\[[^\]]*\])*)\s*=\s*(.*)$")
 # Upstream C, compiled as it ships.
 VENDORED_C = {("OMEMOCrypto", "CLibOMEMO")}
 FIX = {
@@ -49,8 +52,9 @@ def setting_value(value):
     return {"true": "YES", "false": "NO"}.get(value.lower(), value.upper() if value.lower() in ("yes", "no") else value)
 
 
-def settings_problems(where, settings, project_level):
-    """Problems with one configuration's build settings; a target may leave a setting to the project."""
+def settings_problems(where, settings, project_level, below_project=True):
+    """Problems with one configuration's build settings; a target may leave a setting to the project. Only a setting
+    below the project's own needs $(inherited) in OTHER_SWIFT_FLAGS: the project's xcconfig sits under it."""
     problems = []
     for key, raw in settings.items():
         name, value = key.split("[")[0], setting_value(raw)
@@ -62,7 +66,7 @@ def settings_problems(where, settings, project_level):
             problems.append(f"{where}: {key} = {value}")
         if name == FLAGS and project_level and WEAK_CAPTURES_FLAG not in value:
             problems.append(f"{where}: {key} lacks {WEAK_CAPTURES_FLAG}")
-        if name == FLAGS and not project_level and "$(inherited)" not in value and WEAK_CAPTURES_FLAG not in value:
+        if name == FLAGS and below_project and "$(inherited)" not in value and WEAK_CAPTURES_FLAG not in value:
             problems.append(f"{where}: {key} replaces the project's flags without $(inherited)")
     if project_level:
         problems += [f"{where}: {key} is not set" for key in GATED if key not in settings]
@@ -81,9 +85,8 @@ def xcconfig_settings(path, seen=None):
             line = line.split("//")[0].strip()
             if include := re.match(r'#include\??\s+"([^"]+)"', line):
                 out.update(xcconfig_settings(os.path.join(os.path.dirname(path), include[1]), seen))
-            elif "=" in line and line.split("=")[0].strip().split("[")[0] in SCANNED:
-                key, value = (part.strip() for part in line.split("=", 1))
-                out[key] = value
+            elif (assignment := XCCONFIG_ASSIGNMENT.match(line)) and assignment[1].split("[")[0] in SCANNED:
+                out[assignment[1]] = assignment[2].strip()
     return out
 
 
@@ -98,22 +101,23 @@ def xcode_problems():
     def configurations(owner):
         return [objects[c] for c in objects[owner["buildConfigurationList"]]["buildConfigurations"]]
 
-    def xcconfig_problems(where, config):
+    def xcconfig_problems(where, config, below_project):
         if not (reference := config.get("baseConfigurationReference")):
             return []
         path = objects[reference].get("path", "")
         xcconfig = path if os.path.exists(path) else os.path.join("Config", os.path.basename(path))
-        # The configuration's own settings sit above the xcconfig, so only the rules a target follows apply to it.
-        return settings_problems(f"{where} ({xcconfig})", xcconfig_settings(xcconfig), False)
+        # The configuration's own settings sit above the xcconfig, so the rules a target follows apply to it.
+        return settings_problems(f"{where} ({xcconfig})", xcconfig_settings(xcconfig), False, below_project)
 
     problems = []
     for config in configurations(root):
         where = f"{PBXPROJ} project {config['name']}"
-        problems += settings_problems(where, config["buildSettings"], True) + xcconfig_problems(where, config)
+        problems += settings_problems(where, config["buildSettings"], True) + xcconfig_problems(where, config, False)
     for target in (objects[t] for t in root["targets"]):
         for config in configurations(target):
             where = f"{PBXPROJ} target {target['name']} {config['name']}"
-            problems += settings_problems(where, config["buildSettings"], False) + xcconfig_problems(where, config)
+            problems += settings_problems(where, config["buildSettings"], False)
+            problems += xcconfig_problems(where, config, True)
     return problems
 
 
@@ -125,17 +129,26 @@ def yaml_scalar(text):
     return re.sub(r"\s+#.*$", "", text).strip()
 
 
+def yaml_blank(line):
+    return not line.strip() or line.lstrip().startswith("#")
+
+
 def yaml_value(lines, index):
-    """The value of the key on lines[index]: an inline scalar or the block list below it, joined."""
+    """The value of the key on lines[index]: an inline scalar, or a flow or block list with each element decoded and
+    the elements joined."""
     inline = yaml_scalar(lines[index].split(":", 1)[1])
+    if inline.startswith("[") and inline.endswith("]"):
+        elements = re.findall(r'"[^"]*"|\'[^\']*\'|[^,\s][^,]*', inline[1:-1])
+        return " ".join(yaml_scalar(element) for element in elements)
     if inline:
-        return inline[1:-1].replace(",", " ") if inline.startswith("[") else inline
+        return inline
     indent, items = len(lines[index]) - len(lines[index].lstrip()), []
     for line in lines[index + 1:]:
-        if line.strip() and (len(line) - len(line.lstrip()) <= indent or not line.strip().startswith("- ")):
+        if yaml_blank(line):
+            continue
+        if len(line) - len(line.lstrip()) <= indent or not line.strip().startswith("- "):
             break
-        if line.strip():
-            items.append(yaml_scalar(line.strip()[2:]))
+        items.append(yaml_scalar(line.strip()[2:]))
     return " ".join(items)
 
 
@@ -145,6 +158,8 @@ def project_yml_problems():
         lines = f.read().split("\n")
     problems, section, found = [], None, {}
     for index, line in enumerate(lines):
+        if yaml_blank(line):
+            continue
         if re.match(r"\S", line):
             section = line.rstrip(":")
         key = line.strip().split(":")[0]

@@ -6,10 +6,10 @@ in the crypto import allowlist, any change to the checks themselves (.swiftlint.
 once BASE has them. In project.yml, the Xcode project, Config/*.xcconfig and Packages/*/Package.swift, so does a
 strict compiler setting line (warnings as errors, upcoming features, OTHER_SWIFT_FLAGS) removed or changed, a
 target's `swiftSettings: swiftSettings` dropped, or a line added that undoes strictness: -no-warnings-as-errors,
--Wwarning, -disable-upcoming-feature, SWIFT_SUPPRESS_WARNINGS or GCC_WARN_INHIBIT_ALL_WARNINGS set to YES, or a
-warning group or all warnings treated `as: .warning`. A renamed file keeps its entries under the new path. A person who
-agrees with the change labels the pull request `baseline-growth-approved`, saying why in the description. Exit 2
-means BASE or HEAD is not a commit, or a baseline does not parse.
+-Wwarning, -disable-upcoming-feature, -Wno-error, -w, SWIFT_SUPPRESS_WARNINGS or GCC_WARN_INHIBIT_ALL_WARNINGS set
+to YES, or a warning group or all warnings treated `as: .warning`. A renamed file keeps its entries under the new
+path. A person who agrees with the change labels the pull request `baseline-growth-approved`, saying why in the
+description. Exit 2 means BASE or HEAD is not a commit, or a baseline does not parse.
 """
 import json
 import re
@@ -24,7 +24,8 @@ BUILD_SETTINGS = re.compile(r"^(project\.yml|HausXMPP\.xcodeproj/project\.pbxpro
                             r"Packages/[^/]+/Package\.swift)$")
 STRICT_LINE = re.compile(r"TREAT_WARNINGS_AS_ERRORS|SWIFT_UPCOMING_FEATURE_|OTHER_SWIFT_FLAGS|treatAllWarnings|"
                          r"UpcomingFeature|ExperimentalFeature|unsafeFlags")
-UNDOING_LINE = re.compile(r"-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature|as:\s*\.warning\b|"
+UNDOING_LINE = re.compile(r"-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature|"
+                          r"(?<![\w-])(-Wno-error|-w)(?![\w-])|as:\s*\.warning\b|"
                           r"(SWIFT_SUPPRESS_WARNINGS|GCC_WARN_INHIBIT_ALL_WARNINGS)\S*\s*[:=]\s*[\"']?(?i:yes|true)")
 SHARED_SETTINGS = "swiftSettings: swiftSettings"
 # The one slop-check rule whose entry is a recorded value rather than a fingerprint.
