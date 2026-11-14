@@ -247,7 +247,7 @@ struct BackgroundSynchronizerTests {
             let third = Task { await coordinator.deliver(ticket: expiring) }
             try await eventually("both pushes to join") { joined.progress?.joined == 3 }
             #expect(coordinator.activeRuns == 1)
-            #expect(coordinator.expire(ticket: expiring) == .fallback(.expired))
+            #expect(await coordinator.expire(ticket: expiring) == .fallback(.expired))
             // The stalled room is cut a second after the post.
             try await run.clock.sleeper(until: .seconds(1))
             run.clock.advance(by: .seconds(1))

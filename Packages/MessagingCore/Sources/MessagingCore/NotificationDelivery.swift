@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import os
 import XMPPProtocol
 
 /// Every reason shows the generic fallback: unknown is never suppressed.
@@ -134,22 +135,43 @@ public final class NotificationRunProgress: @unchecked Sendable {
 }
 
 /// Serializes runs in one extension process and lets concurrent `didReceive` calls share them. Call each request's
-/// handler exactly once, from `deliver` or `expire`, whichever comes first.
+/// handler exactly once, from `deliver` or `expire`, whichever comes first. iOS may suspend the extension once every
+/// handler ran, so neither answers while a run it ended still holds the lease.
 public final class NotificationRunCoordinator: @unchecked Sendable {
     public typealias Operation = @Sendable (NotificationRunProgress) async -> NotificationRunOutcome
 
-    // `task` and `waiters` are read and written only under the coordinator's `lock`.
+    /// iOS gives a push about 30 s and calls `serviceExtensionTimeWillExpire` near their end. A run still going this
+    /// long after its first push arrived is cancelled, which closes its socket at once, so it answers with the lease
+    /// released well before the expiry.
+    public static let runLimit: Duration = .seconds(25)
+    /// How long `expire` waits for the run it cancelled to close its store, which releases the lease.
+    public static let expiryWait: Duration = .milliseconds(1500)
+
+    // Every var is read and written only under the coordinator's `lock`.
     private final class Run: @unchecked Sendable {
         let progress = NotificationRunProgress()
         var task: Task<NotificationRunOutcome, Never>?
+        var limit: Task<Void, Never>?
         var waiters = Set<UUID>()
+        // The operation began, so the run may hold the lease until its task ends.
+        var started = false
+        var limitReached = false
     }
 
     private let lock = NSLock()
     private let operation: Operation
+    private let runLimit: Duration
+    private let clock: any Clock<Duration>
+    private let startStopwatch: @Sendable () -> () -> Duration
     private var runs: [Run] = []
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
 
-    public init(operation: @escaping Operation) { self.operation = operation }
+    /// `clock` times `runLimit` and the expiry wait.
+    public init<C: Clock<Duration>>(runLimit: Duration = NotificationRunCoordinator.runLimit, clock: C = ContinuousClock(),
+                                    operation: @escaping Operation) {
+        self.runLimit = runLimit; self.clock = clock; self.operation = operation
+        startStopwatch = { stopwatch(clock) }
+    }
 
     public func deliver(ticket: UUID) async -> NotificationRunOutcome {
         let (run, task) = attach(ticket)
@@ -158,23 +180,42 @@ public final class NotificationRunCoordinator: @unchecked Sendable {
         return outcome
     }
 
-    /// For `serviceExtensionTimeWillExpire`. Only a committed run suppresses. A run nobody waits for is cancelled;
-    /// candidates it did not delete are reposted later under the same identifiers, which replace.
-    public func expire(ticket: UUID) -> NotificationRunOutcome {
-        lock.withLock {
-            guard let run = runs.first(where: { $0.waiters.contains(ticket) }) else { return .fallback(.expired) }
+    /// For `serviceExtensionTimeWillExpire`. Only a committed run suppresses. A run nobody else waits for is cancelled
+    /// and waited for up to `wait`; candidates it did not delete are reposted later under the same identifiers, which
+    /// replace. Past `wait` it answers anyway and logs a fault: the lease is never released under live work.
+    public func expire(ticket: UUID, waitingUpTo wait: Duration = NotificationRunCoordinator.expiryWait) async -> NotificationRunOutcome {
+        let found = lock.withLock { () -> (run: Run, ended: Task<NotificationRunOutcome, Never>?)? in
+            guard let run = runs.first(where: { $0.waiters.contains(ticket) }) else { return nil }
             run.waiters.remove(ticket)
             run.progress.noteExpired()
-            let outcome: NotificationRunOutcome = run.progress.isCommitted ? .settled(run.progress.report) : .fallback(.expired)
-            if run.waiters.isEmpty {
-                run.progress.abandon()
-                run.task?.cancel()
-            }
-            return outcome
+            guard run.waiters.isEmpty else { return (run, nil) }
+            run.progress.abandon()
+            run.task?.cancel()
+            // A run that never started holds nothing, and its cancelled task skips the operation.
+            return (run, run.started ? run.task : nil)
         }
+        let held = MessageStore.processHoldsTransportLock
+        Self.log.notice("extension expiring, lease held=\(held, privacy: .public)")
+        guard let found else { return .fallback(.expired) }
+        if let ended = found.ended { await join(ended, of: found.run, within: wait, leaseHeld: held) }
+        return found.run.progress.isCommitted ? .settled(found.run.progress.report) : .fallback(.expired)
     }
 
     public var activeRuns: Int { lock.withLock { runs.count } }
+
+    private func join(_ task: Task<NotificationRunOutcome, Never>, of run: Run, within wait: Duration, leaseHeld held: Bool) async {
+        let took = startStopwatch()
+        let joined = (try? await withTimeout(wait, clock: clock) { await task.value }) != nil
+        let milliseconds = Int(took() / .milliseconds(1))
+        guard joined else {
+            Self.log.fault("""
+                expired run still stopping after \(milliseconds, privacy: .public) ms in \(run.progress.phase.rawValue, privacy: .public), \
+                lease held=\(MessageStore.processHoldsTransportLock, privacy: .public)
+                """)
+            return
+        }
+        if held { Self.log.notice("lease released at expiry after \(milliseconds, privacy: .public) ms") }
+    }
 
     private func attach(_ ticket: UUID) -> (Run, Task<NotificationRunOutcome, Never>) {
         lock.withLock {
@@ -191,21 +232,59 @@ public final class NotificationRunCoordinator: @unchecked Sendable {
             let task = Task { [weak self] () -> NotificationRunOutcome in
                 // The next run starts only after the previous released the lease.
                 if let previous { _ = await previous.value }
-                let outcome: NotificationRunOutcome
-                if Task.isCancelled { outcome = .fallback(.cancelled) } else { outcome = await operation(run.progress) }
+                var outcome: NotificationRunOutcome
+                if self?.begin(run) == false { outcome = .fallback(.cancelled) } else { outcome = await operation(run.progress) }
+                if case .fallback = outcome, self?.reachedLimit(run) == true { outcome = .fallback(.deadline) }
                 run.progress.enter(.finished)
                 self?.finished(run)
                 return outcome
             }
             run.task = task
+            // From the first push, so time a run spent queued behind the previous one counts.
+            let limit = runLimit, clock = clock
+            run.limit = Task { [weak self] in
+                guard (try? await clock.sleep(for: limit)) != nil else { return }
+                self?.stop(run)
+            }
             runs.append(run)
             return (run, task)
         }
     }
 
-    private func finished(_ run: Run) {
-        lock.withLock { runs.removeAll { $0 === run } }
+    // Read with the cancellation under the lock, so `expire` either waits for a run or knows it never starts.
+    private func begin(_ run: Run) -> Bool {
+        lock.withLock {
+            guard !Task.isCancelled else { return false }
+            run.started = true
+            return true
+        }
     }
+
+    private func stop(_ run: Run) {
+        let stopped = lock.withLock { () -> Bool in
+            guard runs.contains(where: { $0 === run }) else { return false }
+            run.limitReached = true
+            run.progress.abandon()
+            run.task?.cancel()
+            return true
+        }
+        if stopped { Self.log.notice("run cancelled at its limit in \(run.progress.phase.rawValue, privacy: .public)") }
+    }
+
+    private func reachedLimit(_ run: Run) -> Bool { lock.withLock { run.limitReached } }
+
+    private func finished(_ run: Run) {
+        lock.withLock {
+            runs.removeAll { $0 === run }
+            run.limit?.cancel()
+        }
+    }
+}
+
+// Started now; each call returns the time since.
+func stopwatch<C: Clock<Duration>>(_ clock: C) -> () -> Duration {
+    let start = clock.now
+    return { start.duration(to: clock.now) }
 }
 
 /// Direct messages are presented as soon as the own archive committed, while rooms are still walked. Each

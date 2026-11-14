@@ -74,6 +74,9 @@ import AppKit
     static let macWatch: Duration = .seconds(6)
     // Bounds how long closing waits for donations before the store closes under them (`mayDonate`).
     static let donationWait: Duration = .seconds(2)
+    // How long an expiring activity waits for the lease release. The socket is closed first, so what is left is
+    // joining tasks and SQLite work, which takes milliseconds; the rest is margin for a slow device.
+    nonisolated static let expiryWait: Duration = .milliseconds(1500)
 
     var files: [SharedItem] { items.filter(\.isFile) }
     var hasFiles: Bool { !files.isEmpty }
@@ -283,7 +286,13 @@ import AppKit
         // `-haus-share-queue-only` on the app's last launch: lab runs check that a share queued here sends from the app.
         if SharedSession.groupDefaults?.bool(forKey: ShareModel.queueOnlyKey) == true { return await ShareStateReader(store: store, accountID: accountID).states(ids) }
         #endif
-        let activity = ExpiringActivity { [weak self] in self?.cancelSending() }
+        // Expiring, the activity hard-closes the connection and blocks until the lease is released and the store closed.
+        let activity = ExpiringActivity(backstop: Self.expiryWait + .milliseconds(500)) { [weak self] in
+            Task { @MainActor in self?.cancelSending() }
+            _ = await session.expire(within: ShareModel.expiryWait)
+            // The lease went back with the session; a failed close leaves only SQLite's connection, which `close` retries.
+            try? await store.close()
+        }
         defer { activity.end() }
         // Signed out, moved or signed in again with other credentials while the lease was awaited: nothing connects, and
         // the rows wait for that account as the app's own queued messages do.
@@ -401,7 +410,8 @@ import AppKit
                                             authorize: { guard try NotificationAccount.load() == account else { throw CancellationError() } })
             }
             let watchdog = Task { try? await Task.sleep(for: .seconds(3)); run.cancel() }
-            _ = await run.result
+            // An expiry cancels the teardown this runs in.
+            _ = await withTaskCancellationHandler { await run.result } onCancel: { run.cancel() }
             watchdog.cancel()
         }
     }
@@ -428,20 +438,29 @@ private struct ShareStateReader: Sendable {
 }
 
 #if os(iOS)
-// `ProcessInfo.performExpiringActivity`: when the time runs out, `expired` lets the share end its connection and
-// release the lease before the process is suspended.
+// `performExpiringActivity` holds its assertion while the first call (expired false) blocks. Before suspension a second
+// call, on another thread, has expired true: it blocks until `expiring` released the lease and closed the store, within
+// `backstop`, then lets the first return. The teardown runs on the cooperative pool, never on these threads.
 private final class ExpiringActivity: @unchecked Sendable {
     private let done = DispatchSemaphore(value: 0)
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "share")
 
-    @MainActor init(expired: @escaping @MainActor () -> Void) {
+    init(backstop: Duration, expiring: @escaping @Sendable () async -> Void) {
         let done = done
-        ProcessInfo.processInfo.performExpiringActivity(withReason: "Send what was shared") { expiring in
-            if expiring {
-                Task { @MainActor in expired() }
+        ProcessInfo.processInfo.performExpiringActivity(withReason: "Send what was shared") { expired in
+            guard expired else {
+                done.wait()
                 return
             }
-            // The activity lasts while this background thread waits.
-            done.wait()
+            let stopped = DispatchSemaphore(value: 0)
+            Task.detached {
+                await expiring()
+                stopped.signal()
+            }
+            if stopped.wait(timeout: .now() + .milliseconds(Int(backstop / .milliseconds(1)))) == .timedOut {
+                Self.log.fault("share expiry teardown still running at its backstop")
+            }
+            done.signal()
         }
     }
 

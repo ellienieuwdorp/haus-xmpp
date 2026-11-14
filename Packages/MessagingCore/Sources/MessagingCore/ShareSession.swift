@@ -25,9 +25,9 @@ public enum ShareItemState: Sendable, Equatable {
 
 /// The share extension's short connection. Works only under the transport lease, never stolen: a lease held
 /// elsewhere leaves the share queued for its holder. Persists everything that arrives before acknowledging it. Always
-/// follow with `end()`, which closes the stream, joins every task and releases the lease; a stanza still in flight
-/// stays unconfirmed for the archive to reconcile. Cancelled PUTs leave their rows pending for the app to request
-/// new slots. Never changes trust or sends plaintext.
+/// follow with `end()` or `expire(within:)`, which close the stream, join every task and release the lease; a stanza
+/// still in flight stays unconfirmed for the archive to reconcile. Cancelled PUTs leave their rows pending for the app
+/// to request new slots. Never changes trust or sends plaintext.
 public actor ShareSession {
     /// True for a 2xx answer.
     public typealias Upload = @Sendable (_ file: URL, _ slot: XMPPUploadSlot, _ size: Int) async throws -> Bool
@@ -41,8 +41,14 @@ public actor ShareSession {
     private var client: XMPPClient?
     private var consumer: Task<Void, Never>?
     private var restoration: Task<Void, Never>?
+    private var leasing: Task<Duration, any Error>?
+    private var sending: Task<Void, Never>?
+    private var teardown: Task<Void, Never>?
+    private var stage = Stage.open
     private var holdsLease = false
     private var ended = false
+    // The last state read for each message, for a read after the store closed.
+    private var known: [String: ShareItemState] = [:]
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "share")
 
     public init(store: MessageStore, encryption: OMEMOService, files: AttachmentFiles, account: BackgroundAccount,
@@ -54,9 +60,13 @@ public actor ShareSession {
     /// False when another process kept the lease or the session ended.
     public func acquireLease(waitingUpTo wait: Duration = .seconds(3), clock: some Clock<Duration> = ContinuousClock()) async -> Bool {
         guard !ended, !holdsLease else { return holdsLease }
-        do { _ = try await acquireTransportOwnership(store, waitingUpTo: wait, clock: clock) }
+        let store = store
+        let attempt = Task { try await acquireTransportOwnership(store, waitingUpTo: wait, clock: clock) }
+        leasing = attempt
+        defer { leasing = nil }
+        do { _ = try await withTaskCancellationHandler { try await attempt.value } onCancel: { attempt.cancel() } }
         catch { return false }
-        // `end()` may have run during the wait and could not release this lease.
+        // The teardown cancels the wait and releases a lease it took regardless; this only makes sure.
         if ended { try? await store.releaseTransportOwnership(); return false }
         holdsLease = true
         return true
@@ -69,6 +79,7 @@ public actor ShareSession {
                      progress: @escaping @Sendable ([String: ShareItemState]) async -> Void = { _ in }) async -> [String: ShareItemState] {
         guard holdsLease, !ended else { return await states(messageIDs) }
         let work = Task { await transmit(messageIDs: messageIDs, rooms: rooms, deadline: deadline, progress: progress) }
+        sending = work
         let watchdog = Task {
             try? await Task.sleep(until: deadline, clock: .continuous)
             work.cancel()
@@ -114,27 +125,82 @@ public actor ShareSession {
     }
 
     /// Runs `presentation` while the lease is still held, then releases it. Safe to call more than once and without
-    /// a lease.
+    /// a lease; every call returns once the first one's release is done.
     public func end(presentation: (@Sendable (MessageStore) async -> Void)? = nil) async {
-        guard !ended else { return }
+        await tearDown(presentation: presentation).value
+    }
+
+    /// For a background activity that is expiring: closes the socket at once, skips or cuts the presentation and
+    /// waits up to `wait` for the lease release. False past `wait`, after a fault naming the stage still running: the
+    /// lease stays with that work, never released under it.
+    public func expire(within wait: Duration, clock: some Clock<Duration> = ContinuousClock()) async -> Bool {
+        Self.log.notice("share extension expiring, lease held=\(self.holdsLease, privacy: .public)")
+        await client?.disconnect()
+        let ending = tearDown(presentation: nil)
+        // A teardown that `end` began stops waiting on its presentation.
+        ending.cancel()
+        let start = clock.now
+        let released = (try? await withTimeout(wait, clock: clock) { await ending.value }) != nil
+        let milliseconds = Int(start.duration(to: clock.now) / .milliseconds(1))
+        if released {
+            Self.log.notice("share lease released at expiry after \(milliseconds, privacy: .public) ms")
+        } else {
+            Self.log.fault("share still stopping \(milliseconds, privacy: .public) ms after expiry at \(self.stage.rawValue, privacy: .public)")
+        }
+        return released
+    }
+
+    // Where the teardown is, for the expiry's fault.
+    private enum Stage: String { case open, restoring, sending, disconnecting, consuming, presenting, releasing, released }
+
+    private func tearDown(presentation: (@Sendable (MessageStore) async -> Void)?) -> Task<Void, Never> {
+        if let teardown { return teardown }
         ended = true
+        let task = Task { await close(presentation: presentation) }
+        teardown = task
+        return task
+    }
+
+    // Cancelled by an expiry, which closed the socket first; `stopTransport` then skips the farewell. Every task that
+    // could still write or hold the lease is joined before the release.
+    private func close(presentation: (@Sendable (MessageStore) async -> Void)?) async {
         restoration?.cancel()
+        sending?.cancel()
+        leasing?.cancel()
+        stage = .restoring
         await restoration?.value
+        stage = .sending
+        await sending?.value
+        _ = await leasing?.result
         let connected = client != nil
-        if let client { await client.disconnectAndWait() }
+        stage = .disconnecting
+        if let client { await stopTransport(client) }
+        stage = .consuming
         consumer?.cancel()
         await consumer?.value
         client = nil
-        guard holdsLease else { return }
-        if connected, let presentation { await presentation(store) }
+        // A lease the cancelled wait took just before its cancellation counts too.
+        let owns = await store.holdsTransportOwnership
+        guard holdsLease || owns else { stage = .released; return }
+        if connected, !Task.isCancelled, let presentation {
+            stage = .presenting
+            await presentation(store)
+        }
+        stage = .releasing
         do { try await store.releaseTransportOwnership() }
         catch { Self.log.error("share lease release failed: \(String(describing: type(of: error)), privacy: .public)") }
         holdsLease = false
+        stage = .released
     }
 
+    /// A store closed under the read, as an expiry closes it, keeps the last state read.
     public func states(_ messageIDs: [String]) async -> [String: ShareItemState] {
         var result: [String: ShareItemState] = [:]
-        for id in messageIDs { result[id] = ShareItemState(try? await store.message(accountID: account.accountID, messageID: id)) }
+        for id in messageIDs {
+            do { result[id] = ShareItemState(try await store.message(accountID: account.accountID, messageID: id)) }
+            catch { result[id] = known[id] ?? .queued }
+            known[id] = result[id]
+        }
         return result
     }
 
