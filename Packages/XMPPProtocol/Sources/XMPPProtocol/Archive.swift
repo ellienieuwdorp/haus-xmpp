@@ -61,6 +61,25 @@ public struct XMPPArchivePage: Sendable, Equatable {
     public let handledTokens: [XMPPInboundToken]
 }
 
+extension XMPPArchivePage {
+    /// The entries after `id` (all of them for nil) with every token of the page, for a page whose first entries were
+    /// already handed out; `complete` is what the remainder says about newer entries. Nil when the page lacks `id`.
+    public func entries(after id: String?, complete: Bool) -> XMPPArchivePage? {
+        var index = messages.startIndex
+        if let id {
+            guard let found = messages.firstIndex(where: { $0.archiveID == id }) else { return nil }
+            index = found + 1
+        }
+        let rest = Array(messages[index...])
+        return .init(messages: rest, complete: complete, firstID: rest.first?.archiveID, lastID: rest.last?.archiveID, handledTokens: handledTokens)
+    }
+
+    /// The same entries, owing `tokens` instead once they are durable.
+    public func owing(_ tokens: [XMPPInboundToken]) -> XMPPArchivePage {
+        .init(messages: messages, complete: complete, firstID: firstID, lastID: lastID, handledTokens: tokens)
+    }
+}
+
 /// An archive's newest entry, from `XMPPClient.newestArchiveEntry`.
 public struct XMPPArchiveNewest: Sendable, Equatable {
     /// nil when the archive is empty.
@@ -79,6 +98,7 @@ struct ArchiveQuery {
     var handledTokens: [XMPPInboundToken] = []
     var room: String? = nil
     var knownRooms: Set<String> = []
+    var walk: UUID? = nil
     var archiveOwner: String { room ?? accountBareJID }
 
     static let namespace = "urn:xmpp:mam:2"
@@ -231,10 +251,10 @@ extension XMPPClient {
     // A result belongs to the page query or a probe by its query ID; any other is handled at once and dropped.
     func receiveArchiveResult(_ node: XMLNode, inbound: XMPPInboundToken?) async throws {
         let queryID = node.child("result", namespace: ArchiveQuery.namespace)?.attributes["queryid"]
-        if var query = archiveQuery, queryID == query.queryID {
+        if let queryID, var query = archiveQueries[queryID] {
             try query.receive(node)
             if let inbound { query.handledTokens.append(inbound) }
-            archiveQuery = query
+            archiveQueries[queryID] = query
         } else if let queryID, var probe = archiveProbes[queryID] {
             try probe.receive(node)
             if let inbound { probe.handledTokens.append(inbound) }
@@ -242,28 +262,37 @@ extension XMPPClient {
         } else if let inbound { try await streamManagement?.handled(inbound) }
     }
 
+    /// The page queries one walk may have out at once.
+    public static let archiveWalkQueryLimit = 4
+
     /// Persist every result and its archive position before acknowledging `handledTokens`. One bounded own-account
-    /// query at a time; no arbitrary archive sender is trusted.
-    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
+    /// query at a time, or `archiveWalkQueryLimit` of one `walk`, which must hand their pages out in archive order; no
+    /// arbitrary archive sender is trusted.
+    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil, walk: UUID? = nil) async throws -> XMPPArchivePage {
         guard isOnline, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
-        guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        func free() -> Bool {
+            archiveQueries.isEmpty || (walk != nil && archiveQueries.count < Self.archiveWalkQueryLimit && archiveQueries.values.allSatisfy { $0.walk == walk })
+        }
+        guard free(), (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
         // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
         if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
-        guard isOnline, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
+        guard isOnline, OMEMOWire.bareJID(boundJID) == ownBare, free() else { throw XMPPClientError.connectionClosed }
         let queryID = UUID().uuidString
-        archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
-        archiveQuery?.room = room
-        archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
-        defer { archiveQuery = nil }
+        var query = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
+        query.room = room
+        query.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
+        query.walk = walk
+        archiveQueries[queryID] = query
+        defer { archiveQueries[queryID] = nil }
         let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
         do {
             let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
-            guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
+            guard let query = archiveQueries[queryID] else { throw XMPPClientError.connectionClosed }
             return try query.finish(response)
         } catch {
             // A discarded partial page must not leave an acknowledgement gap; the unchanged cursor refetches it after
             // reconnect.
-            if !(archiveQuery?.handledTokens.isEmpty ?? true) {
+            if !(archiveQueries[queryID]?.handledTokens.isEmpty ?? true) {
                 finish("Archive synchronization interrupted", error: error)
                 if error is CancellationError { throw error }
                 // Abandoning the partial page's unhandled tokens has already ended the transport.

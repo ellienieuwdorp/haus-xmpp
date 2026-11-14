@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-// What the walk asks of a room on the wire: one round trip per membership read, and a newest-entry probe that runs
-// beside a page query and reads no membership.
+// What the walk asks of a room on the wire: one round trip per membership read, a newest-entry probe that runs
+// beside a page query and reads no membership, and the queries of one walk that run beside each other.
 @Suite(.serialized)
 struct ArchiveWalkWireTests {
     private actor Persistence: XMPPStreamManagementPersistence {
@@ -122,6 +122,82 @@ struct ArchiveWalkWireTests {
         let probe = try await server.next()
         try await server.send("<iq type='result' id='\(probe.attributes["id"] ?? "")' from='\(Self.room)'><fin xmlns='\(Self.mam)' complete='true'/></iq>")
         #expect(try await newest == XMPPArchiveNewest(id: nil, handledTokens: []))
+        await server.stop()
+    }
+
+    private func result(_ queryID: String, _ id: String) -> String {
+        "<message to='alice@localhost/r'><result xmlns='\(Self.mam)' queryid='\(queryID)' id='\(id)'>"
+            + "<forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-11-14T10:00:00Z'/>"
+            + "<message xmlns='jabber:client' from='bob@localhost/x' type='chat'><body>hi</body></message></forwarded></result></message>"
+    }
+
+    private func fin(_ query: XMPPProtocol.XMLNode, _ ids: [String], complete: Bool) -> String {
+        let set = ids.isEmpty ? "" : "<set xmlns='\(Self.rsm)'><first>\(ids[0])</first><last>\(ids[ids.count - 1])</last></set>"
+        return "<iq type='result' id='\(query.attributes["id"] ?? "")'><fin xmlns='\(Self.mam)' complete='\(complete)'>\(set)</fin></iq>"
+    }
+
+    @Test func oneWalksQueriesRunTogetherAndEachKeepsItsOwnResults() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await online(client, on: server)
+        let walk = UUID()
+        async let newer = client.fetchArchivePage(.after("own-1"), walk: walk)
+        let first = try await server.next()
+        async let older = client.fetchArchivePage(.before(nil), walk: walk)
+        let second = try await server.next()
+        let newerID = try #require(first.child("query", namespace: Self.mam)?.attributes["queryid"])
+        let olderID = try #require(second.child("query", namespace: Self.mam)?.attributes["queryid"])
+        #expect(second.child("query", namespace: Self.mam)?.child("set", namespace: Self.rsm)?.child("before", namespace: Self.rsm) != nil)
+        // Interleaved on the stream; each result belongs to the query its ID names.
+        try await server.send(result(newerID, "own-2"))
+        try await server.send(result(olderID, "own-8"))
+        try await server.send(result(newerID, "own-3"))
+        try await server.send(result(olderID, "own-9"))
+        try await server.send(fin(second, ["own-8", "own-9"], complete: false))
+        try await server.send(fin(first, ["own-2", "own-3"], complete: false))
+        let (forward, backward) = try await (newer, older)
+        #expect(forward.messages.map(\.archiveID) == ["own-2", "own-3"])
+        #expect(backward.messages.map(\.archiveID) == ["own-8", "own-9"])
+        #expect(Set(forward.handledTokens.map(\.sequence)).isDisjoint(with: backward.handledTokens.map(\.sequence)))
+        #expect(forward.handledTokens.count == 2 && backward.handledTokens.count == 2)
+        await server.stop()
+    }
+
+    @Test func anotherCallerWaitsForTheWalksQueriesToFinish() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await online(client, on: server)
+        let walk = UUID()
+        async let page = client.fetchArchivePage(.after("own-1"), walk: walk)
+        let query = try await server.next()
+        await #expect(throws: XMPPClientError.invalidConfiguration) { _ = try await client.fetchArchivePage(.before("own-1")) }
+        await #expect(throws: XMPPClientError.invalidConfiguration) { _ = try await client.fetchArchivePage(.before("own-1"), walk: UUID()) }
+        try await server.send(fin(query, [], complete: true))
+        #expect(try await page.messages.isEmpty)
+        // Free again once they did.
+        async let next = client.fetchArchivePage(.before("own-1"))
+        let again = try await server.next()
+        try await server.send(fin(again, [], complete: true))
+        #expect(try await next.complete)
+        await server.stop()
+    }
+
+    @Test func aWalkHasAtMostItsLimitOfQueriesOut() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await online(client, on: server)
+        let walk = UUID()
+        var pages: [Task<Result<XMPPArchivePage, any Error>, Never>] = []
+        var queries: [XMPPProtocol.XMLNode] = []
+        for index in 0..<XMPPClient.archiveWalkQueryLimit {
+            pages.append(Task {
+                do { return .success(try await client.fetchArchivePage(.after("own-\(index)"), walk: walk)) } catch { return .failure(error) }
+            })
+            queries.append(try await server.next())
+        }
+        await #expect(throws: XMPPClientError.invalidConfiguration) { _ = try await client.fetchArchivePage(.after("own-9"), walk: walk) }
+        for query in queries { try await server.send(fin(query, [], complete: true)) }
+        for page in pages { #expect(try await page.value.get().complete) }
         await server.stop()
     }
 }
