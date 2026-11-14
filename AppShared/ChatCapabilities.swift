@@ -146,6 +146,16 @@ struct UploadServiceMemory {
         return found
     }
 
+    // A slot refusal's stated limit replaces the discovered one for the service that refused, keeping the discovery's
+    // date. Without a stated limit, or once another service is known, `current` is returned unchanged.
+    func refused(account: String, current: XMPPUploadService?, service: XMPPUploadService, maximumFileSize: Int?) -> XMPPUploadService? {
+        guard let maximumFileSize, current?.jid == service.jid, let stored = load(account: account), stored.jid == service.jid else { return current }
+        let updated = XMPPUploadService(jid: stored.jid, maximumFileSize: maximumFileSize)
+        Self.save(updated, account: account, in: defaults)
+        if let mirror { Self.save(updated, account: account, in: mirror, keepingNone: true) }
+        return updated
+    }
+
     func publish(account: String) {
         guard let mirror, !account.isEmpty else { return }
         guard defaults.object(forKey: Self.checkedKey(account)) != nil else { return }

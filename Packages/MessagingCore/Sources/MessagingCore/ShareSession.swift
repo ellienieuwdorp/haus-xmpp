@@ -275,7 +275,17 @@ public actor ShareSession {
             } catch {
                 if error is CancellationError || error is MessageStoreError { throw error }
                 Self.log.notice("share upload left for the app: \(String(describing: type(of: error)), privacy: .public)")
+                if Self.stopsUploads(after: error) { return }
             }
+        }
+    }
+
+    // A file too large leaves only itself to the app. A service that refuses the account, or asks it to wait, refuses
+    // every file after it too, so the extension asks no more.
+    static func stopsUploads(after error: any Error) -> Bool {
+        switch error as? XMPPUploadError {
+        case .notAllowed?, .retry?: true
+        case .fileTooLarge?, nil: false
         }
     }
 
