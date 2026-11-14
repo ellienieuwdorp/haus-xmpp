@@ -118,11 +118,10 @@ public struct ConnectionSetup: Sendable {
         let discoversUploads = !skipsUploads
         async let uploads: Void = { if discoversUploads { await operations.discoverUploads() } }()
 
-        guard let features = await negotiate(operations, sink: sink) else { return }
-        let walks = features.contains(Self.archiveFeature)
+        let negotiated = Negotiated()
         let held: StepFailure?
         do {
-            held = try await Self.concurrently(operations, identityExists: identityExists, walks: walks, sink: sink)
+            held = try await concurrently(operations, negotiated: negotiated, sink: sink)
         } catch let failure as StepFailure {
             await publishFailure(failure, sink: sink)
             return
@@ -130,7 +129,7 @@ public struct ConnectionSetup: Sendable {
             return
         }
         guard !Task.isCancelled else { return }
-        if walks { await sink(.catchingUp(nil)) }
+        if await negotiated.walks { await sink(.catchingUp(nil)) }
         if let held {
             await publishFailure(held, sink: sink)
             return
@@ -180,12 +179,40 @@ public struct ConnectionSetup: Sendable {
         return features
     }
 
-    // A thrown failure ends setup at once; a returned one waits for the walk.
-    private static func concurrently(_ operations: Operations, identityExists: Bool, walks: Bool,
-                                     sink: @escaping Sink) async throws -> StepFailure? {
-        try await withThrowingTaskGroup(of: StepFailure?.self, returning: StepFailure?.self) { group in
-            group.addTask { try await identityThenRooms(operations, identityExists: identityExists, sink: sink) }
-            if walks { group.addTask { try await walk(operations, sink: sink) } }
+    // Hands the features from negotiation to the identity step, which starts beside it. nil: setup ended there.
+    private actor Negotiated {
+        private var features: Set<String>??
+        private var waiting: [CheckedContinuation<Set<String>?, Never>] = []
+        var walks: Bool { features??.contains(ConnectionSetup.archiveFeature) ?? false }
+
+        func finish(_ result: Set<String>?) {
+            features = .some(result)
+            waiting.forEach { $0.resume(returning: result) }
+            waiting = []
+        }
+
+        func result() async -> Set<String>? {
+            if let features { return features }
+            return await withCheckedContinuation { waiting.append($0) }
+        }
+    }
+
+    private struct Ended: Error {}
+
+    // A thrown failure ends setup at once; a returned one waits for the walk. Negotiation always finishes `negotiated`
+    // before it returns or throws, so the identity step never waits past it.
+    private func concurrently(_ operations: Operations, negotiated: Negotiated, sink: @escaping Sink) async throws -> StepFailure? {
+        let setup = self
+        return try await withThrowingTaskGroup(of: StepFailure?.self, returning: StepFailure?.self) { group in
+            group.addTask { try await Self.identityThenRooms(operations, identityExists: setup.identityExists, negotiated: negotiated, sink: sink) }
+            group.addTask {
+                let features = await setup.negotiate(operations, sink: sink)
+                if features != nil, setup.identityExists { await sink(.step(Self.keysStep)) }
+                await negotiated.finish(features)
+                // Carbons failed (already published) or setup was cancelled.
+                guard let features else { throw Ended() }
+                return features.contains(Self.archiveFeature) ? try await Self.walk(operations, sink: sink) : nil
+            }
             var first: StepFailure?
             do {
                 for try await failure in group where first == nil { first = failure }
@@ -198,14 +225,18 @@ public struct ConnectionSetup: Sendable {
         }
     }
 
-    private static func identityThenRooms(_ operations: Operations, identityExists: Bool, sink: @escaping Sink) async throws -> StepFailure? {
+    // The identity check goes out beside negotiation; its outcome counts only once negotiation ended, as if it had
+    // started then.
+    private static func identityThenRooms(_ operations: Operations, identityExists: Bool, negotiated: Negotiated,
+                                          sink: @escaping Sink) async throws -> StepFailure? {
         var step = keysStep
+        var identity: (any Error)?
+        if identityExists {
+            do { try await operations.initializeEncryption() } catch { identity = error }
+        }
+        guard await negotiated.result() != nil else { return nil }
         do {
-            if identityExists {
-                try Task.checkCancellation()
-                await sink(.step(step))
-                try await operations.initializeEncryption()
-            }
+            if let identity { throw identity }
             try Task.checkCancellation()
             await sink(.ready)
             step = rejoinStep

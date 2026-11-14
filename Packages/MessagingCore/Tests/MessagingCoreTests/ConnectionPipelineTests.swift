@@ -1,10 +1,11 @@
 import Foundation
+import OMEMO
 import Testing
 import XMPPProtocol
 @testable import MessagingCore
 
-// Carbons go out beside discovery. The overlap is proven by a step that waits for the other, so running them one after
-// the other hangs and fails after `TestClock.failsafe`.
+// Carbons and the identity check go out beside discovery. Each overlap is proven by a step that waits for the other, so
+// running them one after the other hangs and fails after `TestClock.failsafe`.
 @MainActor struct ConnectionPipelineTests {
     private actor Latch {
         private var open = false
@@ -52,8 +53,8 @@ import XMPPProtocol
         operations.enableCarbons = { await log.mark("carbons"); await asked.release() }
         operations.features = { await asked.wait(); await log.mark("features"); return Self.both }
         try await run(operations, log)
-        let marks = await log.marks, events = await log.events
-        #expect(marks.prefix(2) == ["carbons", "features"])
+        let marks = await log.marks.filter { ["carbons", "features"].contains($0) }, events = await log.events
+        #expect(marks == ["carbons", "features"])
         #expect(Array(events.prefix(2)) == [.step(ConnectionSetup.featuresStep), .step(ConnectionSetup.carbonsStep)])
         #expect(events.last == .settled)
     }
@@ -82,13 +83,54 @@ import XMPPProtocol
         for discovered in [Self.both, [ConnectionSetup.archiveFeature]] {
             let log = Log()
             try await run(operations(log, features: discovered), log, memory: remembered)
-            let marks = await log.marks
+            let marks = await log.marks.filter { ["carbons", "features"].contains($0) }
             if discovered.contains(ConnectionSetup.carbonsFeature) {
-                #expect(marks.prefix(2) == ["features", "carbons"])
+                #expect(marks == ["features", "carbons"])
             } else {
                 #expect(!marks.contains("carbons"))
             }
             #expect(await log.events.last == .settled)
         }
+    }
+
+    @Test func theIdentityCheckGoesOutBesideDiscoveryAndReadyWaitsForBoth() async throws {
+        let log = Log(), checking = Latch()
+        var operations = operations(log)
+        operations.initializeEncryption = { await log.mark("initialize"); await checking.release() }
+        operations.features = { await checking.wait(); await log.mark("features"); return Self.both }
+        try await run(operations, log)
+        let marks = await log.marks, events = await log.events
+        #expect(marks.firstIndex(of: "initialize") ?? .max < marks.firstIndex(of: "features") ?? -1)
+        let keys = events.firstIndex(of: .step(ConnectionSetup.keysStep)) ?? .max
+        #expect((events.firstIndex(of: .step(ConnectionSetup.carbonsStep)) ?? .max) < keys)
+        #expect(keys < (events.firstIndex(of: .ready) ?? -1))
+        #expect(events.last == .settled)
+    }
+
+    // An identity mismatch found before negotiation ended still fails closed, once negotiation ended.
+    @Test func anEarlyIdentityMismatchFailsClosedAfterNegotiation() async throws {
+        let log = Log(), refused = Latch()
+        var operations = operations(log)
+        operations.initializeEncryption = { await refused.release(); throw OMEMOError.identityChanged }
+        operations.features = { await refused.wait(); await log.mark("features"); return Self.both }
+        try await run(operations, log)
+        let events = await log.events
+        #expect(events.last == .failed(step: ConnectionSetup.keysStep, detail: OMEMOError.identityChanged.errorDescription ?? ""))
+        #expect(!events.contains(.ready))
+        #expect(events.filter { if case .failed = $0 { true } else { false } }.count == 1)
+        #expect(!(await log.marks).contains("rejoin"))
+    }
+
+    // Negotiation that ends setup leaves the identity outcome unreported, as if the check had never run.
+    @Test func aCarbonsFailureIsTheOnlyFailureReported() async throws {
+        let log = Log()
+        var operations = operations(log)
+        operations.initializeEncryption = { throw OMEMOError.identityChanged }
+        operations.enableCarbons = { throw XMPPIQError.stanza(condition: "service-unavailable") }
+        try await run(operations, log)
+        let events = await log.events
+        #expect(events.filter { if case .failed = $0 { true } else { false } } == [.failed(step: ConnectionSetup.carbonsStep, detail: "service-unavailable")])
+        #expect(!events.contains(.ready))
+        #expect(!events.contains(.step(ConnectionSetup.keysStep)))
     }
 }
