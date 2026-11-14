@@ -556,10 +556,9 @@ public actor MessageStore {
         try requireTransportOwnership()
         guard let source = try connection.handle else { throw MessageStoreError.closed }
         for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
-        try connection.execute("BEGIN")
-        let summary: StoreSnapshotSummary
-        do {
-            summary = try StoreSnapshotSummary(connection)
+        // A read transaction, so the copy and the counts are of one committed state.
+        let summary = try connection.transaction(begin: "BEGIN") {
+            let summary = try StoreSnapshotSummary(connection)
             let copy = try Connection(url: destination)
             defer { try? copy.close() }
             guard let backup = sqlite3_backup_init(copy.handle, "main", source, "main") else {
@@ -578,8 +577,8 @@ public actor MessageStore {
             try copy.close()
             // Nothing has the copy open: sidecars left from its brief WAL phase are empty and not part of it.
             for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
-            try connection.execute("COMMIT")
-        } catch { try? connection.execute("ROLLBACK"); throw error }
+            return summary
+        }
         try Self.verifySnapshot(at: destination, matches: summary)
         return summary
     }
@@ -2736,8 +2735,8 @@ final class Connection: @unchecked Sendable {
     }
     // A transaction whose rollback failed would keep SQLite's locks, so the connection closes instead, which rolls it
     // back; its store reopens on the next call.
-    func transaction<T>(_ body: () throws -> T) throws -> T {
-        try execute("BEGIN IMMEDIATE")
+    func transaction<T>(begin: String = "BEGIN IMMEDIATE", _ body: () throws -> T) throws -> T {
+        try execute(begin)
         do { let value = try body(); try execute("COMMIT"); return value }
         catch {
             // The body's error is what the caller needs; a failed close leaves the connection to its deinit.

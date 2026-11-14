@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 // A parked store has closed SQLite, so it holds no fcntl lock on the database or its sidecars; the next call reopens
-// the same file at the same schema, and only while the process allows it. Serialized: the gate is process-wide.
+// the same file at the same schema, and only while the process allows it.
 @Suite(.serialized) struct ParkingTests {
     private let account = "alice@example.org"
 
@@ -108,19 +108,18 @@ import Testing
         try await older.close()
     }
 
-    @Test func reopeningRefusesWhileTheGateIsClosed() async throws {
+    @Test func openingAndReopeningRefuseWhileTheGateIsClosed() async throws {
         let (directory, url) = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try await seeded(url)
         try await store.park()
-        MessageStore.reopeningAllowed = false
-        defer { MessageStore.reopeningAllowed = true }
-        await #expect(throws: MessageStoreError.suspended) { try await store.chats(accountID: account) }
-        await #expect(throws: MessageStoreError.suspended) { try await store.acquireTransportOwnership() }
-        #expect(sqliteDescriptors(in: directory).isEmpty)
-        #expect(transportLockIsFree(url))
-
-        MessageStore.reopeningAllowed = true
+        await MessageStore.$reopeningOverride.withValue(false) {
+            await #expect(throws: MessageStoreError.suspended) { try await store.chats(accountID: account) }
+            await #expect(throws: MessageStoreError.suspended) { try await store.acquireTransportOwnership() }
+            #expect(throws: MessageStoreError.suspended) { try MessageStore(url: url) }
+            #expect(sqliteDescriptors(in: directory).isEmpty, "neither a reopen nor a new store opened SQLite")
+            #expect(transportLockIsFree(url))
+        }
         #expect(try await store.chats(accountID: account).count == 1)
         try await store.close()
         await #expect(throws: MessageStoreError.closed) { try await store.chats(accountID: account) }

@@ -12,8 +12,10 @@ extension MessageStore {
         case closed
     }
 
-    // The one way a store's connection opens, at first and again after `park`: returns it with its `user_version`.
+    // The one way a store's connection opens, at first and again after `park`: returns it with its `user_version`. A
+    // store first opened while the process is parked would stay open into suspension, so both refuse alike.
     static func connect(url: URL, create: Bool) throws -> (Connection, Int) {
+        guard mayOpen else { throw MessageStoreError.suspended }
         let connection = try Connection(url: url, create: create)
         try connection.execute("PRAGMA foreign_keys = ON")
         try connection.execute("PRAGMA synchronous = FULL")
@@ -21,7 +23,7 @@ extension MessageStore {
     }
 
     // A parked store reopens here, never migrating: only the file it first opened, at the schema it had then, and only
-    // while the process allows it (`reopeningAllowed`).
+    // while the process allows it (`reopeningAllowed`, checked in `connect`).
     var connection: Connection {
         get throws {
             switch state {
@@ -33,7 +35,6 @@ extension MessageStore {
     }
 
     private func reopen() throws -> Connection {
-        guard Self.reopeningAllowed else { throw MessageStoreError.suspended }
         guard FileIdentity(path: url.path) == fileIdentity else { throw MessageStoreError.replaced }
         let (live, version) = try Self.connect(url: url, create: false)
         let refusal: MessageStoreError? = if FileIdentity(path: url.path) != fileIdentity { .replaced }
@@ -57,13 +58,16 @@ extension MessageStore {
         state = .parked
     }
 
-    /// Whether a parked store may open its database again, for every store in this process. While it is off a call to a
-    /// parked store throws `suspended`; stores already open are unaffected. On by default.
+    /// Whether a store may open its database, at first or again after `park`, for every store in this process. While it
+    /// is off a new store and a call to a parked store throw `suspended`; stores already open are unaffected. On by default.
     public static var reopeningAllowed: Bool {
         get { reopening.withLock { $0 } }
         set { reopening.withLock { $0 = newValue } }
     }
     private static let reopening = OSAllocatedUnfairLock(initialState: true)
+    // Package tests run in parallel in one process, so a test closes the gate for its own task only.
+    @TaskLocal static var reopeningOverride: Bool?
+    static var mayOpen: Bool { reopeningOverride ?? reopeningAllowed }
 
     /// Whether any SQLite connection this package opened in this process is open right now, from any thread.
     public static var processHasOpenConnection: Bool { Connection.open.withLock { $0 > 0 } }
