@@ -51,13 +51,13 @@ enum VideoTranscoder {
         }
 
         let session = Session(reader: reader, writer: writer)
-        try reader.start()
-        try writer.start()
-        writer.startSession(atSourceTime: .zero)
         // The providers and receivers end on task cancellation themselves; cancelling the reader from another thread
         // while a provider waits for a sample crashes AVFoundation, so the reader and writer stop only once both
-        // pumps have returned.
+        // pumps have returned. A writer that fails to start stops the reader started before it.
         do {
+            try reader.start()
+            try writer.start()
+            writer.startSession(atSourceTime: .zero)
             try await withThrowingTaskGroup(of: Bool.self) { group in
                 for pump in pumps { group.addTask { try await pump.run(); return true } }
                 group.addTask { try await clock.sleep(for: deadline); return false }
