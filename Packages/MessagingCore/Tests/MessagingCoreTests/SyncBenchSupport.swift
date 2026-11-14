@@ -52,8 +52,8 @@ enum SyncBenchFailure: Error, CustomStringConvertible {
     }
 }
 
-// Disposable lab accounts and rooms; `app` is measured, `sender` sends, and `peer` seeds the archive and is the account
-// the notification extension wakes for.
+// Disposable lab accounts and rooms; `app` is measured, `sender` sends, `peer` seeds the archives and is the account
+// the notification extension wakes for, and `bulk` holds the large backlog, apart so no other walk crosses it.
 struct SyncBenchFixture: Codable {
     struct Account: Codable {
         let jid: String
@@ -64,11 +64,13 @@ struct SyncBenchFixture: Codable {
     let app: Account
     let sender: Account
     let peer: Account
+    let bulk: Account
     let rooms: [String]
     let resource: String
     // Synthetic wrapping key of these disposable stores.
     static let key = Data(repeating: 21, count: 32)
     static let catchUpMessages = 300
+    static let bulkMessages = 1_000
 }
 
 // The benchmark measures real time; every reading of the clock goes through here.

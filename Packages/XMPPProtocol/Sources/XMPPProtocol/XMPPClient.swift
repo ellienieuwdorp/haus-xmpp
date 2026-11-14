@@ -216,8 +216,9 @@ public actor XMPPClient {
         let timeout: Task<Void, Never>
     }
     private var iqRequests: [String: IQRequest] = [:]
-    var archiveQuery: ArchiveQuery?
-    // `newestArchiveEntry` queries, by query ID; they never hand out content, so they may run beside `archiveQuery`.
+    // Page queries by query ID. One caller at a time; only the queries of one walk (`ArchiveQuery.walk`) overlap.
+    var archiveQueries: [String: ArchiveQuery] = [:]
+    // `newestArchiveEntry` queries, by query ID; they never hand out content, so they may run beside page queries.
     var archiveProbes: [String: ArchiveQuery] = [:]
     // Results are emitted in stream order, before any later push.
     private var rosterFetchIDs: Set<String> = []
