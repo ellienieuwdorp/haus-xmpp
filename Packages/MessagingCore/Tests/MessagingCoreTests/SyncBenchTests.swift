@@ -100,6 +100,40 @@ import XMPPProtocol
         }
     }
 
+    // After the sends, so the peer's app session takes what they left for it and leaves a resumable stream in two
+    // joined rooms; the extension then wakes for one direct message. In the full run a second wake follows a session
+    // the server dropped, so the extension binds fresh and rejoins.
+    @Test func extensionWake() async throws {
+        let environment = try SyncBenchEnvironment()
+        let proxy = try await SyncBenchProxy.start(oneWayMilliseconds: environment.oneWayMilliseconds, target: 5223)
+        defer { proxy.stop() }
+        let bench = try SyncBenchStore.open(environment.peerStore)
+        let session = try SyncBenchSession(account: environment.fixture.peer, bench: bench, proxy: proxy, environment: environment,
+                                           expectedRooms: 2)
+        do {
+            try await connectAndSettle(session, "the peer's app session")
+            // As the app presents what it caught up with, so the wake presents only its own message.
+            try await NotificationPresenter(posting: FakePosting()).present(store: bench.store, accountID: environment.fixture.peer.jid,
+                                                                            progress: NotificationRunProgress())
+            await session.stop()
+            let wake = SyncBenchWake(environment: environment, proxy: proxy, bench: bench)
+            let resumed = try await wake.run("wake-resume", expectResumed: true)
+            try resumed.write(to: environment.results)
+            #expect(resumed.passed == true)
+            if SyncBenchEnvironment.full {
+                try await wake.dropSession()
+                let fresh = try await wake.run("wake-fresh", expectResumed: false)
+                try fresh.write(to: environment.results)
+                #expect(fresh.passed == true)
+            }
+        } catch {
+            await session.stop()
+            throw error
+        }
+        session.finish()
+        try await bench.close(removing: false)
+    }
+
     private func sendLatency(_ count: Int, to peer: String, session: SyncBenchSession) async throws -> SyncBenchResult {
         let before = session.result("before")
         let ids = try await enqueue(count, "syncbench", to: peer, session: session)

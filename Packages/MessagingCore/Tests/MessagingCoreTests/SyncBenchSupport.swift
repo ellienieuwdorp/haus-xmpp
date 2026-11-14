@@ -37,6 +37,7 @@ struct SyncBenchEnvironment {
 
     func snapshot(_ name: String) -> URL { directory.appending(path: "snapshots/\(name)", directoryHint: .isDirectory) }
     var senderStore: URL { directory.appending(path: "sender", directoryHint: .isDirectory) }
+    var peerStore: URL { directory.appending(path: "peer", directoryHint: .isDirectory) }
     var results: URL { directory.appending(path: "results", directoryHint: .isDirectory) }
 }
 
@@ -51,7 +52,8 @@ enum SyncBenchFailure: Error, CustomStringConvertible {
     }
 }
 
-// Disposable lab accounts and rooms; `app` is measured, `sender` sends and `peer` seeds the archive.
+// Disposable lab accounts and rooms; `app` is measured, `sender` sends, and `peer` seeds the archive and is the account
+// the notification extension wakes for.
 struct SyncBenchFixture: Codable {
     struct Account: Codable {
         let jid: String

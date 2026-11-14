@@ -92,14 +92,7 @@ public struct BackgroundSynchronizer: Sendable {
                 throw BackgroundSynchronizationError.identityUnavailable
             }
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
-            let client = XMPPClient(labCertificateAuthority: account.labCertificateAuthority)
-            try await client.configureStreamManagement(persistence: StreamPersistence(
-                store: store, accountID: account.accountID, encryption: encryption))
-            if let resource = account.resource { try await client.configureResource(resource) }
-            let preferences = try await store.accountPreferences(accountID: account.accountID)
-            try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen,
-                                                                            leftForeground: account.leftForeground),
-                                             clientActive: false)
+            let client = try await account.client(store: store, encryption: encryption)
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
@@ -107,6 +100,7 @@ public struct BackgroundSynchronizer: Sendable {
                 connect: {
                     try await client.connect(route: account.route, domain: account.domain, username: account.username,
                                              password: account.password, requireSCRAM: account.requiresSCRAM)
+                    progress?.noteOnline(resumed: await client.sessionResumed)
                 },
                 sessionDuties: { ownArchiveWalked in
                     // A fresh bind replaced the session the server pushed for, so re-enable push and rejoin rooms.
@@ -185,6 +179,7 @@ struct BackgroundCatchUp: Sendable {
                 await ownArchiveWalked.reach()
                 // The own archive holds the direct messages a push is about; without it the run shows the fallback.
                 guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
+                progress?.noteOwnArchiveCommitted()
                 await caughtUp.reach()
                 guard rooms > 0 else { return }
                 // Before the claim, so chats read on another device lose their candidates.
@@ -273,6 +268,28 @@ actor CatchUpLedger {
         }
         return PresentationStage(isFinal: true, unfinished: roomError)
     }
+}
+
+extension BackgroundAccount {
+    // Stream management on the account's store and the app's resource; away, so the session never makes the user look
+    // online.
+    func client(store: MessageStore, encryption: OMEMOService) async throws -> XMPPClient {
+        let client = XMPPClient(labCertificateAuthority: labCertificateAuthority)
+        try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
+        if let resource { try await client.configureResource(resource) }
+        let preferences = try await store.accountPreferences(accountID: accountID)
+        try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: leftForeground),
+                                         clientActive: false)
+        return client
+    }
+}
+
+extension NotificationRunProgress {
+    func noteOnline(resumed: Bool) {
+        update { $0.onlineMilliseconds = Int(Date().timeIntervalSince(started) * 1000); $0.resumed = resumed }
+    }
+
+    func noteOwnArchiveCommitted() { update { $0.ownArchiveMilliseconds = Int(Date().timeIntervalSince(started) * 1000) } }
 }
 
 /// A fresh bind away from the foreground replaced the app's session, which had push enabled and sat in the rooms.
