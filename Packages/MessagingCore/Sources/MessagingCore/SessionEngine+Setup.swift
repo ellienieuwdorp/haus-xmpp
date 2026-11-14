@@ -58,9 +58,15 @@ extension SessionEngine {
             initializeEncryption: { try await encryption.initialize(account: account, transport: client) },
             rejoinGroups: { [weak self] in
                 guard let self else { throw CancellationError() }
-                try await self.rejoinKnownGroups(connection)
+                // `.ready` has started the outbox; what follows it needs neither the rooms nor holds them back.
+                async let afterReady: Void = self.afterReady(connection)
+                do { try await self.rejoinKnownGroups(connection) } catch {
+                    await afterReady
+                    throw error
+                }
                 // Group messages queued offline waited for a joined room.
                 await self.startOutbox()
+                await afterReady
             },
             catchUp: { progress in
                 let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
@@ -111,17 +117,28 @@ extension SessionEngine {
         milestones.ready = .now
         delegate?.setupReady()
         Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
-        let rosterStart = ContinuousClock.now
-        // Roster pushes are answered only after a fetch on this stream; a failed fetch leaves the roster unloaded.
-        _ = try? await client.fetchRoster()
-        timings.add(.roster, since: rosterStart)
-        guard setupIsCurrent(token) else { return }
         await flushEncryptionControls(account: account, client: client, logsLiveStore: false)
         await delegate?.readyRefresh()
         guard setupIsCurrent(token) else { return }
         startOutbox()
-        // After the outbox started, so a server slow to answer cannot hold back sending.
+    }
+
+    // Beside the rejoins, after the outbox started, so a server slow to answer holds back neither.
+    private func afterReady(_ connection: Connection) async {
+        let (account, client, token) = (connection.account, connection.client, connection.token)
+        guard setupIsCurrent(token) else { return }
+        // The result arrives as `.rosterItems` in stream order.
+        async let roster: Void = fetchRoster(client)
         await delegate?.outboxStartedAtReady(account: account, client: client, token: token)
+        await roster
+    }
+
+    // Roster pushes are answered only after a fetch on this stream.
+    private func fetchRoster(_ client: XMPPClient) async {
+        let start = ContinuousClock.now
+        // A failed fetch leaves the roster unloaded; nothing else waits for it.
+        _ = try? await client.fetchRoster()
+        timings.add(.roster, since: start)
     }
 
     private func catchingUp(_ progress: CatchUpProgress?, _ connection: Connection) {

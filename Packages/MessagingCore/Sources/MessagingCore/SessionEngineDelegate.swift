@@ -48,8 +48,9 @@ import XMPPProtocol
 
     func setupStep(_ step: String)
     func setupReady()
-    /// Between the roster fetch and the outbox start at `.ready`.
+    /// At `.ready`, before the outbox starts.
     func readyRefresh() async
+    /// After the outbox started, beside the roster fetch and the room rejoins.
     func outboxStartedAtReady(account: String, client: XMPPClient, token: UUID) async
     func catchUpChanged(_ progress: CatchUpProgress?)
     func walkFinished(account: String, client: XMPPClient, token: UUID)
