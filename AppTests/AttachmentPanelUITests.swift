@@ -58,8 +58,13 @@ final class AttachmentPanelUITests: XCTestCase {
         // Cached from the keyboard just shown, so the composer stays exactly where the keyboard left it.
         XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
         XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5))
-        let rail = app.collectionViews["recentPhotos"]
+        let rail = app.descendants(matching: .any).matching(identifier: "recentPhotos").firstMatch
         XCTAssertGreaterThan(rail.frame.minY, attach.frame.maxY, "The panel sits under the composer")
+        // UIKit can assert while it sets up scroll edge pockets for a scroll view in the keyboard window.
+        let panel = app.otherElements["attachmentPanel"]
+        for kind in [XCUIElement.ElementType.scrollView, .collectionView, .table, .textView] {
+            XCTAssertEqual(panel.descendants(matching: kind).count, 0, "No \(kind.rawValue) in the panel")
+        }
         capture(app, "Panel in place of the letters", settle: 0.6)
 
         // The × brings the letters back in place of the panel; the field keeps its focus, so nothing moves.

@@ -423,13 +423,7 @@
   "file_length": [
    [
     "",
-    893
-   ]
-  ],
-  "force_cast": [
-   [
-    "let cell = collectionView.dequeueReusableCell(withReuseIdentifier: \"photo\", for: indexPath) as! RecentPhotoCell",
-    0
+    601
    ]
   ],
   "implicitly_unwrapped_optional": [
@@ -457,10 +451,6 @@
   "line_length": [
    [
     "NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidChangeFrame(_:)), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)",
-    0
-   ],
-   [
-    "collection.backgroundView = message(\"Allow photo access to pick from your recent photos.\", button: denied ? \"Open Settings\" : \"Allow Access\") { [weak self] in",
     0
    ]
   ]
