@@ -42,52 +42,34 @@ public actor OMEMOService {
                                transport: any OMEMOTransport, updateSelection: Bool = true) async throws -> EncryptionOverview {
         let (revision, old) = try await load(account)
         var state = old
+        let owners = Array(Set([account, peer])).sorted()
+        // Both versions of every owner's list are read, so the version probe below needs no lookup of its own.
+        var lookups = DeviceLookups(transport: transport)
+        let selected = requested ?? state.profiles[peer]
+        var known: [DeviceLookups.Bundle] = []
+        if let selected { known = try await advertisedLookups(owners, account: account, profile: selected, state: state) }
+        await lookups.ask(lists: listLookups(owners), bundles: known)
         let profile: XMPPOMEMOProfile
         var probedEmpty = false
-        if let selected = requested ?? state.profiles[peer] { profile = selected }
+        if let selected { profile = selected }
         else {
-            let legacy = try await transport.fetchOMEMODevices(for: peer, profile: .legacy)
+            let legacy = try lookups.list(peer, .legacy)
             // Select a deployed profile once, never silently downgrade an existing conversation.
             profile = legacy.isEmpty ? .modern : .legacy
             probedEmpty = legacy.isEmpty
         }
-        var peerAdvertises = false
-        let local = try engine(state, profile)
-        var incompatible = false
-        var otherVersionOnly: [String: Int] = [:]
-        var unavailable: [String: Int] = [:]
-        var advertised: [String: Int] = [:]
-        // Own devices given up by `startOver` are not offered for review while listed, unless reclaimed: then something
-        // still holds the key and it is reviewed like any other device.
-        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed])
-        for owner in Array(Set([account, peer])).sorted() {
-            let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
-            guard ids.count <= 200 else { throw OMEMOError.invalidContent }
-            if owner == peer, !ids.isEmpty { peerAdvertises = true }
-            advertised[owner] = ids.count
-            let otherProfile: XMPPOMEMOProfile = profile == .legacy ? .modern : .legacy
-            // The other version only feeds the incompatibility hint; an unreadable list there must not block this one.
-            let otherIDs = (try? validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))) ?? []
-            // Device IDs do not prove identity across profiles, so an other-version-only device is never encrypted to.
-            // That is reported, not enforced: refusing to send would queue messages indefinitely.
-            let onlyOther = Set(otherIDs).subtracting(ids).count
-            if onlyOther > 0 { incompatible = true; otherVersionOnly[owner] = onlyOther }
-            let missing = try await mergeAdvertised(ids, owner: owner, profile: profile,
-                                                    skipping: owner == account ? retired.union([local.deviceID]) : [],
-                                                    into: &state) { id in
-                try await self.availableBundle(owner: owner, deviceID: id, profile: profile, transport: transport)
-            }
-            if missing > 0 { unavailable[owner] = missing }
-        }
+        let refreshed = try await mergeRefreshed(owners, account: account, profile: profile, lookups: lookups, into: &state)
+        let peerAdvertises = (refreshed.advertised[peer] ?? 0) > 0
+        let incompatible = !refreshed.otherVersionOnly.isEmpty
         // An empty probe (offline server, missing node) must not pin a version the peer never published.
         if updateSelection, !(probedEmpty && !peerAdvertises) { state.profiles[peer] = profile }
         if updateSelection { state.incompatiblePeers[peer] = incompatible }
         try await save(state, revision: revision, account: account)
         var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible,
                                   waiting: try await waitingDevices(state, account: account, peer: peer, sending: profile))
-        result.unavailableDevices = unavailable
-        result.advertisedDevices = advertised
-        result.otherVersionOnlyDevices = otherVersionOnly
+        result.unavailableDevices = refreshed.unavailable
+        result.advertisedDevices = refreshed.advertised
+        result.otherVersionOnlyDevices = refreshed.otherVersionOnly
         return result
     }
 
@@ -117,8 +99,8 @@ public actor OMEMOService {
 
     // Nil when gone or unreadable: device lists in the wild carry stale IDs. Any other failure (timeout, server
     // error) is not proof of absence and fails the caller.
-    func availableBundle(owner: String, deviceID: UInt32, profile: XMPPOMEMOProfile,
-                         transport: any OMEMOTransport) async throws -> XMPPOMEMOBundle? {
+    static func availableBundle(owner: String, deviceID: UInt32, profile: XMPPOMEMOProfile,
+                                transport: any OMEMOTransport) async throws -> XMPPOMEMOBundle? {
         do { return try await transport.fetchOMEMOBundle(for: owner, deviceID: deviceID, profile: profile) }
         catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse { return nil }
     }

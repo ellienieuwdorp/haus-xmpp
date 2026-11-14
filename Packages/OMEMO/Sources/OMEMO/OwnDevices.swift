@@ -24,7 +24,7 @@ extension OMEMOService {
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
             var bundles: [UInt32: XMPPOMEMOBundle] = [:]
             for id in ids where !skipping.contains(id) {
-                bundles[id] = try await availableBundle(owner: account, deviceID: id, profile: profile, transport: transport)
+                bundles[id] = try await Self.availableBundle(owner: account, deviceID: id, profile: profile, transport: transport)
             }
             fetched.append(AdvertisedOwnDevices(profile: profile, ids: ids, bundles: bundles))
         }
@@ -47,7 +47,7 @@ extension OMEMOService {
     }
 
     // Own devices given up by `startOver` and not seen reclaimed stay out of review while a list still names them.
-    private func skippedOwnDevices(_ state: AccountEncryptionState, account: String,
+    func skippedOwnDevices(_ state: AccountEncryptionState, account: String,
                                    profile: XMPPOMEMOProfile) async throws -> Set<UInt32> {
         let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed])
         return retired.union([try localDeviceID(state, profile)])
