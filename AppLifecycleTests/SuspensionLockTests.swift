@@ -100,8 +100,9 @@ import MessagingCore
     func testBackgroundWorkReparksBeforeItsTaskEnds() async throws {
         let scene = try await start(), model = scene.model, database = scene.database
         await model.prepare()
+        let other = try MessageStore(url: database)
         await scene.leave()
-        assertNothingLocked(scene, "parked")
+        assertNothingLocked(scene, "parked, a store the app does not hold included")
 
         let queued = "queued-\(UUID().uuidString.lowercased())@example.org"
         XCTAssertEqual(execute("INSERT INTO chats(account_id,id,title) VALUES('\(model.accountID)','\(queued)','Queued')", on: database), SQLITE_OK)
@@ -116,13 +117,25 @@ import MessagingCore
         await StorageParking.shared.settled()
         assertNothingLocked(scene, "after a finished upload")
 
-        let other = try MessageStore(url: database)
-        try await other.park()
         do {
             _ = try await other.chats(accountID: model.accountID)
             XCTFail("a parked store reopened with no background time")
         } catch { XCTAssertEqual(error as? MessageStoreError, .suspended) }
+        XCTAssertThrowsError(try MessageStore(url: database), "a new store opened with no background time") {
+            XCTAssertEqual($0 as? MessageStoreError, .suspended)
+        }
+        assertNothingLocked(scene, "after the refusals")
         try await other.close()
+    }
+
+    // SwiftUI can report `.active` straight to `.background`, so no departure's background time ends to start a park.
+    func testActiveStraightToBackgroundLeavesNoLock() async throws {
+        let scene = try await start()
+        await scene.model.prepare()
+        scene.move(to: .background)
+        await scene.model.lifecycleSettled()
+        await StorageParking.shared.settled()
+        assertNothingLocked(scene, "after a direct move to the background")
     }
 
     // Background time that begins and ends while a park runs may reopen a store the park already closed; the park
@@ -153,6 +166,12 @@ import MessagingCore
         await scene.leave()
         XCTAssertEqual(StorageParking.shared.kept, 1, "a refused park keeps the transition's background time")
         XCTAssertFalse(MessageStore.reopeningAllowed)
+        StorageParking.shared.hold(granted: false)
+        XCTAssertEqual(StorageParking.shared.kept, 1, "time iOS refused cannot replace the kept time")
+        XCTAssertTrue(MessageStore.reopeningAllowed, "work under refused time may still reopen storage")
+        StorageParking.shared.release {}
+        await StorageParking.shared.settled()
+        XCTAssertEqual(StorageParking.shared.kept, 2, "its release parks again, and that park is refused too")
         scene.move(to: .inactive)
         XCTAssertEqual(StorageParking.shared.kept, 0, "new background time ends it")
         scene.move(to: .active)

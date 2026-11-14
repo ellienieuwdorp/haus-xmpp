@@ -291,11 +291,11 @@ private struct TerminationPermission: NSViewRepresentable {
         self.name = name
         #if os(iOS)
         self.onExpire = onExpire
-        StorageParking.shared.hold()
         task = .invalid
         task = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
             MainActor.assumeIsolated { expire(name) }
         }
+        StorageParking.shared.hold(granted: task != .invalid)
         if task == .invalid { Self.log.error("background time refused: \(name, privacy: .public)") }
         else { Self.log.notice("background activity began: \(name, privacy: .public)") }
         #else
@@ -377,9 +377,17 @@ private struct TerminationPermission: NSViewRepresentable {
         if active { resume() }
     }
 
-    func hold() {
+    // Refused time still counts, so its release balances, but cannot replace time a failed park is keeping.
+    func hold(granted: Bool) {
         holders += 1
-        resume()
+        allowReopening()
+        if granted { endWaiting() }
+    }
+
+    // For a move to the background that ended no background time: parks unless something still holds time.
+    func parkIfIdle() {
+        guard holders == 0, !inFront, parking == nil else { return }
+        parking = Task { await park() }
     }
 
     // `finish` ends the background time, at once unless it is the last held away from the front.
@@ -397,9 +405,13 @@ private struct TerminationPermission: NSViewRepresentable {
 
     // Storage may reopen, and background time a park was holding back ends: the front or newer time covers the work.
     private func resume() {
+        allowReopening()
+        endWaiting()
+    }
+
+    private func allowReopening() {
         reopenings += 1
         MessageStore.reopeningAllowed = true
-        endWaiting()
     }
 
     private func endWaiting() {

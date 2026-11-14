@@ -90,6 +90,8 @@ struct HausXMPPApp: App {
         StorageParking.shared.sceneChanged(active: step.to == .active)
         model.applyLifecycle(driver.updates(for: .phaseChanged(from: step.from, to: step.to)))
         if step.to != .inactive { departure?.end(); departure = nil }
+        // The scene can step from `.active` to `.background` with no `.inactive` between, so no departure ends to park.
+        if step.to == .background { StorageParking.shared.parkIfIdle() }
     }
 
     // A launch into the background must not connect, and its first activation counts as a foreground return.
@@ -105,6 +107,7 @@ struct HausXMPPApp: App {
                 guard let self else { return }
                 if let observer = self.backgroundLaunchObserver { NotificationCenter.default.removeObserver(observer) }
                 self.backgroundLaunchObserver = nil
+                StorageParking.shared.sceneChanged(active: true)
                 self.model.applyLifecycle(self.driver.updates(for: .becameActive))
             }
         }
