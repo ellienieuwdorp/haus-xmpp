@@ -148,6 +148,8 @@ targets:
           - DateChipView.swift
           - MessageActionsOverlay.swift
           - AttachmentKeyboard.swift
+          - RecentPhotosRail.swift
+          - RecentPhotoTile.swift
           - NotificationHarness.swift
           # The iPhone's system contact picker and contact card; the Mac adds contacts through Mac/MacContacts.swift.
           - ContactSystemViews.swift
