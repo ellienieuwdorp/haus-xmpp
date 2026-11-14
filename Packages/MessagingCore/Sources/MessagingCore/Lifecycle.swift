@@ -203,6 +203,10 @@ public struct AttentionRules: Sendable, Equatable {
     /// it holds them until the walk and the other devices' read state are in, then posts one banner per chat.
     public var holdsCatchUpBanners: Bool { desktop }
 
+    /// iOS keeps the stream for a short grace after `.background` while the outbox has work. A desktop app quiesces
+    /// only to quit or sleep, and then at once.
+    public var holdsBackgroundGrace: Bool { !desktop }
+
     /// On a Mac the newest visible message is then marked read and the chat's notifications removed. On iOS cells
     /// mark messages read as they appear.
     public func startsReading(from old: LifecycleSignals, to new: LifecycleSignals) -> Bool {

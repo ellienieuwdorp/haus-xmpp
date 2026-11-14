@@ -200,6 +200,16 @@ extension ToolbarItemPlacement {
         try? await UNUserNotificationCenter.current().setBadgeCount(count)
     }
 
+    // UIKit reports a huge value until the app is really in the background; iOS then grants about 30 s.
+    static var backgroundTimeRemaining: Duration? {
+        #if os(iOS)
+        let remaining = UIApplication.shared.backgroundTimeRemaining
+        return remaining > 600 ? .seconds(30) : .milliseconds(Int(remaining * 1000))
+        #else
+        nil
+        #endif
+    }
+
     static var didBecomeActiveNotification: Notification.Name {
         #if os(iOS)
         UIApplication.didBecomeActiveNotification
@@ -264,22 +274,27 @@ private struct TerminationPermission: NSViewRepresentable {
     static let macLimit: Duration = .seconds(60)
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
 
+    private let name: String
     #if os(iOS)
     private var task: UIBackgroundTaskIdentifier
+    private let onExpire: (@MainActor () -> Void)?
     #else
     private var activity: (any NSObjectProtocol)?
     #endif
 
-    // The name is logged, so it names the work, never an account or chat. On iOS expiry ends the task only while no
-    // transport lock is held; otherwise iOS ends the process (0x2182bad2), freeing the lock. A suspended holder is killed
-    // too (0xdead10cc), and unlocking under live work would let two processes own the transport.
-    init(_ name: String) {
+    // The name is logged, so it names the work, never an account or chat. On iOS expiry runs `onExpire`, then ends the
+    // task only while no transport lock is held; otherwise iOS ends the process (0x2182bad2), freeing the lock. A
+    // suspended holder is killed too (0xdead10cc), and unlocking under live work would let two processes own it.
+    init(_ name: String, onExpire: (@MainActor () -> Void)? = nil) {
+        self.name = name
         #if os(iOS)
+        self.onExpire = onExpire
         task = .invalid
         task = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
             MainActor.assumeIsolated { expire(name) }
         }
         if task == .invalid { Self.log.error("background time refused: \(name, privacy: .public)") }
+        else { Self.log.notice("background activity began: \(name, privacy: .public)") }
         #else
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: name)
         Task { [weak self] in
@@ -300,6 +315,7 @@ private struct TerminationPermission: NSViewRepresentable {
 
     #if os(iOS)
     private func expire(_ name: String) {
+        onExpire?()
         guard !MessageStore.processHoldsTransportLock else {
             return Self.log.error("background time ran out holding the transport lease: \(name, privacy: .public)")
         }
@@ -313,6 +329,7 @@ private struct TerminationPermission: NSViewRepresentable {
         guard task != .invalid else { return }
         UIApplication.shared.endBackgroundTask(task)
         task = .invalid
+        Self.log.notice("background activity ended: \(self.name, privacy: .public)")
         #else
         guard let activity else { return }
         ProcessInfo.processInfo.endActivity(activity)

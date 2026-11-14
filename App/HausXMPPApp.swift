@@ -1,5 +1,9 @@
 import MessagingCore
+import OSLog
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 @main
 struct HausXMPPApp: App {
@@ -35,11 +39,16 @@ struct HausXMPPApp: App {
     }
 }
 
-// A launch into the background (a notification action) starts away until its first activation.
+// A launch into the background (a notification action) starts away until its first activation. UIKit's own
+// notifications report the phases too, since SwiftUI's can come late (an in-app Safari view handing off); the merge
+// hands the driver each change once.
 @MainActor final class SceneLifecycle {
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
     private var driver = SceneLifecycleDriver()
+    private var merge = ScenePhaseMerge()
     private unowned let model: AppModel
     private var backgroundLaunchObserver: (any NSObjectProtocol)?
+    private var observers: [any NSObjectProtocol] = []
     // Begun as the scene leaves `.active`: iOS grants background time asynchronously, so it is asked for before
     // suspension. Ends at `.active` again, or at `.background` once the model's transition holds its own.
     private var departure: BackgroundActivity?
@@ -47,17 +56,45 @@ struct HausXMPPApp: App {
     init(model: AppModel) {
         self.model = model
         model.lifecycleAtLaunch = { [weak self] in self?.launched() ?? [] }
+        #if os(iOS)
+        let center = NotificationCenter.default
+        let reports: [(Notification.Name, SceneLifecycleDriver.Phase)] = [(UIApplication.willResignActiveNotification, .inactive),
+                                                                          (UIApplication.didEnterBackgroundNotification, .background),
+                                                                          (UIApplication.didBecomeActiveNotification, .active)]
+        for (name, phase) in reports {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.report(from: nil, to: phase, source: "uikit") }
+            })
+        }
+        observers.append(center.addObserver(forName: UIScene.didDisconnectNotification, object: nil, queue: .main) { _ in
+            Self.log.notice("scene disconnected")
+        })
+        // Posted inside `applicationWillTerminate`, which a swipe from the app switcher calls on a running app.
+        observers.append(center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.flushBeforeTermination() }
+        })
+        #endif
     }
 
     func phaseChanged(from previous: SceneLifecycleDriver.Phase, to phase: SceneLifecycleDriver.Phase) {
-        if phase == .inactive, departure == nil { departure = BackgroundActivity("Leave the foreground") }
-        model.applyLifecycle(driver.updates(for: .phaseChanged(from: previous, to: phase)))
-        if phase != .inactive { departure?.end(); departure = nil }
+        report(from: previous, to: phase, source: "swiftui")
+    }
+
+    private func report(from previous: SceneLifecycleDriver.Phase?, to phase: SceneLifecycleDriver.Phase, source: String) {
+        guard let step = merge.step(from: previous, to: phase) else { return }
+        let change = "\(step.from) → \(step.to)"
+        Self.log.notice("scene \(change, privacy: .public) (\(source, privacy: .public))")
+        if step.to == .inactive, departure == nil {
+            departure = BackgroundActivity("Leave the foreground", onExpire: { [weak self] in self?.model.engine.backgroundTimeExpiring() })
+        }
+        model.applyLifecycle(driver.updates(for: .phaseChanged(from: step.from, to: step.to)))
+        if step.to != .inactive { departure?.end(); departure = nil }
     }
 
     // A launch into the background must not connect, and its first activation counts as a foreground return.
     private func launched() -> [LifecycleUpdate] {
         let inBackground = PlatformApplication.isInBackground
+        if inBackground { merge = ScenePhaseMerge(applied: .background) }
         let updates = driver.updates(for: .launched(inBackground: inBackground))
         guard inBackground else { return updates }
         backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: PlatformApplication.didBecomeActiveNotification,

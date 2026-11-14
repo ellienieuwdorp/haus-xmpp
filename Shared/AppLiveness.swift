@@ -8,12 +8,14 @@ import MessagingCore
 enum AppLiveness {
     static var ringName: String { SharedStorage.group + ".liveness.request" }
 
-    // Only the Mac answers, so the iPhone's extension never asks and push stays the iPhone's delivery path.
+    // The Mac answers while it runs. The iPhone answers only during its background grace, which it marks in the App
+    // Group, so outside one its extension never asks and push stays the iPhone's delivery path.
     static var isOffered: Bool {
         #if os(macOS)
         true
         #else
-        false
+        guard let container = try? SharedStorage.groupContainer() else { return false }
+        return Files(groupRoot: container).offered()
         #endif
     }
 
@@ -28,6 +30,10 @@ enum AppLiveness {
         func request() -> LivenessRequest? { mailbox.read("request.json") }
         func saveAnswer(_ answer: LivenessAnswer) throws { try mailbox.save(answer, as: "answer.json") }
         func answer() -> LivenessAnswer? { mailbox.read("answer.json") }
+        // Without an offer the extension waits for the lease instead of asking; only a fresh answer ever hands a push over.
+        func saveOffer(until: Date) { try? mailbox.save(LivenessOffer(until: until), as: "offer.json") }
+        func removeOffer() { mailbox.remove("offer.json") }
+        func offered(now: Date = Date()) -> Bool { (mailbox.read("offer.json") as LivenessOffer?).map { now < $0.until } ?? false }
     }
 
     struct ExtensionChannel: LivenessChannel {
@@ -73,4 +79,8 @@ enum AppLiveness {
             return answer
         }
     }
+}
+
+struct LivenessOffer: Codable, Sendable {
+    let until: Date
 }

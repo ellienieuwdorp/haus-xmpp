@@ -70,7 +70,7 @@ final class AppModel {
     private(set) var previousVersionBackupUnreadable = false
     private(set) var keptCopyUnreadable = false
     // A restore owns the store's lease until it closes the store; a background transition must not release it.
-    @ObservationIgnored private var restoringData = false
+    @ObservationIgnored private(set) var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
     // Its snapshot or migration can hold the lease before `store` is set, so a background transition joins it.
     @ObservationIgnored private var storageOpening: Task<Void, Never>?
@@ -83,7 +83,7 @@ final class AppModel {
     // the user sets encryption up again.
     private(set) var keyRecovery: KeyRecoveryPlan?
     // Opened for the recovery screen alone; nothing else reads or writes it.
-    @ObservationIgnored private var recoveryStore: MessageStore?
+    @ObservationIgnored private(set) var recoveryStore: MessageStore?
     @ObservationIgnored private var startingEncryptionOver = false
     private(set) var accountID = "" {
         didSet {
@@ -120,13 +120,13 @@ final class AppModel {
     private(set) var notificationRoute: NotificationChatRoute?
     @ObservationIgnored var onNotificationRoute: (@MainActor () -> Void)?
     var requestedRoute: ChatRoute?
-    @ObservationIgnored private var sessionAccount: NotificationAccount?
+    @ObservationIgnored private(set) var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     // Only `applyLifecycle` changes these, from the updates of the process-owned platform lifecycle driver.
     @ObservationIgnored private(set) var lifecycle = LifecycleSignals.inFront
     // Set by the lifecycle owner before `prepare()`; on iOS a launch into the background starts with `.start(.away)`.
     @ObservationIgnored var lifecycleAtLaunch: @MainActor () -> [LifecycleUpdate] = { [] }
-    private static let attention: AttentionRules = {
+    static let attention: AttentionRules = {
         #if os(macOS)
         .desktop
         #else
@@ -137,13 +137,13 @@ final class AppModel {
     private(set) var readingStarts = 0
     // With `quiescing`, this guards all transport, crypto and setup work, so a background transition blocks new work at
     // once.
-    private var transportWanted: Bool { lifecycle.transportWanted }
-    private var quiescing: Bool { get { engine.quiescing } set { engine.quiescing = newValue } }
+    var transportWanted: Bool { lifecycle.transportWanted }
+    var quiescing: Bool { get { engine.quiescing } set { engine.quiescing = newValue } }
     @ObservationIgnored private var appBadge: Int?
     private var activeEncryptionOperations: Int { get { engine.activeOperations } set { engine.activeOperations = newValue } }
     private var acquiringOwnership: Bool { get { engine.acquiringOwnership } set { engine.acquiringOwnership = newValue } }
-    private var hasTransportOwnership: Bool { get { engine.hasTransportOwnership } set { engine.hasTransportOwnership = newValue } }
-    @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
+    var hasTransportOwnership: Bool { get { engine.hasTransportOwnership } set { engine.hasTransportOwnership = newValue } }
+    @ObservationIgnored let grace = BackgroundGraceState()
     @ObservationIgnored private var outboxRingListener: OutboxRing.Listener?
     // Begun when a background release left the kernel lock held, so the app is not suspended holding it; the next
     // release that frees the lock ends it.
@@ -188,9 +188,10 @@ final class AppModel {
         let engine = SessionEngine(profiles: serverProfiles)
         engine.account = accountID
         engine.delegate = self
+        engine.backgroundTimeRemaining = { PlatformApplication.backgroundTimeRemaining }
         return engine
     }()
-    private var store: MessageStore? { get { engine.store } set { engine.store = newValue } }
+    var store: MessageStore? { get { engine.store } set { engine.store = newValue } }
     private var outboxSender: OutboxSender? { get { engine.outboxSender } set { engine.outboxSender = newValue } }
     private var outboxRequested: Bool { engine.outboxRequested }
     private var drainTask: Task<Void, Never>? { engine.drainTask }
@@ -203,8 +204,8 @@ final class AppModel {
     @ObservationIgnored private var catchUpActivity: BackgroundActivity?
     var isCatchingUp: Bool { catchUp != nil }
     // Numbers only, never message contents.
-    private static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
-    private static let lifecycleLog = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
+    static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    static let lifecycleLog = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
     private var syncTimings: SyncPhaseTimings { engine.timings }
     private var backfillTask: Task<Void, Never>? { get { engine.backfillTask } set { engine.backfillTask = newValue } }
     private(set) var backfillingArchive: String?
@@ -218,7 +219,7 @@ final class AppModel {
     // Reach-top fires every scroll frame near the top; settled archives (exhausted or refused) are not asked again.
     @ObservationIgnored private var backfillSettled: Set<String> = []
     @ObservationIgnored private var backfillResumesAt: ContinuousClock.Instant?
-    private var client: XMPPClient? { engine.client }
+    var client: XMPPClient? { engine.client }
     @ObservationIgnored private var openChatID: String? {
         didSet { syncOpenChatTyping(); syncOpenChatLastSeen(); syncForegroundNotificationChat() }
     }
@@ -239,6 +240,7 @@ final class AppModel {
     #endif
     @ObservationIgnored private var catchUpBanners = CatchUpBanners.holding
     @ObservationIgnored private var actionSession: NotificationActionSession?
+    var runsNotificationAction: Bool { actionSession != nil }
     private var drainPasses: Int { engine.drainPasses }
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
     @ObservationIgnored private var notificationTapTask: Task<Void, Never>?
@@ -679,7 +681,7 @@ final class AppModel {
         }
     }
 
-    private var wantsConnection: Bool {
+    var wantsConnection: Bool {
         transportWanted && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
             && transferState == .none
     }
@@ -701,7 +703,7 @@ final class AppModel {
         }
     }
 
-    private func networkBecameReachable() {
+    func networkBecameReachable() {
         guard wantsConnection, session.isConnectable else { return }
         reconnection.retryNow()
         reconnectTask?.cancel(); reconnectTask = nil
@@ -808,7 +810,8 @@ final class AppModel {
         let transition = LifecycleTransition.between(old, signals, activated: activated)
         // Checked under the old signals and sent before a quiesce's away presence and disconnect.
         var typingEnd: Task<Void, Never>?
-        if Self.attention.endsChatState(from: old, to: signals), let typing = ownTyping {
+        // A grace keeps the stream, so a draft left mid-sentence must not read as typing for its whole length.
+        if Self.attention.endsChatState(from: old, to: signals) || transition.quiescesTransport, let typing = ownTyping {
             sendOwnTyping(ownTyping?.sender.left(), to: typing.chat)
             ownTyping = nil
             ownTypingPause?.cancel()
@@ -818,10 +821,7 @@ final class AppModel {
         syncForegroundNotificationChat()
         if Self.attention.startsReading(from: old, to: signals), let chatID = openChatID { startedReading(chatID) }
         appBadge = nil
-        if transition.quiescesTransport { engine.backgroundRequested() }
-        // Begun before anything is awaited: iOS grants background time asynchronously, and an app it suspends while
-        // holding the lease's file lock is killed.
-        let protection = transition.quiescesTransport ? BackgroundActivity("Finish encrypted synchronization") : nil
+        let protection = beginTransition(transition)
         let previous = lifecycleTask
         let requested = ContinuousClock.now
         if transition.quiescesTransport {
@@ -844,6 +844,9 @@ final class AppModel {
                 await self.quiesceTransport(background: true)
             } else {
                 guard self.transportWanted else { return }
+                // A stream kept through a cancelled grace announced away and inactive: it comes back available and
+                // active, with nothing to reconnect.
+                let kept = transition.resumesTransport ? await self.resumeKeptStream() : false
                 // Never on iOS, where presence follows the transport. A stream still binding records the change and
                 // announces it once online, so a change made mid-connect is not lost.
                 if let presence = transition.presence, let client = self.client {
@@ -858,7 +861,7 @@ final class AppModel {
                     self.reconnection.retryNow()
                     self.reconcile()
                 }
-                if transition.presence == nil, let active = transition.clientActive, let client = self.client {
+                if !kept, transition.presence == nil, let active = transition.clientActive, let client = self.client {
                     try? await client.setClientActive(active)
                 }
                 // Not awaited: a background transition queued behind this one disconnects first, then joins the load.
@@ -1045,7 +1048,9 @@ final class AppModel {
     func startEncryptionOver() async {
         guard let plan = keyRecovery, !startingEncryptionOver else { return }
         guard !plan.isSample else { keyRecovery = nil; return }
-        guard let store = recoveryStore else { return }
+        guard let store = recoveryStore, engine.gate.beginOperation() else { return }
+        // Counted, so a background transition joins it before it releases the recovery store's lease.
+        defer { engine.gate.endOperation() }
         startingEncryptionOver = true
         defer { startingEncryptionOver = false }
         let background = BackgroundActivity("Set up encryption again")
@@ -1279,17 +1284,6 @@ final class AppModel {
         return try result.get()
     }
 
-    // Kept or taken, never by force: false when another process holds it for ten seconds, or once transport is unwanted.
-    private func takeLease(_ store: MessageStore, whileWanted: Bool = false) async -> Bool {
-        var leased = await store.holdsTransportOwnership
-        for _ in 0..<40 where !leased && (!whileWanted || transportWanted) {
-            do { try await store.acquireTransportOwnership(); leased = true }
-            catch MessageStoreError.transportOwnedElsewhere { guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
-            catch { Self.lifecycleLog.error("lease not taken: \(String(describing: error), privacy: .public)"); break }
-        }
-        return leased
-    }
-
     // From here on away presence reports this as the last time the user was here.
     private func recordLastInteraction(at moment: Date) {
         // Nothing the previous build left is rewritten or added to before its snapshot exists.
@@ -1307,19 +1301,23 @@ final class AppModel {
         BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
     }
 
+    // In the background new work stays refused past the release, until the next foreground; otherwise it is let in
+    // again once the lease is back.
     private func quiesceTransport(signingOut: Bool = false, background: Bool = false) async {
-        if background { await engine.enterBackground() } else { await engine.stopTransportWork() }
+        let release: @MainActor () async -> Bool = { [weak self] in await self?.releaseHeldLeases() ?? true }
+        guard !background else { _ = await engine.enterBackground(release: release); return }
+        defer { reopenAfterQuiesce() }
+        _ = await engine.quiesce(deadline: nil, release: signingOut ? nil : release)
         // A restore holds the lease until it closes the store, and releases it itself if it is refused.
-        guard !restoringData else { return }
+        guard signingOut, !restoringData else { return }
         hasTransportOwnership = false
         guard let store else { return }
-        guard signingOut else { return await releaseLeaseInBackground(store) }
         // The rows go under the lease, so no extension run writes them meanwhile. Until the lease is released again a
         // background transition joins this and connect waits; in the background the rows stay owed.
         let background = BackgroundActivity("Sign out")
         quiescing = true
         acquiringOwnership = true
-        defer { quiescing = false; acquiringOwnership = false; background.end() }
+        defer { reopenAfterQuiesce(); acquiringOwnership = false; background.end() }
         if transportWanted, await takeLease(store, whileWanted: true) {
             await settleSignOut(store)
         } else {
@@ -1767,10 +1765,10 @@ final class AppModel {
     }
 
     // A pass reads the pending files once, so a call while one runs asks for another pass when it ends.
-    private func startUploads() { uploadPasses.request() }
+    func startUploads() { uploadPasses.request() }
 
     private func uploadPass() -> (@MainActor () async -> Void)? {
-        guard session.isReady, hasTransportOwnership, transportWanted, !quiescing,
+        guard session.isReady, hasTransportOwnership, transportWanted && !quiescing || engine.backgroundPhase == .grace,
               let client, let store, let uploader, let service = uploadService, let files else { return nil }
         let account = accountID, token = generation
         return { [weak self] in
@@ -2610,7 +2608,7 @@ final class AppModel {
         }
     }
 
-    private func startOutbox() { engine.startOutbox() }
+    func startOutbox() { engine.startOutbox() }
 
     var wantsTransport: Bool { transportWanted }
 
@@ -3529,7 +3527,7 @@ final class AppModel {
     @ObservationIgnored private lazy var reload = CoalescedReload { [weak self] scope in await self?.load(scope) }
 
     // Returns after a load that started after this call; concurrent calls share one follow-up load.
-    private func refresh(_ scope: CoalescedReload.Scope = .all) async { await reload.request(scope) }
+    func refresh(_ scope: CoalescedReload.Scope = .all) async { await reload.request(scope) }
 
     // Not awaited: the event loop handles one event at a time, so awaiting would serialise a burst into one load each.
     // Counted as an operation so a background transition still joins it before releasing the lease.
@@ -3692,7 +3690,8 @@ final class AppModel {
         guard accountID == account else { return }
         accountPreferences = try await store.accountPreferences(accountID: account)
         notificationPreviewsEnabled = accountPreferences.notificationPreviews
-        if transportWanted, hasTransportOwnership, !quiescing {
+        // In the grace the stream is still up, so what arrives is presented here as the extension would have.
+        if hasTransportOwnership, transportWanted && !quiescing || engine.backgroundPhase == .grace {
             try await presentForegroundNotifications(store: store, account: account)
         }
         guard accountID == account else { return }
@@ -4082,6 +4081,7 @@ extension AppModel: NotificationActionEnvironment {
         actionSession = nil
         session.releaseLifecycle?.finish()
         await refresh()
+        await withdrawUnsentNoticeIfSent()
     }
 
     // The server pushed nothing for what the action's online connection received, so those alert here under the lease,
@@ -4101,46 +4101,6 @@ extension AppModel: NotificationActionEnvironment {
         if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
     }
 
-    // Lets a push for this live session be presented once, by the app, not beside the extension's fallback. Mac only,
-    // and only for the real store: a UI test session's store is not the one the extension opens.
-    private func startLivenessResponder() {
-        guard AppLiveness.isOffered, livenessResponder == nil, let container = try? SharedStorage.groupContainer() else { return }
-        let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: container),
-                                              conditions: { [weak self] in self?.livenessConditions ?? Self.silent },
-                                              answered: { [weak self] in self?.keepLivenessPromise() })
-        if responder.start() { livenessResponder = responder }
-        else { Self.syncLog.error("liveness responder could not observe its ring") }
-    }
-
-    private static let silent = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: false, servesExtensionAccount: false,
-                                                   presentsCatchUp: false)
-
-    // The answer promises this process keeps the lease and presents: never while a sleep or sign-out quiesces, only for
-    // the account the extension serves, and only where a later catch-up still gets its banner.
-    private var livenessConditions: LivenessConditions {
-        LivenessConditions(wantsConnection: wantsConnection && testSessionID == nil, quiescing: quiescing,
-                           ownsLease: hasTransportOwnership,
-                           servesExtensionAccount: sessionAccount.map { saved in
-                               (try? NotificationAccount.load())?.accountID == saved.accountID
-                           } ?? false,
-                           presentsCatchUp: Self.attention.holdsCatchUpBanners)
-    }
-
-    // The server pushed because an acknowledgement was overdue, so the socket may be dead without an error: probe it (a
-    // dead stream ends and the reconciler resumes it, replaying what the server queued), or connect at once.
-    private func keepLivenessPromise() {
-        Self.syncLog.notice("liveness answered, connected=\(self.isConnected, privacy: .public)")
-        guard isConnected, let client else {
-            networkBecameReachable()
-            return
-        }
-        Task { [weak self] in
-            let alive = await client.probeLiveness(within: .seconds(5))
-            Self.syncLog.notice("liveness probe answered=\(alive, privacy: .public)")
-            if !alive { self?.networkBecameReachable() }
-        }
-    }
-
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
         let started = ContinuousClock.now
         defer { syncTimings.add(.notify, since: started) }
@@ -4148,6 +4108,8 @@ extension AppModel: NotificationActionEnvironment {
             try await presentCaughtUpNotifications(store: store, account: account)
             return
         }
+        // Mid-walk in the grace nothing is dismissed: a candidate left over is the extension's to present later.
+        if engine.backgroundPhase == .grace, catchUp != nil { return }
         let presents = mayPostNotifications && postsNotificationsInThisSession && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))

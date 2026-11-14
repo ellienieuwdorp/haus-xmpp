@@ -67,6 +67,7 @@
 		1B87AF3E5B9BDBDE3E1D59EA /* AppModel+ConversationSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D58701C743B4C1C79D20B9 /* AppModel+ConversationSource.swift */; };
 		1C44D9563C3E23FAE97C6124 /* MessageActionMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */; };
 		1C72888FC2E46A6675F5C432 /* ConnectionSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */; };
+		1CA1000EF46FA041BC470F18 /* AppModel+Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3742C7A3BAF503A8B30DD2A2 /* AppModel+Background.swift */; };
 		1CC9DA7058CE33F111E14448 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BD52830F320F4C99E25EBF /* SharedStorage.swift */; };
 		1CF0C69F0D1E02B2DE2270E9 /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24971C9AFE6065119E87D945 /* CoalescedReload.swift */; };
 		1D0263E6B7BE0943133AE0BC /* schema-25.sql in Resources */ = {isa = PBXBuildFile; fileRef = 5015CB16252FAF14A52FA6C2 /* schema-25.sql */; };
@@ -292,6 +293,7 @@
 		878917C8F08EF2043BCABC4D /* LastSeenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2C755607B4E88953748B70 /* LastSeenTests.swift */; };
 		87B1BAFEEB64B9C199387EC6 /* ChatListOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */; };
 		87B8137714BBCDB1B4D64C54 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FBDA1E5ABBDCC8D2F31245 /* AboutView.swift */; };
+		87BE1452ADE169ED3DB53712 /* AppModel+Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3742C7A3BAF503A8B30DD2A2 /* AppModel+Background.swift */; };
 		88A63F1DD7FF3DEA14252B7E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */; };
 		88A6C8A74B8BBC9BC3C6CDFC /* GroupMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF221C2ABB51FAA3FC260E0 /* GroupMailbox.swift */; };
 		88A937AEFB9A9E660400EB7E /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
@@ -684,6 +686,7 @@
 		326445DDD8708439602DE414 /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		344DD29BDD09CBA5CC731137 /* schema-23.sql */ = {isa = PBXFileReference; path = "schema-23.sql"; sourceTree = "<group>"; };
 		36AF6AA9413439022B1456D1 /* AccountIdentityMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountIdentityMigration.swift; sourceTree = "<group>"; };
+		3742C7A3BAF503A8B30DD2A2 /* AppModel+Background.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Background.swift"; sourceTree = "<group>"; };
 		377EE020496066307F80188A /* MacExtensionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExtensionProbe.swift; sourceTree = "<group>"; };
 		39FC65A732AA1ECEF720F45E /* ContactDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactDirectory.swift; sourceTree = "<group>"; };
 		3A57361BE86ADE47F630B733 /* MacTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTimeline.swift; sourceTree = "<group>"; };
@@ -1332,6 +1335,7 @@
 				ECB57CE3D62350BCA14A7C97 /* App.entitlements */,
 				926773F781198BFF2F0E2AEC /* AppearanceView.swift */,
 				0F0E44F860DD39928F7313B2 /* AppModel.swift */,
+				3742C7A3BAF503A8B30DD2A2 /* AppModel+Background.swift */,
 				6A1BC7BC0C97AA3012CE6BC9 /* AppModel+LinkPreviews.swift */,
 				B4689E0E3D14BB55262444FA /* Assets.xcassets */,
 				F7CA84D23B5006C989C0C253 /* AttachmentDownloads.swift */,
@@ -1858,6 +1862,7 @@
 				9A8585C2CE3FCFD9DE144EDC /* AccountResources.swift in Sources */,
 				3E6CEC18EBB4E37377DFEDD4 /* AccountTransfer.swift in Sources */,
 				978A1720D0A722FE4826517C /* AppLiveness.swift in Sources */,
+				1CA1000EF46FA041BC470F18 /* AppModel+Background.swift in Sources */,
 				5381F5C4EBA6FA6DD782CE32 /* AppModel+ConversationSource.swift in Sources */,
 				2050809E474A09A05A265982 /* AppModel+LinkPreviews.swift in Sources */,
 				D6D0271149AEE9113476FAAA /* AppModel.swift in Sources */,
@@ -2222,6 +2227,7 @@
 				D0995F1F0D71373A9813753C /* AccountResources.swift in Sources */,
 				CC62A29D90943B7ABD6BA877 /* AccountTransfer.swift in Sources */,
 				A857EDFA9218840DBC55C043 /* AppLiveness.swift in Sources */,
+				87BE1452ADE169ED3DB53712 /* AppModel+Background.swift in Sources */,
 				1B87AF3E5B9BDBDE3E1D59EA /* AppModel+ConversationSource.swift in Sources */,
 				240E887F4B1845D864D7E75E /* AppModel+LinkPreviews.swift in Sources */,
 				439AA2B03241D3866DF90D86 /* AppModel.swift in Sources */,
