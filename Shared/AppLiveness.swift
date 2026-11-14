@@ -18,33 +18,16 @@ enum AppLiveness {
     }
 
     struct Files: Sendable {
-        let directory: URL
-        static let maximumBytes = 4 * 1024
+        private let mailbox: GroupMailbox
+        var directory: URL { mailbox.directory }
+        static let maximumBytes = GroupMailbox.maximumBytes
 
-        init(groupRoot: URL) { directory = groupRoot.appending(path: "Liveness", directoryHint: .isDirectory) }
+        init(groupRoot: URL) { mailbox = GroupMailbox(directory: groupRoot.appending(path: "Liveness", directoryHint: .isDirectory)) }
 
-        func saveRequest(_ request: LivenessRequest) throws { try save(request, as: "request.json") }
-        func request() -> LivenessRequest? { read("request.json") }
-        func saveAnswer(_ answer: LivenessAnswer) throws { try save(answer, as: "answer.json") }
-        func answer() -> LivenessAnswer? { read("answer.json") }
-
-        private func save(_ value: some Encodable, as name: String) throws {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(value)
-            #if os(iOS)
-            // The extension runs while the iPhone is locked; it never runs before the first unlock anyway.
-            try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            #else
-            try data.write(to: directory.appending(path: name), options: [.atomic])
-            #endif
-        }
-
-        private func read<Value: Decodable>(_ name: String) -> Value? {
-            let url = directory.appending(path: name)
-            guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int,
-                  size <= Self.maximumBytes, let data = try? Data(contentsOf: url) else { return nil }
-            return try? JSONDecoder().decode(Value.self, from: data)
-        }
+        func saveRequest(_ request: LivenessRequest) throws { try mailbox.save(request, as: "request.json") }
+        func request() -> LivenessRequest? { mailbox.read("request.json") }
+        func saveAnswer(_ answer: LivenessAnswer) throws { try mailbox.save(answer, as: "answer.json") }
+        func answer() -> LivenessAnswer? { mailbox.read("answer.json") }
     }
 
     struct ExtensionChannel: LivenessChannel {

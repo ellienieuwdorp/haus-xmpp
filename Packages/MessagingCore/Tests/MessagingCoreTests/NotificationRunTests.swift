@@ -182,6 +182,7 @@ struct NotificationLeaseAndLogTests {
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.deadlineExceeded) == .deadline)
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.connectionEnded) == .network)
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.identityUnavailable) == .identityUnavailable)
+        #expect(NotificationFallbackReason(BackgroundSynchronizationError.takeoverUnconfirmed) == .takeoverUnconfirmed)
         #expect(NotificationFallbackReason(NotificationRunError.noAccount) == .noAccount)
         #expect(NotificationFallbackReason(NotificationRunError.protectedDataUnavailable) == .protectedData)
         #expect(NotificationFallbackReason(CancellationError()) == .cancelled)

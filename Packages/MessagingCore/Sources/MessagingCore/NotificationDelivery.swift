@@ -7,6 +7,8 @@ public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
     case leaseBusy, network, deadline, expired, protectedData, noAccount, identityUnavailable, postFailed, cancelled, failed
     /// The store needs an upgrade or restore that only the app performs.
     case upgradePending
+    /// The run gave way to the app, which did not confirm it took the lease.
+    case takeoverUnconfirmed
 
     public init(_ error: any Error) {
         switch error {
@@ -15,6 +17,7 @@ public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
         case BackgroundSynchronizationError.deadlineExceeded: self = .deadline
         case BackgroundSynchronizationError.identityUnavailable: self = .identityUnavailable
         case BackgroundSynchronizationError.connectionEnded: self = .network
+        case BackgroundSynchronizationError.takeoverUnconfirmed: self = .takeoverUnconfirmed
         case let failure as NotificationRunError:
             switch failure {
             case .noAccount: self = .noAccount
@@ -51,7 +54,8 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
 
 public enum NotificationRunOutcome: Sendable, Equatable {
     case settled(NotificationRunReport)
-    /// The app answered the liveness handshake and presents the push itself; the run posted and claimed nothing.
+    /// The app answered the liveness handshake, or took over the lease the run gave way to, and presents the push
+    /// itself. What the run stored but did not post stays for the app's claim.
     case handedOff
     case fallback(NotificationFallbackReason)
 
