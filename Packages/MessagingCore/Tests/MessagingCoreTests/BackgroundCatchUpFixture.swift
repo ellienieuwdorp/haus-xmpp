@@ -55,8 +55,10 @@ struct CatchUpFixture {
                         complete: true, firstID: ids.first, lastID: ids.last, handledTokens: [])
     }
 
-    // `progress` replaces the fixture's own (a coordinator's run).
-    func run(budget: Duration, roomsAfterPost: Duration = .seconds(5), progress: NotificationRunProgress? = nil) async throws {
+    // `progress` replaces the fixture's own (a coordinator's run). With `giveWay` the trace also notes the transport
+    // stopping, and `onPull` runs at each read-state pull, the first right after the own archive committed.
+    func run(budget: Duration, roomsAfterPost: Duration = .seconds(5), progress: NotificationRunProgress? = nil,
+             giveWay: GiveWaySwitch? = nil, onPull: @escaping @Sendable () async -> Void = {}) async throws {
         let (store, account, room, trace, trouble) = (store, account, room, trace, trouble)
         let (ownMessages, roomMessage, progress, posting, clock) = (ownMessages, roomMessage, progress ?? self.progress, posting, clock)
         let operationsFor: @Sendable (@escaping @Sendable (ArchiveSyncProgress) async -> Void,
@@ -95,14 +97,18 @@ struct CatchUpFixture {
             walk: { walkProgress, walked in
                 try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operationsFor(walkProgress, walked))
             },
-            pull: { _ in await trace.record("pull") },
+            pull: { _ in
+                await trace.record("pull")
+                await onPull()
+            },
             consume: {
                 await untilCancelled()
                 throw CancellationError()
             },
-            stop: {}
+            stop: { if giveWay != nil { await trace.record("stop") } }
         )
         catchUp.roomsAfterPost = roomsAfterPost
+        if let giveWay { catchUp.giveWay = giveWay }
         try await catchUp.run(store: store, deadline: clock.now + budget, clock: clock, progress: progress, presentation: { store, stage in
             try await NotificationPresenter(posting: posting, clock: clock).present(store: store, accountID: account, progress: progress, stage: stage)
         })
