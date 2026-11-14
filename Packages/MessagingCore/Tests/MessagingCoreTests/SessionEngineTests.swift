@@ -51,8 +51,11 @@ import Testing
         for _ in 0..<20 { await Task.yield() }
         #expect(engine.quiescing, "still joining the operation")
         engine.activeOperations = 0
-        await stopped.value
-        #expect(!engine.quiescing)
+        _ = await stopped.value
+        #expect(engine.quiescing, "refused until the foreground")
+        #expect(engine.backgroundPhase == .background)
         #expect(recorder.resets == 1)
+        #expect(!engine.resumeForeground(), "no stream was kept")
+        #expect(!engine.quiescing)
     }
 }

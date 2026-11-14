@@ -74,6 +74,9 @@ extension SessionEngine {
             await connectionChanged(state, token: token)
         case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync, .messageError:
             await processInbound(event, token: token)
+        case .streamAcknowledged:
+            graceWakeup.signal()
+            await delegate?.received(event, token: token)
         default:
             await delegate?.received(event, token: token)
         }
@@ -82,6 +85,8 @@ extension SessionEngine {
     private func connectionChanged(_ state: XMPPConnectionState, token: UUID) async {
         connectPhases.mark(state)
         isReady = false
+        if case .online = state { streamOnline = true } else { streamOnline = false }
+        graceWakeup.signal()
         switch state {
         case .connecting, .authenticating, .binding:
             delegate?.connectionChanged(state)

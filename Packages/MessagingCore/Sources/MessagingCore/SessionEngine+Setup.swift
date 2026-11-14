@@ -150,7 +150,7 @@ extension SessionEngine {
         defer { if setupIsCurrent(token) { delegate?.rejoinPassEnded(token: token, joined: joined) } }
         let rooms = try await connection.encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
-            guard setupIsCurrent(token), wantsTransport, !quiescing else { throw CancellationError() }
+            guard setupIsCurrent(token), transportWorkAllowed else { throw CancellationError() }
             delegate?.roomRejoining(room, members: members)
             let nickname = delegate?.nickname(in: room, account: account) ?? String(account.prefix { $0 != "@" })
             // Mention detection is best effort.

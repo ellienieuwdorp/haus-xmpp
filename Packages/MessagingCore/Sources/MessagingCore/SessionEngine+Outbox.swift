@@ -9,10 +9,12 @@ extension SessionEngine {
     public var outboxIdle: Bool { drainTask == nil && !outboxRequested }
 
     /// Starts an outbox pass, or asks for one after the pass in flight. Runs only on a ready session that holds the
-    /// lease and wants its transport; a request made meanwhile is kept for the next ready connection.
+    /// lease and wants its transport, or in a background grace; a request made meanwhile is kept for the next ready
+    /// connection.
     public func startOutbox() {
         outboxRequested = true
-        guard hasTransportOwnership, wantsTransport, !quiescing, drainTask == nil, isReady, delegate?.mayDrainOutbox ?? true,
+        graceWakeup.signal()
+        guard hasTransportOwnership, transportWorkAllowed, drainTask == nil, isReady, delegate?.mayDrainOutbox ?? true,
               let client, let outboxSender, let encryption, let store else { return }
         outboxRequested = false
         let joinedGroups = delegate?.joinedRooms ?? []
@@ -37,8 +39,10 @@ extension SessionEngine {
 
     private func outboxPassEnded(_ result: Result<Set<String>, any Error>, token: UUID) async {
         await delegate?.outboxPassEnded(result, token: token)
+        if generation == token, case .success(let held) = result { heldChats = held }
         drainTask = nil
         drainPasses += 1
+        graceWakeup.signal()
         // A different account or session may have become ready while this attempt settled.
         if outboxRequested || generation != token { startOutbox() }
         if generation == token { delegate?.outboxIdle(token: token) }

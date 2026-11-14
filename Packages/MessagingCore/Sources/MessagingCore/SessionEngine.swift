@@ -46,13 +46,30 @@ import XMPPProtocol
     public var backfillTask: Task<Void, Never>?
     var inbound: InboundProcessor?
 
+    /// Refuses new transport, crypto and setup work while closed, and counts outside work a quiesce waits for.
+    public let gate = TransportGate()
     /// With the delegate's `wantsTransport`, guards all transport, crypto and setup work, so a background transition
-    /// blocks new work at once.
-    public var quiescing = false
+    /// blocks new work at once. A background transition keeps it on until the next foreground, past the release.
+    public var quiescing: Bool { get { gate.closed } set { gate.closed = newValue } }
     /// Crypto and store work outside the engine's own tasks; a quiesce waits for it to reach zero.
-    public var activeOperations = 0
-    public var acquiringOwnership = false
+    public var activeOperations: Int { get { gate.operations } set { gate.operations = newValue } }
+    public var acquiringOwnership: Bool { get { gate.acquiring } set { gate.acquiring = newValue } }
     public var hasTransportOwnership = false
+    /// Where the engine is between the foreground and a released lease; see `SessionEngine+Background`.
+    public internal(set) var backgroundPhase = BackgroundPhase.foreground
+    public var limits = BackgroundLimits()
+    public var clock = EngineClock.continuous
+    /// The background time the platform still grants; nil when it sets no limit (the Mac, a test that wants none).
+    public var backgroundTimeRemaining: @MainActor () -> Duration? = { nil }
+    var graceWakeup = Wakeup()
+    var activeDeadline: QuiesceDeadline?
+    var graceDeadline: QuiesceDeadline?
+    var graceEndsAt: Duration?
+    var backgroundExpired = false
+    /// The last state the stream reported was `.online`.
+    public internal(set) var streamOnline = false
+    // Chats the last outbox pass held for a trust decision or a group problem: their queued messages wait for the user.
+    var heldChats: Set<String> = []
     public internal(set) var outboxRequested = false
     /// Counts finished outbox passes, so a waiter can tell that a pass ran after its message was queued.
     public internal(set) var drainPasses = 0
@@ -95,6 +112,8 @@ import XMPPProtocol
         archiveWalkFinished = false
         walking = false
         isReady = false
+        streamOnline = false
+        heldChats = []
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -127,9 +146,14 @@ import XMPPProtocol
 
     /// Kept or taken, never by force: two minutes of a lease held elsewhere, or a change of generation or transport
     /// wish, ends the attempt.
+    /// The delegate hears of every busy attempt and of how the wait ended, for the extension give-way.
     public func acquireOwnership(_ store: MessageStore, token: UUID) async throws {
         acquiringOwnership = true
-        defer { acquiringOwnership = false }
+        var waited = false, acquired = false
+        defer {
+            acquiringOwnership = false
+            if waited { delegate?.leaseWaitEnded(acquired: acquired) }
+        }
         for attempt in 0..<120 {
             guard wantsTransport, !quiescing, generation == token else { throw CancellationError() }
             do {
@@ -138,10 +162,14 @@ import XMPPProtocol
                     await releaseLease(store)
                     throw error
                 }
+                // Still held by the store: the quiesce that refused it here releases it.
                 guard wantsTransport, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
+                acquired = true
                 return
             } catch MessageStoreError.transportOwnedElsewhere {
+                waited = true
+                delegate?.leaseBusy()
                 guard attempt < 119 else { throw MessageStoreError.transportOwnedElsewhere }
                 try await Task.sleep(for: .milliseconds(250))
             }
@@ -181,42 +209,43 @@ import XMPPProtocol
     }
 
     /// Without giving up the lease: blocks new transport, crypto and setup work, disconnects, and joins every reader,
-    /// consumer, sender and outside crypto operation.
+    /// consumer, sender and outside crypto operation. New work stays refused afterwards; `resumeForeground` lets it in.
     public func stopTransportWork() async {
+        _ = await quiesce(deadline: nil, release: nil)
+    }
+
+    /// The bounded quiesce: refuses new work at once, resets the connection, then runs `TransportQuiesce` against
+    /// `deadline` (a point on `clock`) and releases the lease with `release` when every join ended. Work still stuck
+    /// after the hard close is logged by name, and the release then waits for it however long it takes: the lock stays
+    /// held, and the background task with it, so the platform ends the process rather than suspend it holding the lock.
+    public func quiesce(deadline: Duration?, release: (@MainActor () async -> Bool)?) async -> TransportQuiesce.Outcome {
         quiescing = true
-        defer { quiescing = false }
-        let clock = ContinuousClock(), start = clock.now
+        let start = clock.now()
         let events = eventTask, setup = setupTask, backfill = backfillTask, drain = drainTask
         let previous = resetConnection()
-        await previous?.disconnectAndWait()
-        let disconnected = clock.now
-        defer {
-            let disconnect = Int((disconnected - start) / .milliseconds(1)), joins = Int((clock.now - disconnected) / .milliseconds(1))
-            Self.lifecycleLog.notice("transport stopped: disconnect \(disconnect, privacy: .public) ms, joins \(joins, privacy: .public) ms")
-        }
-        await events?.value
-        // Setup's archive walk, initialize, rejoin and pending retry are all structured children of it.
-        await setup?.value
-        await backfill?.value
+        // The farewell is bounded by the client's own write limits; the reader it joins is the transport's last user.
+        let disconnect = previous.map { client in Task { await client.disconnectAndWait() } }
+        let work = [TransportQuiesce.Work("disconnect", disconnect), TransportQuiesce.Work("event consumer", events),
+                    TransportQuiesce.Work("setup", setup), TransportQuiesce.Work("backfill", backfill), TransportQuiesce.Work("outbox", drain)]
+        let limit = QuiesceDeadline(at: deadline, clock: clock)
+        activeDeadline = limit
+        defer { if activeDeadline === limit { activeDeadline = nil } }
+        let core = TransportQuiesce(gate: gate, work: work, abort: { [weak self] in
+                                        previous?.abort()
+                                        self?.delegate?.quiesceDeadlinePassed()
+                                    }, release: release, clock: clock, deadline: limit, abortJoin: limits.abortJoin)
+        var outcome = await core.run()
         if backfillTask == backfill { backfillTask = nil }
-        await drain?.value
-        // Includes already-started outside trust, repair and discovery work, and an acquisition that was suspended in
-        // the store actor when the scene changed.
-        while activeOperations > 0 || acquiringOwnership {
-            // A cancelled pause polls again: a quiesce never leaves before this work is joined.
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
-    /// A background transition was asked for: from here no new transport, crypto or setup work starts. The delegate's
-    /// `wantsTransport` already reads false.
-    public func backgroundRequested() {
-        quiescing = true
-    }
-
-    /// The transport goes to the background: every transport task stops at once and is joined. The lease stays held;
-    /// the owner releases it after this returns.
-    public func enterBackground() async {
-        await stopTransportWork()
+        let elapsed = Int((clock.now() - start) / .milliseconds(1))
+        Self.lifecycleLog.notice("transport stopped after \(elapsed, privacy: .public) ms, hard close \(outcome.hardClosed, privacy: .public)")
+        guard !outcome.stuck.isEmpty else { return outcome }
+        let stuck = outcome.stuck.joined(separator: "; ")
+        Self.lifecycleLog.fault("quiesce deadline passed with work still running, the lease stays held: \(stuck, privacy: .public)")
+        delegate?.quiesceStuck(outcome.stuck)
+        guard let release else { return outcome }
+        for item in work { await item.task?.value }
+        await gate.untilIdle()
+        outcome.released = await release()
+        return outcome
     }
 }

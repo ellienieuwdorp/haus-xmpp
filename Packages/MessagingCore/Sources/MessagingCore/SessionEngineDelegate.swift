@@ -23,6 +23,22 @@ import XMPPProtocol
     /// After the lease is held and before the stream opens.
     func ownershipReady(store: MessageStore, account: String) async
     func leaseReleased(_ released: Bool)
+    /// A foreground acquisition found the lease busy, once per attempt.
+    func leaseBusy()
+    /// A wait that met a busy lease ended, holding the lease or not.
+    func leaseWaitEnded(acquired: Bool)
+    /// A quiesce passed its deadline and hard-closed the transport: cancel outside work that can be cancelled.
+    func quiesceDeadlinePassed()
+    /// Still running after the hard close, by name; the lease stays held until they end.
+    func quiesceStuck(_ work: [String])
+    /// Work of the delegate's own that keeps a background grace open, such as an upload in flight.
+    var holdsGrace: Bool { get }
+    /// A background grace began holding the stream for the outbox.
+    func graceStarted()
+    /// The grace is over and the quiesce follows; the lease and the stream (unless lost) are still held.
+    func graceEnding(_ end: GraceEnd) async
+    /// Show, or withdraw, the content-free notice that a message is still unsent.
+    func unsentNotice(_ visible: Bool)
     /// Every transport state, after the engine's own bookkeeping for it.
     func connectionChanged(_ state: XMPPConnectionState)
     /// The stream is online, before setup starts.
@@ -73,6 +89,14 @@ extension SessionEngineDelegate {
     public func ownershipAcquired(store: MessageStore) {}
     public func ownershipReady(store: MessageStore, account: String) {}
     public func leaseReleased(_ released: Bool) {}
+    public func leaseBusy() {}
+    public func leaseWaitEnded(acquired: Bool) {}
+    public func quiesceDeadlinePassed() {}
+    public func quiesceStuck(_ work: [String]) {}
+    public var holdsGrace: Bool { false }
+    public func graceStarted() {}
+    public func graceEnding(_ end: GraceEnd) {}
+    public func unsentNotice(_ visible: Bool) {}
     public func connectionChanged(_ state: XMPPConnectionState) {}
     public func streamOnline(client: XMPPClient?, resumed: Bool) {}
     public func received(_ event: XMPPEvent, token: UUID) {}

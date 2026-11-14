@@ -78,8 +78,9 @@ import XMPPProtocol
         }
     }
 
-    // On the sender's own store: enqueue to acknowledged on a ready session, then three messages enqueued
-    // right before the transport goes to the background.
+    // On the sender's own store: enqueue to acknowledged on a ready session, then the background grace through the
+    // engine's entry points: a return during it, messages enqueued before and during it, and an idle session leaving.
+    // Each quiesce ends the stream, so the next scenario resumes it.
     @Test func sendThenBackground() async throws {
         try await run(nil, account: \.sender, rooms: 0) { session, environment in
             let peer = environment.fixture.peer.jid
@@ -90,20 +91,18 @@ import XMPPProtocol
             for count in [1, 5] {
                 try await sendLatency(count, to: peer, session: session).write(to: environment.results)
             }
-            let background = try await backgroundSend(to: peer, session: session)
-            try background.write(to: environment.results)
+            try await returnDuringGrace(to: peer, session: session).write(to: environment.results)
+            try await backgroundSend(to: peer, session: session).write(to: environment.results)
+            try await connectAndSettle(session, "the resume after the background send")
+            try await backgroundSend(to: peer, session: session, enqueuedDuringGrace: true).write(to: environment.results)
+            try await connectAndSettle(session, "the resume after the grace enqueue")
+            try await idleBackground(session).write(to: environment.results)
         }
     }
 
     private func sendLatency(_ count: Int, to peer: String, session: SyncBenchSession) async throws -> SyncBenchResult {
         let before = session.result("before")
-        var ids: [String] = []
-        for index in 0..<count {
-            let message = try await OutgoingEnqueue.text("syncbench \(index + 1) of \(count)", account: session.account.jid, chatID: peer,
-                                                         store: session.bench.store)
-            ids.append(message.id)
-            session.engine.startOutbox()
-        }
+        let ids = try await enqueue(count, "syncbench", to: peer, session: session)
         try await session.wait("\(count) acknowledged") { await session.outcome(of: ids).accepted == count }
         var result = session.result("send-\(count)")
         result.subtract(before)
@@ -111,24 +110,78 @@ import XMPPProtocol
         return result
     }
 
-    private func backgroundSend(to peer: String, session: SyncBenchSession) async throws -> SyncBenchResult {
-        let before = session.result("before")
+    private func enqueue(_ count: Int, _ label: String, to peer: String, session: SyncBenchSession) async throws -> [String] {
         var ids: [String] = []
-        for index in 0..<3 {
-            let message = try await OutgoingEnqueue.text("syncbench leaving \(index + 1)", account: session.account.jid, chatID: peer,
+        for index in 0..<count {
+            let message = try await OutgoingEnqueue.text("\(label) \(index + 1) of \(count)", account: session.account.jid, chatID: peer,
                                                          store: session.bench.store)
             ids.append(message.id)
             session.engine.startOutbox()
         }
+        return ids
+    }
+
+    // The app's background request: the transport is unwanted at once, and the grace holds the stream for the outbox.
+    private func leave(_ session: SyncBenchSession) -> Task<BackgroundOutcome, Never> {
         session.wantsTransport = false
-        session.engine.backgroundRequested()
-        await session.engine.enterBackground()
-        let outcome = await session.outcome(of: ids)
-        var result = session.result("background-send")
+        session.engine.backgroundRequested(grace: true)
+        return Task { await session.engine.enterBackground() }
+    }
+
+    // Passes only if the server acknowledged every message before the transport quiesced; `graceMs` is
+    // the time from the background request to all acknowledged.
+    private func backgroundSend(to peer: String, session: SyncBenchSession, enqueuedDuringGrace: Bool = false) async throws -> SyncBenchResult {
+        let before = session.result("before")
+        var ids = try await enqueue(3, "syncbench leaving", to: peer, session: session)
+        let leaving = leave(session)
+        if enqueuedDuringGrace {
+            try await session.wait("the grace to start") { session.reached("graceStarted") }
+            ids += try await enqueue(1, "syncbench during the grace", to: peer, session: session)
+        }
+        let outcome = await leaving.value
+        let sent = await session.outcome(of: ids)
+        var result = session.result(enqueuedDuringGrace ? "background-enqueue" : "background-send")
         result.subtract(before)
-        result.values["sent"] = outcome.accepted
-        result.values["written"] = outcome.written
-        result.passed = outcome.accepted == ids.count
+        result.values["sent"] = sent.accepted
+        result.values["written"] = sent.written
+        result.values["graceMs"] = Int(outcome.graceDuration / .milliseconds(1))
+        result.values["graceIdle"] = outcome.grace == .idle ? 1 : 0
+        result.values["released"] = outcome.quiesce?.released == true ? 1 : 0
+        result.passed = sent.accepted == ids.count && outcome.grace == .idle && outcome.quiesce?.released == true
+        return result
+    }
+
+    // Back during the grace. The stream stays, so ready takes no round trip, and the messages still go out.
+    private func returnDuringGrace(to peer: String, session: SyncBenchSession) async throws -> SyncBenchResult {
+        let before = session.result("before")
+        let ids = try await enqueue(3, "syncbench back", to: peer, session: session)
+        let leaving = leave(session)
+        try await session.wait("the grace to start") { session.reached("graceStarted") }
+        let atReturn = session.counts
+        session.wantsTransport = true
+        session.engine.foregroundRequested()
+        let outcome = await leaving.value
+        let kept = session.engine.resumeForeground()
+        let toReady = (session.counts - atReturn).roundTrips
+        try await session.wait("3 acknowledged after the return") { await session.outcome(of: ids).accepted == ids.count }
+        var result = session.result("background-return")
+        result.subtract(before)
+        result.roundTrips["ready"] = session.engine.isReady ? toReady : -1
+        result.values["kept"] = kept ? 1 : 0
+        result.values["sent"] = ids.count
+        result.passed = kept && session.engine.isReady && outcome.grace == .foreground && outcome.quiesce == nil && toReady == 0
+        return result
+    }
+
+    // Nothing pending, so no grace is held and the quiesce starts at once.
+    private func idleBackground(_ session: SyncBenchSession) async -> SyncBenchResult {
+        let before = session.result("before")
+        let outcome = await leave(session).value
+        var result = session.result("background-idle")
+        result.subtract(before)
+        result.values["graceMs"] = Int(outcome.graceDuration / .milliseconds(1))
+        result.values["graceHeld"] = session.reached("graceStarted") ? 1 : 0
+        result.passed = outcome.grace == .idle && !session.reached("graceStarted") && outcome.quiesce?.released == true
         return result
     }
 }

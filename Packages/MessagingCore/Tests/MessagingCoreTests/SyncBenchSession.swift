@@ -36,6 +36,8 @@ import XMPPProtocol
         engine.encryption = bench.encryption
         engine.outboxSender = OutboxSender(store: bench.store)
         engine.delegate = self
+        // What iOS grants a backgrounded app, so the grace and the quiesce deadline are the app's.
+        engine.backgroundTimeRemaining = { .seconds(30) }
     }
 
     var joinedRooms: Set<String> { joined }
@@ -43,6 +45,8 @@ import XMPPProtocol
 
     // The app's connect sequence without its interface steps: hand over, attach, join, consume, open.
     func connect() async throws {
+        wantsTransport = true
+        engine.resumeForeground()
         marks = [:]
         joined = []
         failure = nil
@@ -63,9 +67,13 @@ import XMPPProtocol
     func stop() async {
         await engine.stopTransportWork()
         await engine.releaseLease(bench.store)
+        // A quiesce outside a background transition: its owner lets new work in again once the lease is back.
+        engine.quiescing = false
     }
 
     func finish() { defaults.removePersistentDomain(forName: suite) }
+
+    var counts: SyncBenchProxy.Counts { proxy.counts }
 
     func reached(_ point: String) -> Bool { marks[point] != nil }
 
@@ -121,6 +129,7 @@ import XMPPProtocol
     func streamOnline(client: XMPPClient?, resumed: Bool) { self.resumed = resumed }
     func setupReady() { mark("ready") }
     func setupSettled() { mark("settled") }
+    func graceStarted() { mark("graceStarted") }
     func setupFailed(step: String, detail: String) { failure = "\(step): \(detail)"; signal?.yield() }
     func catchUpChanged(_ progress: CatchUpProgress?) { if progress == nil { mark("caughtUp") } }
     func outboxPassEnded(_ result: Result<Set<String>, any Error>, token: UUID) { signal?.yield() }
