@@ -5316,10 +5316,6 @@
  "Packages/OMEMO/Sources/OMEMO/OMEMOService.swift": {
   "cyclomatic_complexity": [
    [
-    "private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {",
-    14
-   ],
-   [
     "private func receiveLocked(account: String, message: XMPPEncryptedMessage, sentAt: Date?, transport: any OMEMOTransport) async throws -> Bool {",
     37
    ],
@@ -5331,14 +5327,10 @@
   "file_length": [
    [
     "",
-    1162
+    1129
    ]
   ],
   "function_body_length": [
-   [
-    "private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {",
-    76
-   ],
    [
     "private func receiveLocked(account: String, message: XMPPEncryptedMessage, sentAt: Date?, transport: any OMEMOTransport) async throws -> Bool {",
     144
@@ -5424,19 +5416,7 @@
     0
    ],
    [
-    "linkMetadata.map { !EncryptedContent.linkMetadataRides($0, body: body, modern: modern, fileSharing: file != nil) } ?? false",
-    0
-   ],
-   [
     "localFingerprint: try OMEMOEngine.fingerprintBytes(for: local.identityKey, profile: profile.crypto).map { String(format: \"%02x\", $0) }.joined(),",
-    0
-   ],
-   [
-    "plaintext: { _ in try EncryptedContent.encodeReceipt(targetWireID: target, kind: kind, sender: account, recipient: update.chatID, originID: update.id) })",
-    0
-   ],
-   [
-    "plaintext: { _ in try EncryptedContent.encodeRetraction(targetWireID: target, sender: account, recipient: update.chatID, originID: update.id, modern: true) })",
     0
    ],
    [
@@ -5455,7 +5435,7 @@
   "type_body_length": [
    [
     "public actor OMEMOService {",
-    1117
+    1084
    ]
   ]
  },
