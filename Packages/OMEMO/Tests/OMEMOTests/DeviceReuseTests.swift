@@ -7,6 +7,7 @@ import MessageStore
 private actor Stream {
     var epoch: XMPPDeviceEpoch? = XMPPDeviceEpoch(session: UUID(), changes: 0, notified: [])
     var lookups = 0
+    var roomReads = 0
     // Applied to the epoch once, while the next lookup is in flight.
     var duringLookup: (@Sendable (XMPPDeviceEpoch?) -> XMPPDeviceEpoch?)?
 
@@ -18,6 +19,7 @@ private actor Stream {
         epoch = epoch.map { XMPPDeviceEpoch(session: $0.session, changes: $0.changes + 1, notified: notified) }
     }
     func onNextLookup(_ change: @escaping @Sendable (XMPPDeviceEpoch?) -> XMPPDeviceEpoch?) { duringLookup = change }
+    func readRoom() { roomReads += 1 }
     func lookedUp() {
         lookups += 1
         if let change = duringLookup { epoch = change(epoch); duringLookup = nil }
@@ -28,8 +30,9 @@ private struct StreamTransport: OMEMOGroupTransport {
     let base: TestTransport
     let stream: Stream
     var members: [String] = []
-    func refreshGroupRoom(_ room: String) throws -> XMPPGroupRoomSnapshot {
-        try XMPPGroupRoomSnapshot(room: room, members: members, revision: 1, joined: true)
+    func refreshGroupRoom(_ room: String) async throws -> XMPPGroupRoomSnapshot {
+        await stream.readRoom()
+        return try XMPPGroupRoomSnapshot(room: room, members: members, revision: 1, joined: true)
     }
     func omemoDeviceEpoch() async -> XMPPDeviceEpoch? { await stream.epoch }
     func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] {
@@ -141,23 +144,38 @@ private struct StreamTransport: OMEMOGroupTransport {
         try await expectLookups(5, f, stream, transport, "second")
     }
 
-    // A room reuses its members' devices, never its membership: both room reads still happen on every send.
+    // A room reuses its members' devices, never its membership: the room is read on every send, and read again only to
+    // bracket a device lookup.
     func testARoomReusesItsMembersDevicesButReadsTheRoomEachTime() async throws {
         let (f, stream, base) = try await fixture(); addTeardownBlock { try await f.cleanup() }
         var transport = base
         transport.members = [f.alice, f.bob]
         let room = "private@conference.localhost"
         _ = try await f.a.refreshGroupDevices(account: f.alice, room: room, transport: transport)
+        var reads = await stream.roomReads
+        XCTAssertEqual(reads, 2)
         let before = await stream.lookups
         let overview = try await f.a.refreshGroupDevices(account: f.alice, room: room, transport: transport)
-        let after = await stream.lookups
-        XCTAssertEqual(after, before)
+        var lookups = await stream.lookups
+        XCTAssertEqual(lookups, before)
+        reads = await stream.roomReads
+        XCTAssertEqual(reads, 3)
         XCTAssertEqual(overview.room.members, [f.alice, f.bob])
         // A new member has never been read on this stream.
         transport.members = [f.alice, f.bob, "carol@localhost"]
         _ = try await f.a.refreshGroupDevices(account: f.alice, room: room, transport: transport)
         let withCarol = await stream.lookups
-        XCTAssertGreaterThan(withCarol, after)
+        XCTAssertGreaterThan(withCarol, lookups)
+        reads = await stream.roomReads
+        XCTAssertEqual(reads, 5)
+        // Past the window the members' devices are read again, between two reads of the room.
+        clock.advance(DeviceFreshness.window)
+        lookups = await stream.lookups
+        _ = try await f.a.refreshGroupDevices(account: f.alice, room: room, transport: transport)
+        let again = await stream.lookups
+        XCTAssertGreaterThan(again, lookups)
+        reads = await stream.roomReads
+        XCTAssertEqual(reads, 7)
     }
 }
 

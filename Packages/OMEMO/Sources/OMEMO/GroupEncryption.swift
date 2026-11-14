@@ -68,11 +68,13 @@ extension OMEMOService {
         let snapshot = try await transport.refreshGroupRoom(room)
         guard snapshot.room == room, snapshot.members.contains(account), snapshot.members.count <= 100 else { throw XMPPGroupError.incompleteMembership }
         let owners = Array(Set(snapshot.members + [account])).sorted()
+        var confirmed = snapshot
         if !freshDevices.current(owners, account: account, profile: .modern, epoch: await transport.omemoDeviceEpoch(), noOtherVersionOnly: true) {
             try await refreshMembersLocked(owners, account: account, transport: transport)
+            // The members must not have changed while their devices were read.
+            confirmed = try await transport.refreshGroupRoom(room)
+            guard confirmed.members == snapshot.members else { throw XMPPGroupError.membershipChanged }
         }
-        let confirmed = try await transport.refreshGroupRoom(room)
-        guard confirmed.members == snapshot.members else { throw XMPPGroupError.membershipChanged }
         let (revision, old) = try await load(account)
         var state = old
         state.groupRooms[room] = snapshot.members
