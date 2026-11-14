@@ -76,6 +76,7 @@ import XMPPProtocol
     func finish() { defaults.removePersistentDomain(forName: suite) }
 
     var counts: SyncBenchProxy.Counts { proxy.counts }
+    var port: UInt16 { proxy.port }
 
     func reached(_ point: String) -> Bool { marks[point] != nil }
 

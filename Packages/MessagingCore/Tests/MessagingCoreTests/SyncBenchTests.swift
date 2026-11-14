@@ -97,7 +97,34 @@ import XMPPProtocol
             try await backgroundSend(to: peer, session: session, enqueuedDuringGrace: true).write(to: environment.results)
             try await connectAndSettle(session, "the resume after the grace enqueue")
             try await idleBackground(session).write(to: environment.results)
+            for profiles in [true, false] {
+                try await shareSend(to: peer, session: session, environment: environment, profiles: profiles).write(to: environment.results)
+            }
         }
+    }
+
+    // The share extension's `ShareSession` on the stream the app left, from its lease to the server's acknowledgement
+    // (sent) and the lease released (total); without the app's stream profile as the plain variant.
+    private func shareSend(to peer: String, session: SyncBenchSession, environment: SyncBenchEnvironment, profiles: Bool) async throws -> SyncBenchResult {
+        let bench = session.bench, sender = session.account
+        let message = try await OutgoingEnqueue.text("syncbench share", account: sender.jid, chatID: peer, store: bench.store)
+        let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: session.port, security: .directTLS)),
+                                        domain: sender.domain, username: sender.localpart, password: sender.password,
+                                        labCertificateAuthority: environment.authority, resource: environment.fixture.resource,
+                                        streamProfiles: profiles ? session.streamProfiles : nil)
+        let share = ShareSession(store: bench.store, encryption: bench.encryption, files: AttachmentFiles(directory: bench.url, account: sender.jid),
+                                 account: account, uploadService: nil)
+        let start = SyncBenchClock.now(), before = session.counts
+        guard await share.acquireLease() else { throw SyncBenchFailure.configuration("the share found the lease held") }
+        let states = await share.send(messageIDs: [message.id], rooms: [], until: .now + .seconds(15))
+        let sent = (SyncBenchClock.now(), session.counts)
+        await share.end()
+        var result = SyncBenchResult(scenario: profiles ? "share-send" : "share-plain")
+        result.wallMs = ["sent": SyncBenchClock.milliseconds(start, sent.0) ?? 0, "total": SyncBenchClock.milliseconds(start, SyncBenchClock.now()) ?? 0]
+        result.totals = session.counts - before
+        result.roundTrips = ["sent": (sent.1 - before).roundTrips, "total": result.totals.roundTrips]
+        result.passed = states[message.id] == .sent
+        return result
     }
 
     // After the sends, so the peer's app session takes what they left for it and leaves a resumable stream in two
