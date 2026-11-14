@@ -4633,13 +4633,7 @@
    ],
    [
     "private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {",
-    16
-   ]
-  ],
-  "function_body_length": [
-   [
-    "private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {",
-    61
+    13
    ]
   ],
   "line_length": [
@@ -6456,10 +6450,6 @@
  "Packages/XMPPProtocol/Sources/XMPPProtocol/GroupChat.swift": {
   "line_length": [
    [
-    "let reply = try await requestIQ(type: \"get\", to: room, payload: \"<query xmlns='\\(GroupChatWire.admin)'><item affiliation='\\(affiliation)'/></query>\")",
-    0
-   ],
-   [
     "public init(id: String, room: String, occupant: String, sender: String, envelope: XMPPOMEMOEnvelope, provenance: XMPPGroupProvenance = .liveOccupant, roomStanzaID: String? = nil,",
     0
    ],
@@ -6679,7 +6669,7 @@
    ],
    [
     "private func handle(_ node: XMLNode, token: UUID) async throws {",
-    46
+    43
    ],
    [
     "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
@@ -6689,7 +6679,7 @@
   "file_length": [
    [
     "",
-    1289
+    1259
    ]
   ],
   "force_unwrapping": [
@@ -6701,7 +6691,7 @@
   "function_body_length": [
    [
     "private func handle(_ node: XMLNode, token: UUID) async throws {",
-    176
+    169
    ],
    [
     "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
@@ -6773,7 +6763,7 @@
   "type_body_length": [
    [
     "public actor XMPPClient {",
-    1172
+    1142
    ]
   ]
  },
@@ -7115,14 +7105,6 @@
   "line_length": [
    [
     "let xml = try Self.encrypted(id ?? \"x\", from: from, extra: \"<error type='cancel'>\\(error)<text xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'>Visit evil.example</text></error>\")",
-    0
-   ],
-   [
-    "try await server.send(\"<iq type='result' from='\\(room)' id='\\(disco.attributes[\"id\"] ?? \"\")'><query xmlns='\\(GroupChatWire.disco)'><feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/></query></iq>\")",
-    0
-   ],
-   [
-    "try await server.send(\"<iq type='result' from='\\(room)' id='\\(query.attributes[\"id\"] ?? \"\")'><query xmlns='\\(GroupChatWire.admin)'>\\(item)</query></iq>\")",
     0
    ],
    [

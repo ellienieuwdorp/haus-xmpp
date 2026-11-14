@@ -195,7 +195,7 @@ public actor XMPPClient {
     static let connectTimeout: Duration = .seconds(30)
     static let discoveryTimeout: Duration = .seconds(5)
     private var bindID = ""
-    private var boundJID = ""
+    private(set) var boundJID = ""
     // Requested on every fresh bind so a new session replaces this installation's previous one instead of joining it as
     // a second resource. The owner persists one per installation and account.
     private var resource = XMPPClient.makeResource()
@@ -215,7 +215,9 @@ public actor XMPPClient {
         let timeout: Task<Void, Never>
     }
     private var iqRequests: [String: IQRequest] = [:]
-    private var archiveQuery: ArchiveQuery?
+    var archiveQuery: ArchiveQuery?
+    // `newestArchiveEntry` queries, by query ID; they never hand out content, so they may run beside `archiveQuery`.
+    var archiveProbes: [String: ArchiveQuery] = [:]
     // Results are emitted in stream order, before any later push.
     private var rosterFetchIDs: Set<String> = []
     // RFC 6121 §2.1.6: pushes go only to resources that requested the roster in this session.
@@ -708,14 +710,7 @@ public actor XMPPClient {
                 return
             }
             let inbound = ["message", "iq", "presence"].contains(node.name) && node.namespace == "jabber:client" ? try await streamManagement?.receive() : nil
-            if ArchiveQuery.containsWrapper(node) {
-                if var query = archiveQuery, node.child("result", namespace: ArchiveQuery.namespace)?.attributes["queryid"] == query.queryID {
-                    try query.receive(node)
-                    if let inbound { query.handledTokens.append(inbound) }
-                    archiveQuery = query
-                } else if let inbound { try await streamManagement?.handled(inbound) }
-                return
-            }
+            if ArchiveQuery.containsWrapper(node) { return try await receiveArchiveResult(node, inbound: inbound) }
             let rosterFetch = node.attributes["id"].map(rosterFetchIDs.contains) ?? false
             let blocklistFetch = node.attributes["id"].map(blocklistFetchIDs.contains) ?? false
             if routeIQ(node) {
@@ -829,37 +824,6 @@ public actor XMPPClient {
     public func requestAcknowledgement() async throws {
         guard phase == .online, streamManagement != nil, smOffered else { throw XMPPClientError.notConnected }
         try await write("<r xmlns='urn:xmpp:sm:3'/>")
-    }
-
-    /// Persist every result and its archive position before acknowledging `handledTokens`. One bounded own-account
-    /// query at a time; no arbitrary archive sender is trusted.
-    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
-        guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
-        guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
-        // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
-        if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
-        guard phase == .online, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
-        let queryID = UUID().uuidString
-        archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
-        archiveQuery?.room = room
-        archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
-        defer { archiveQuery = nil }
-        let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
-        do {
-            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
-            guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
-            return try query.finish(response)
-        } catch {
-            // A discarded partial page must not leave an acknowledgement gap; the unchanged cursor refetches it after
-            // reconnect.
-            if !(archiveQuery?.handledTokens.isEmpty ?? true) {
-                finish("Archive synchronization interrupted", error: error)
-                if error is CancellationError { throw error }
-                // Abandoning the partial page's unhandled tokens has already ended the transport.
-                throw XMPPClientError.connectionClosed
-            }
-            throw error
-        }
     }
 
     /// After a lost connection every pending query fails with `timedOut`; a query that timed out while this is still
@@ -1470,7 +1434,7 @@ public actor XMPPClient {
     }
     private func cancel(_ token: UUID) { if generation == token { finish(nil) } }
     private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
-    private func finish(_ reason: String?, error: any Error = XMPPClientError.connectionClosed) {
+    func finish(_ reason: String?, error: any Error = XMPPClientError.connectionClosed) {
         generation = UUID()
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         blocklistFetchIDs.removeAll(); blocklistRequested = false

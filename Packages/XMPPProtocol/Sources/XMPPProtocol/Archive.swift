@@ -61,6 +61,13 @@ public struct XMPPArchivePage: Sendable, Equatable {
     public let handledTokens: [XMPPInboundToken]
 }
 
+/// An archive's newest entry, from `XMPPClient.newestArchiveEntry`.
+public struct XMPPArchiveNewest: Sendable, Equatable {
+    /// nil when the archive is empty.
+    public let id: String?
+    public let handledTokens: [XMPPInboundToken]
+}
+
 struct ArchiveQuery {
     let queryID: String
     let accountBareJID: String
@@ -216,6 +223,86 @@ struct ArchiveQuery {
     static func timestamp(_ value: String) -> Date? {
         fractionalTimestamp.date(from: value) ?? wholeTimestamp.date(from: value)
     }
+}
+
+extension XMPPClient {
+    static let archiveProbeLimit = 32
+
+    // A result belongs to the page query or a probe by its query ID; any other is handled at once and dropped.
+    func receiveArchiveResult(_ node: XMLNode, inbound: XMPPInboundToken?) async throws {
+        let queryID = node.child("result", namespace: ArchiveQuery.namespace)?.attributes["queryid"]
+        if var query = archiveQuery, queryID == query.queryID {
+            try query.receive(node)
+            if let inbound { query.handledTokens.append(inbound) }
+            archiveQuery = query
+        } else if let queryID, var probe = archiveProbes[queryID] {
+            try probe.receive(node)
+            if let inbound { probe.handledTokens.append(inbound) }
+            archiveProbes[queryID] = probe
+        } else if let inbound { try await streamManagement?.handled(inbound) }
+    }
+
+    /// Persist every result and its archive position before acknowledging `handledTokens`. One bounded own-account
+    /// query at a time; no arbitrary archive sender is trusted.
+    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
+        guard isOnline, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
+        if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
+        guard isOnline, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
+        let queryID = UUID().uuidString
+        archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
+        archiveQuery?.room = room
+        archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
+        defer { archiveQuery = nil }
+        let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
+        do {
+            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
+            guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
+            return try query.finish(response)
+        } catch {
+            // A discarded partial page must not leave an acknowledgement gap; the unchanged cursor refetches it after
+            // reconnect.
+            if !(archiveQuery?.handledTokens.isEmpty ?? true) {
+                finish("Archive synchronization interrupted", error: error)
+                if error is CancellationError { throw error }
+                // Abandoning the partial page's unhandled tokens has already ended the transport.
+                throw XMPPClientError.connectionClosed
+            }
+            throw error
+        }
+    }
+
+    /// The ID of an archive's newest entry (nil when the archive is empty), so a caller can tell whether anything
+    /// follows its checkpoint without a page. Content is neither returned nor validated, so a room needs no membership
+    /// read; acknowledge `handledTokens`, nothing else is owed for them. Runs beside `fetchArchivePage`.
+    public func newestArchiveEntry(room: String? = nil) async throws -> XMPPArchiveNewest {
+        guard isOnline, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        guard room.map({ OMEMOWire.bareJID($0) == $0 }) ?? true, archiveProbes.count < Self.archiveProbeLimit else {
+            throw XMPPClientError.invalidConfiguration
+        }
+        let queryID = UUID().uuidString
+        var probe = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: 1)
+        probe.room = room
+        archiveProbes[queryID] = probe
+        defer { archiveProbes[queryID] = nil }
+        let payload = ArchiveQuery.payload(queryID: queryID, limit: 1, bound: .before(nil))
+        do {
+            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
+            guard let probe = archiveProbes[queryID] else { throw XMPPClientError.connectionClosed }
+            let page = try probe.finish(response)
+            return XMPPArchiveNewest(id: page.lastID, handledTokens: page.handledTokens)
+        } catch {
+            // As for a page: a result the caller never saw must not leave an acknowledgement gap.
+            if !(archiveProbes[queryID]?.handledTokens.isEmpty ?? true) {
+                finish("Archive synchronization interrupted", error: error)
+                if error is CancellationError { throw error }
+                throw XMPPClientError.connectionClosed
+            }
+            throw error
+        }
+    }
+
 }
 
 func validArchiveID(_ id: String) -> Bool {

@@ -141,7 +141,7 @@ extension SessionEngine {
         timings.add(.roster, since: start)
     }
 
-    private func catchingUp(_ progress: CatchUpProgress?, _ connection: Connection) {
+    func catchingUp(_ progress: CatchUpProgress?, _ connection: Connection) {
         walking = progress != nil
         // First, before anything else reads it: a finished walk is `nil`.
         delegate?.catchUpChanged(progress)
@@ -158,6 +158,8 @@ extension SessionEngine {
         milestones.caughtUp = .now
         archiveWalkFinished = true
         delegate?.walkFinished(account: connection.account, client: connection.client, token: connection.token)
+        // Receipts the walk queued wait for a pass, and a quiet connection may start none.
+        startOutbox()
     }
 
     private func rejoinKnownGroups(_ connection: Connection) async throws {
