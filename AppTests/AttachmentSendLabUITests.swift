@@ -22,5 +22,25 @@ final class AttachmentSendLabUITests: XCTestCase {
         let held = XCTNSPredicateExpectation(predicate: serverHeldLabel, object: sent)
         XCTAssertEqual(XCTWaiter().wait(for: [held], timeout: 90), .completed, "the caption is still \(sent.label)")
         XCTAssertFalse(app.alerts.firstMatch.exists, "no upload was refused")
+
+        XCTContext.runActivity(named: "A photo sent just before leaving finishes while the app is away") { _ in
+            app.pickPhotos(1)
+            input.tap()
+            let after = "After leaving \(UUID().uuidString.prefix(6))"
+            input.typeText(after)
+            app.buttons["sendMessage"].tap()
+            XCUIDevice.shared.press(.home)
+            XCTAssertTrue(app.waitForBackground())
+            // Until suspended, or long enough for the PUT to finish away: the simulator can report the app running in
+            // the background throughout.
+            let suspended = NSPredicate { object, _ in (object as? XCUIApplication)?.state == .runningBackgroundSuspended }
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: suspended, object: app)], timeout: 30)
+            app.activate()
+            let caption = app.textViews.matching(NSPredicate(format: "value == %@ AND label BEGINSWITH %@", after, "You:")).firstMatch
+            XCTAssertTrue(caption.waitForExistence(timeout: 15))
+            let held = XCTNSPredicateExpectation(predicate: serverHeldLabel, object: caption)
+            XCTAssertEqual(XCTWaiter().wait(for: [held], timeout: 90), .completed, "the caption is still \(caption.label)")
+            XCTAssertFalse(app.alerts.firstMatch.exists, "no upload was refused")
+        }
     }
 }
