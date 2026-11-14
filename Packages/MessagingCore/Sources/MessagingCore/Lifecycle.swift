@@ -136,6 +136,38 @@ public struct SceneLifecycleDriver: LifecycleDriver {
     }
 }
 
+/// SwiftUI's scene phase can arrive late (an in-app Safari view handing off), so UIKit's notifications report the same
+/// phases too. Each report is a step; one the other source already overtook is dropped, so the driver sees each
+/// phase change once and in order.
+public struct ScenePhaseMerge: Sendable, Equatable {
+    public typealias Phase = SceneLifecycleDriver.Phase
+    public private(set) var applied: Phase
+
+    public init(applied: Phase = .active) { self.applied = applied }
+
+    /// `previous` is SwiftUI's phase before the change; nil for a UIKit notification, which steps from `applied`.
+    /// Returns the step to hand the driver, or nil.
+    public mutating func step(from previous: Phase?, to phase: Phase) -> (from: Phase, to: Phase)? {
+        guard phase != applied else { return nil }
+        if let previous, previous != applied {
+            let down = Self.depth(phase) > Self.depth(previous)
+            // Behind the other source: it already reached this phase or went past it the same way.
+            if down ? Self.depth(applied) >= Self.depth(phase) : Self.depth(applied) <= Self.depth(phase) { return nil }
+        }
+        let from = applied
+        applied = phase
+        return (from, phase)
+    }
+
+    private static func depth(_ phase: Phase) -> Int {
+        switch phase {
+        case .active: 0
+        case .inactive: 1
+        case .background: 2
+        }
+    }
+}
+
 /// Which signal each attention-dependent feature follows. On iOS every one follows the transport (the scene); a
 /// desktop app holds the transport with no window, so there each follows the signal that matches it.
 public struct AttentionRules: Sendable, Equatable {

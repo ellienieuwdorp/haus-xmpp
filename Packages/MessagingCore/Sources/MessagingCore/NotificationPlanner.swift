@@ -89,6 +89,8 @@ public struct NotificationPlan: Sendable, Equatable {
 public enum NotificationPlanner {
     /// Shown whenever a run cannot settle. Never carries message content.
     public static let fallbackBody = "You may have new messages"
+    /// Content-free: no text, sender or recipient of the message.
+    public static let unsentBody = "A message hasn't been sent yet. Open Haus to send it."
     /// Retained ciphertext waiting for trust or keys.
     public static let reviewBody = "Sent an encrypted message. Open the chat to review."
     public static let unreadableBody = "Sent a message this device can't read"

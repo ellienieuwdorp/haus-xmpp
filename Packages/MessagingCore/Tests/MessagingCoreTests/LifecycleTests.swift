@@ -201,4 +201,33 @@ struct LifecycleTransitionTests {
         #expect(!unread.reading("bob@example.org", openChatID: "bob@example.org"))
         #expect(!LifecycleSignals.away.reading("bob@example.org", openChatID: "bob@example.org"))
     }
+
+    // UIKit's notification reached `.background` first; SwiftUI's late steps down are dropped, so the transport
+    // quiesces once. The return is then reported by whichever source comes first, also once.
+    private func described(_ step: (from: Phase, to: Phase)?) -> String? { step.map { ".\($0.from) → .\($0.to)" } }
+
+    @Test func aLateSceneStepIsDroppedOnceUIKitOvertookIt() {
+        var merge = ScenePhaseMerge()
+        #expect(described(merge.step(from: nil, to: .inactive)) == ".active → .inactive")
+        #expect(described(merge.step(from: nil, to: .background)) == ".inactive → .background")
+        #expect(merge.step(from: .active, to: .inactive) == nil)
+        #expect(merge.step(from: .inactive, to: .background) == nil)
+        #expect(described(merge.step(from: .background, to: .inactive)) == ".background → .inactive")
+        #expect(described(merge.step(from: nil, to: .active)) == ".inactive → .active")
+        #expect(merge.step(from: .inactive, to: .active) == nil)
+        #expect(merge.applied == .active)
+    }
+
+    @Test func inStepTheSceneDrivesEveryChange() {
+        var merge = ScenePhaseMerge()
+        var driver = SceneLifecycleDriver()
+        var changes: [LifecycleUpdate] = []
+        for (previous, phase) in [(Phase.active, Phase.inactive), (.inactive, .background), (.background, .inactive), (.inactive, .active)] {
+            guard let step = merge.step(from: previous, to: phase) else { Issue.record("dropped \(previous) → \(phase)"); continue }
+            changes += driver.updates(for: .phaseChanged(from: step.from, to: step.to))
+            // UIKit's report of the same phase right after changes nothing.
+            #expect(merge.step(from: nil, to: phase) == nil)
+        }
+        #expect(changes == [.interactionEnded(at: nil), .change(.away, activated: false), .change(.inFront, activated: true)])
+    }
 }
