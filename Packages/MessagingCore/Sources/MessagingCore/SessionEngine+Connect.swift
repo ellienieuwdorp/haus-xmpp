@@ -119,7 +119,7 @@ extension SessionEngine {
         firstMessageLogged = false
         liveStoredLogged = false
         catchUpByArchive = [:]
-        let resumed = await client?.sessionResumed ?? false
+        let (resumed, carbonsInline) = await client?.onlineSession ?? (false, false)
         Self.syncLog.notice("online resumed=\(resumed, privacy: .public)\(self.connectPhases.summary(online: online), privacy: .public)")
         await delegate?.streamOnline(client: client, resumed: resumed)
         guard generation == token, let encryption, let client, let store else { return }
@@ -143,7 +143,7 @@ extension SessionEngine {
         // serialises the two per crypto operation.
         setupTask = Task { [weak self] in
             guard let self else { return }
-            await self.runSetup(connection, identityExists: identityExists, resumed: resumed)
+            await self.runSetup(connection, identityExists: identityExists, resumed: resumed, carbonsInline: carbonsInline)
             if self.generation == token { self.setupTask = nil }
         }
     }

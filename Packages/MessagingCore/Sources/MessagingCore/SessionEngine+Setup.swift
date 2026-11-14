@@ -5,7 +5,7 @@ import os
 import XMPPProtocol
 
 extension SessionEngine {
-    func runSetup(_ connection: Connection, identityExists: Bool, resumed: Bool) async {
+    func runSetup(_ connection: Connection, identityExists: Bool, resumed: Bool, carbonsInline: Bool) async {
         let (account, store, encryption) = (connection.account, connection.store, connection.encryption)
         let profiles = profiles
         let streamID: @Sendable () async -> String? = {
@@ -14,7 +14,6 @@ extension SessionEngine {
         }
         let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
                                      uploadsFresh: delegate?.uploadsFresh(account: account) ?? false)
-        let carbonsInline = await connection.client.carbonsEnabledInline
         if carbonsInline { profiles.carbonsEnabled(account: account, stream: await streamID()) }
         let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory, carbonsInline: carbonsInline)
         // The stream ID is a store read; a newer connection may have started meanwhile.

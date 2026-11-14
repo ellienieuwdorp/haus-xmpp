@@ -43,6 +43,9 @@ extension XMPPClient {
     /// XEP-0280 carbons were enabled inside this stream's Bind 2 request.
     public var carbonsEnabledInline: Bool { signIn.carbonsEnabled }
 
+    /// Both answers in one actor hop: setup that waits a hop longer misses the flight its first queries could share.
+    public var onlineSession: (resumed: Bool, carbonsEnabledInline: Bool) { (sessionResumed, signIn.carbonsEnabled) }
+
     // Only ever written inside TLS: `from` names the account for SASL2 and FAST.
     func streamOpening() -> String {
         let from = signIn.configuration == nil ? "" : " from='\(xmlEscaped(username + "@" + domain))'"
