@@ -120,15 +120,38 @@ struct ArchiveRoomProbeTests {
         }
     }
 
-    @Test func aRoomNeverWalkedStartsAtItsNewestPageWithoutAProbe() async throws {
+    @Test func aRoomNeverWalkedIsWalkedFromItsNewestPageOnceItHoldsAnything() async throws {
         try await fixture { store in
             try await checkpoints(store, rooms: [:])
             let log = Log()
-            let operations = operations(log, rooms: [room], newest: { _ in newest("room-1") })
+            let operations = operations(log, rooms: [room], newest: { _ in newest("room-1") },
+                                        fetch: { bound, selected in selected == room && bound == .before(nil) ? page("room-1", sequence: 2) : emptyPage })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             let events = await log.events
-            #expect(!events.contains("probe:\(room)"))
-            #expect(events.suffix(2) == ["refresh:\(room)", "fetch:\(room):before(nil)"])
+            let walk = try #require(events.firstIndex(of: "refresh:\(room)"))
+            #expect(Array(events[walk...]) == ["refresh:\(room)", "fetch:\(room):before(nil)", "durable:room-1", "ack:2", "fetch:\(room):after(room-1)"])
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "room-1")
+        }
+    }
+
+    @Test func aRoomNeverWalkedWhoseArchiveIsEmptyRecordsThatWithoutAWalk() async throws {
+        try await fixture { store in
+            try await checkpoints(store, rooms: [:])
+            let log = Log()
+            let outcome = try await ArchiveSynchronizer(store: store).synchronize(
+                account: account, operations: operations(log, rooms: [room], newest: { _ in newest(nil) }))
+            #expect(outcome.isComplete)
+            #expect(await log.events.allSatisfy { !$0.hasPrefix("refresh:") && !$0.hasPrefix("fetch:\(room)") })
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room) == nil)
+            #expect(try await store.archiveGaps(accountID: account).isEmpty)
+            // What arrives later is unread, as after the walk's own empty newest page.
+            try await store.upsertChat(accountID: account, chatID: room, title: "Room")
+            try await store.insertMessage(StoredMessage(id: "m1", accountID: account, chatID: room, senderID: "bob@localhost", body: "Synthetic",
+                                                        sentAt: Date(timeIntervalSince1970: 200), encryptionProfile: "modern", wireID: "w1"))
+            let later = operations(log, rooms: [room], newest: { _ in newest("room-1") },
+                                   fetch: { bound, selected in selected == room && bound == .before(nil) ? page("room-1", sequence: 2) : emptyPage })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: later)
+            #expect(try await store.unreadCounts(accountID: account) == [room: 1])
         }
     }
 

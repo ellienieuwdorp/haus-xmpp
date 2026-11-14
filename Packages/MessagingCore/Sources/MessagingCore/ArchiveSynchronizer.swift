@@ -224,8 +224,8 @@ public struct ArchiveSynchronizer: Sendable {
     enum RoomProbe: Sendable, Equatable {
         // The newest entry is the checkpoint: nothing follows it.
         case unchanged
-        // The archive holds nothing, so the checkpoint's cursor is gone.
-        case empty(ArchiveCheckpoint)
+        // The archive holds nothing: never walked, or under a checkpoint whose cursor is gone.
+        case empty(ArchiveCheckpoint?)
         case unknown
     }
 
@@ -237,8 +237,7 @@ public struct ArchiveSynchronizer: Sendable {
         return try await withThrowingTaskGroup(of: (String, RoomProbe).self) { group in
             for room in rooms {
                 group.addTask {
-                    // A room never walked starts at its newest page, which the probe would only repeat.
-                    guard let checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: room) else { return (room, .unknown) }
+                    let checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: room)
                     let newest: XMPPArchiveNewest
                     do { newest = try await newestEntry(room) } catch {
                         if error is CancellationError { throw error }
@@ -246,11 +245,8 @@ public struct ArchiveSynchronizer: Sendable {
                         return (room, .unknown)
                     }
                     if !newest.handledTokens.isEmpty { try await operations.acknowledge(newest.handledTokens) }
-                    switch newest.id {
-                    case nil: return (room, .empty(checkpoint))
-                    case checkpoint.cursor?: return (room, .unchanged)
-                    default: return (room, .unknown)
-                    }
+                    guard let id = newest.id else { return (room, .empty(checkpoint)) }
+                    return (room, checkpoint.map { $0.cursor == id } == true ? .unchanged : .unknown)
                 }
             }
             var probed: [String: RoomProbe] = [:]
@@ -259,13 +255,16 @@ public struct ArchiveSynchronizer: Sendable {
         }
     }
 
-    // An empty archive under a checkpoint is what the walk would find after its cursor was refused and re-anchored:
-    // recorded as a possible gap (once per cursor), with nothing to fetch.
+    // An empty archive records what the walk's empty newest page would: never walked, that the archive was empty;
+    // under a checkpoint, what it finds once the cursor is refused and re-anchored, a possible gap (once per cursor).
     private func walkIsProvenEmpty(account: String, room: String, probe: RoomProbe?) async throws -> Bool {
         switch probe {
         case .unchanged?:
             return true
-        case .empty(let checkpoint)?:
+        case .empty(nil)?:
+            try await store.recordEmptyArchive(accountID: account, archiveID: room)
+            return true
+        case .empty(let checkpoint?)?:
             try await store.recordArchiveGap(accountID: account, archiveID: room, cursor: checkpoint.cursor, since: checkpoint.stamp)
             Self.log.notice("room archive empty under its checkpoint; recorded as a possible gap")
             return true
