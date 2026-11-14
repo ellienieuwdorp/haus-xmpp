@@ -115,22 +115,26 @@ public struct ArchiveSynchronizer: Sendable {
         )
     }
 
-    // Consecutive encrypted direct messages go to OMEMO as one run, which commits them together; every other entry is
-    // processed on its own between runs, so writes stay in archive order.
+    // Consecutive encrypted direct messages, with the plain receipts between them, go to OMEMO as one run, which commits
+    // the messages together; every other entry is processed on its own between runs, so writes stay in archive order.
     func processPage(account: String, entries: [XMPPArchiveMessage], encryption: OMEMOService, transport: XMPPClient) async throws {
-        var run: [ArchivedEncryptedMessage] = []
+        var run: [ArchivedDirectEntry] = []
         for archived in entries {
             try Task.checkCancellation()
-            if archived.messageError == nil, archived.rejectedContent == nil, archived.encryptedGroupMessage == nil,
-               let encrypted = archived.encryptedMessage {
-                run.append(ArchivedEncryptedMessage(message: encrypted, sentAt: archived.timestamp))
-                continue
-            }
-            if !run.isEmpty { try await encryption.receiveArchived(account: account, messages: run, transport: transport) }
+            if let entry = Self.directEntry(archived) { run.append(entry); continue }
+            if !run.isEmpty { try await encryption.receiveArchived(account: account, entries: run, transport: transport) }
             run = []
             try await process(account: account, archived: archived, encryption: encryption, transport: transport)
         }
-        if !run.isEmpty { try await encryption.receiveArchived(account: account, messages: run, transport: transport) }
+        if !run.isEmpty { try await encryption.receiveArchived(account: account, entries: run, transport: transport) }
+    }
+
+    // What `process` would hand to `receive` or `receivePlaintextReceipt`, checked in its order.
+    static func directEntry(_ archived: XMPPArchiveMessage) -> ArchivedDirectEntry? {
+        guard archived.messageError == nil, archived.rejectedContent == nil, archived.encryptedGroupMessage == nil else { return nil }
+        if let encrypted = archived.encryptedMessage { return .encrypted(ArchivedEncryptedMessage(message: encrypted, sentAt: archived.timestamp)) }
+        guard archived.reaction == nil, archived.retraction == nil, let receipt = archived.receipt else { return nil }
+        return .receipt(receipt, sentAt: archived.timestamp)
     }
 
     // Every path is durable before it returns; a throw means nothing durable exists for the entry and the page must
