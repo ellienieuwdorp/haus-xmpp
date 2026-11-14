@@ -183,4 +183,30 @@ final class ArchivedReceiveTests: XCTestCase {
         isTrue(receipts.isSubset(of: prepared.messageIDs))
         equal(await log.fetches.count, 5, "one refresh: both versions' lists of both accounts and the peer device's bundle")
     }
+
+    // Receipts between messages: our own delivery receipt and a peer's receipt for a message already stored leave the
+    // run whole, one state write; our own marker moves the read pointer, so the messages before it commit first and
+    // only the message after it counts as unread.
+    func testReceiptsInARunKeepArchiveOrder() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.legacy)
+        try await f.bStore.upsertChat(accountID: f.bob, chatID: f.alice, title: "Alice")
+        _ = try await f.bStore.insertMessage(StoredMessage(id: "sent", accountID: f.bob, chatID: f.alice, senderID: f.bob, body: "Earlier",
+                                                           isOutgoing: true, wireID: "sent-wire"))
+        let messages = try await send(f, 3)
+        let own = XMPPReceipt(id: "own", from: f.bob + "/tablet", to: f.alice, targetID: "elsewhere", kind: .delivered, provenance: .sentCarbon)
+        let peer = XMPPReceipt(id: "peer", from: f.alice + "/phone", to: f.bob, targetID: "sent-wire", kind: .delivered)
+        let stored = try await f.bStore.encryptionStateRevision(accountID: f.bob)
+        let first = try XCTUnwrap(stored)
+        try await f.b.receiveArchived(account: f.bob, entries: [.encrypted(archived([messages[0]])[0]), .receipt(own, sentAt: nil),
+                                                                .receipt(peer, sentAt: nil), .encrypted(archived([messages[1]])[0])],
+                                      transport: f.bTransport)
+        equal(try await f.bStore.encryptionStateRevision(accountID: f.bob), first + 1)
+        equal(try await f.bStore.events(accountID: f.bob, chatID: f.alice, messageID: "sent").map(\.kind), [.delivered])
+        let read = XMPPReceipt(id: "read", from: f.bob + "/tablet", to: f.alice, targetID: messages[1].id, kind: .displayed, provenance: .sentCarbon)
+        let third = archived([messages[2]])[0]
+        try await f.b.receiveArchived(account: f.bob, entries: [.receipt(read, sentAt: nil), .encrypted(third)], transport: f.bTransport)
+        equal(try await f.bStore.encryptionStateRevision(accountID: f.bob), first + 2)
+        equal(try await f.bStore.unreadCounts(accountID: f.bob)[f.alice], 1)
+    }
 }

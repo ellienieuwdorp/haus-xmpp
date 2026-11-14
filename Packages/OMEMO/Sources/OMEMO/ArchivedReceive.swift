@@ -10,21 +10,40 @@ public struct ArchivedEncryptedMessage: Sendable {
     public init(message: XMPPEncryptedMessage, sentAt: Date?) { self.message = message; self.sentAt = sentAt }
 }
 
+/// An entry of a run `receiveArchived` takes in order: an encrypted direct message, or a plain receipt between them.
+public enum ArchivedDirectEntry: Sendable {
+    case encrypted(ArchivedEncryptedMessage)
+    case receipt(XMPPReceipt, sentAt: Date?)
+}
+
 extension OMEMOService {
     /// Consecutive archive entries under one hold of the gate. A message from an approved device decrypts with a kept
     /// engine and waits; the waiting ones commit with the state they leave in one transaction, at the end, every
     /// 100, and before anything else is written, so the store sees every write in archive order. Anything else takes
     /// `receive`'s path. Returns once every message is durable, as `receive` would leave it; a throw leaves nothing
-    /// uncommitted, so the caller must not move its cursor.
-    public func receiveArchived(account: String, messages: [ArchivedEncryptedMessage], transport: any OMEMOTransport) async throws {
-        try await gate.run { try await self.receiveArchivedLocked(account: account, messages: messages, transport: transport) }
+    /// uncommitted, so the caller must not move its cursor. A receipt that cannot touch a waiting message is written
+    /// without committing them first.
+    public func receiveArchived(account: String, entries: [ArchivedDirectEntry], transport: any OMEMOTransport) async throws {
+        try await gate.run { try await self.receiveArchivedLocked(account: account, entries: entries, transport: transport) }
     }
 
-    private func receiveArchivedLocked(account: String, messages: [ArchivedEncryptedMessage], transport: any OMEMOTransport) async throws {
+    public func receiveArchived(account: String, messages: [ArchivedEncryptedMessage], transport: any OMEMOTransport) async throws {
+        try await receiveArchived(account: account, entries: messages.map { .encrypted($0) }, transport: transport)
+    }
+
+    private func receiveArchivedLocked(account: String, entries: [ArchivedDirectEntry], transport: any OMEMOTransport) async throws {
         let batch = ReceiveBatch()
         do {
-            for item in messages {
+            for entry in entries {
                 try Task.checkCancellation()
+                let item: ArchivedEncryptedMessage
+                switch entry {
+                case .encrypted(let message): item = message
+                case .receipt(let receipt, let sentAt):
+                    if dependsOnWaiting(receipt, batch, account: account) { try await commit(batch, account: account, transport: transport) }
+                    _ = try await receivePlaintextReceipt(account: account, receipt: receipt, sentAt: sentAt)
+                    continue
+                }
                 // Only an exact copy of our own saved send matches, and it touches only that outbox row.
                 if try await reconcileArchivedOutgoing(account: account, message: item.message) { continue }
                 if try await stage(item, account: account, into: batch) {
@@ -40,6 +59,14 @@ extension OMEMOService {
             batch.reset()
             throw error
         }
+    }
+
+    // Our own delivery receipt only settles its outbox row; our own marker moves the read pointer, which waiting
+    // messages read. A peer's receipt resolves one message by wire ID and is stored under its own event ID.
+    private func dependsOnWaiting(_ receipt: XMPPReceipt, _ batch: ReceiveBatch, account: String) -> Bool {
+        let actor = bare(receipt.from)
+        if actor == account { return receipt.kind == .displayed && !batch.commits.isEmpty }
+        return batch.wireIDs.contains(receipt.targetID) || batch.events.contains([actor, receipt.id])
     }
 
     // True when the message waits in `batch` or needs nothing written. False sends it down `receive`'s path, which
@@ -81,12 +108,11 @@ extension OMEMOService {
             return false
         }
         engine.keepChange()
-        batch.commits.append(EncryptedIncomingCommit(sender: sender, digest: digest, message: decrypted.stored, reaction: decrypted.reaction,
-                                                     event: decrypted.event, archiveStanzaID: decrypted.stored == nil ? nil : message.archiveStanzaID,
-                                                     readMarker: decrypted.readMarker,
-                                                     queuesReceipt: queuesReceipt(decrypted, message: message, sender: sender, peer: peer, state: state)))
-        batch.inputs.append(item)
-        batch.digests.insert([sender, digest])
+        batch.append(EncryptedIncomingCommit(sender: sender, digest: digest, message: decrypted.stored, reaction: decrypted.reaction,
+                                             event: decrypted.event, archiveStanzaID: decrypted.stored == nil ? nil : message.archiveStanzaID,
+                                             readMarker: decrypted.readMarker,
+                                             queuesReceipt: queuesReceipt(decrypted, message: message, sender: sender, peer: peer, state: state)),
+                     from: item)
         if key.keyExchange {
             batch.preKeyProfiles.insert(profile)
             // One answer per device: it is encrypted after every message the batch read from that device.
@@ -151,10 +177,21 @@ private final class ReceiveBatch {
     var commits: [EncryptedIncomingCommit] = []
     var inputs: [ArchivedEncryptedMessage] = []
     var digests: Set<[String]> = []
+    // Wire IDs of waiting messages and (actor, ID) of waiting events, which a later receipt may name.
+    var wireIDs: Set<String> = []
+    var events: Set<[String]> = []
     var answers: [(address: DeviceAddress, profile: XMPPOMEMOProfile)] = []
     var preKeyProfiles: Set<XMPPOMEMOProfile> = []
 
+    func append(_ commit: EncryptedIncomingCommit, from item: ArchivedEncryptedMessage) {
+        commits.append(commit)
+        inputs.append(item)
+        digests.insert([commit.sender, commit.digest])
+        if let wireID = commit.message?.wireID { wireIDs.insert(wireID) }
+        for event in [commit.event?.id, commit.reaction?.id].compactMap({ $0 }) { events.insert([commit.sender, event]) }
+    }
+
     func reset() {
-        base = nil; engines = [:]; commits = []; inputs = []; digests = []; answers = []; preKeyProfiles = []
+        base = nil; engines = [:]; commits = []; inputs = []; digests = []; wireIDs = []; events = []; answers = []; preKeyProfiles = []
     }
 }
