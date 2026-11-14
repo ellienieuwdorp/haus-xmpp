@@ -122,6 +122,7 @@ extension XMPPClient {
                   node.attributes["previd"] == snapshot.streamID,
                   let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
             boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
+            restoreGroupRooms(from: snapshot)
             let replay = try await acknowledge(h, resumed: true, streamManagement)
             try emit(.streamAcknowledged)
             guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }

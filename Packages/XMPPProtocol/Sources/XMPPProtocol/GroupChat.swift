@@ -85,6 +85,13 @@ struct GroupRoomState {
     var joinRefused = false
     var nickname: String?
     var validatedRevision: UInt64? = nil
+    // Occupancy a resume restored (`RetainedGroupRoom`): it routes the stanzas the server held for the session, but
+    // nothing is sent to the room until a self-ping or our own presence shows the room still counts us.
+    var restored = false
+    // The room's last discovery advertised `muc#self-ping-optimization`: it answers a self-ping itself.
+    var answersSelfPing = false
+
+    var sendable: Bool { joined && !restored }
 
     // Occupant presence and nickname changes bump `revision`, so an unchanged revision means no observable presence
     // changed since validation.
@@ -109,6 +116,8 @@ struct GroupRoomState {
 
     mutating func requestNickname(_ nickname: String) {
         joinRefused = false
+        // A join over restored occupancy waits for the room's own answer like any other.
+        if restored { restored = false; joined = false; revision &+= 1 }
         guard self.nickname != nickname else { return }
         self.nickname = nickname
         joined = false
@@ -145,16 +154,23 @@ struct GroupRoomRefreshKey: Hashable, Sendable {
 }
 
 enum GroupChatWire {
+    static func validNickname(_ nickname: String) -> Bool {
+        !nickname.isEmpty && nickname.utf8.count <= 128 && !nickname.contains("/")
+            && !nickname.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f })
+    }
     static let muc = "http://jabber.org/protocol/muc"
     static let user = muc + "#user"
     static let admin = muc + "#admin"
     static let disco = "http://jabber.org/protocol/disco#info"
-    static func checkFeatures(_ reply: XMLNode, room: String) throws {
+    static let selfPingOptimization = muc + "#self-ping-optimization"
+    @discardableResult
+    static func checkFeatures(_ reply: XMLNode, room: String) throws -> Bool {
         guard reply.attributes["from"] == room else { throw XMPPGroupError.unsupportedRoom }
         let query = try OMEMOWire.singleton(reply, "query", disco)
         let features = Set(query.children.filter { $0.name == "feature" && $0.namespace == disco }.compactMap { $0.attributes["var"] })
         guard features.contains("muc_nonanonymous"), features.contains("muc_membersonly"), features.contains("urn:xmpp:sid:0"),
               !features.contains("muc_semianonymous"), !features.contains("muc_open") else { throw XMPPGroupError.unsupportedRoom }
+        return features.contains(selfPingOptimization)
     }
     static func members(_ reply: XMLNode, room: String, affiliation: String) throws -> [String] {
         guard reply.attributes["from"] == room else { throw XMPPGroupError.incompleteMembership }
@@ -237,7 +253,7 @@ enum GroupChatWire {
               let affiliation = items[0].attributes["affiliation"], ["member", "admin", "owner"].contains(affiliation),
               items.allSatisfy({ $0.attributes["jid"].flatMap(OMEMOWire.bareJID) == jid && $0.attributes["affiliation"] == affiliation }) else {
             state.occupants[occupant] = nil
-            if ownOccupant { state.joined = false; state.joinRefused = node.attributes["type"] == "error" }
+            if ownOccupant { state.joined = false; state.restored = false; state.joinRefused = node.attributes["type"] == "error" }
             return
         }
         // A complete membership refresh is still required before this mapping can authorize message routing.
@@ -246,6 +262,7 @@ enum GroupChatWire {
             state.joined = jid == account && xs[0].children.contains {
                 $0.name == "status" && $0.namespace == user && $0.attributes["code"] == "110"
             }
+            state.restored = false
         }
     }
     static func outgoing(room: String, envelope: XMPPOMEMOEnvelope, id: String) throws -> String {
@@ -259,17 +276,18 @@ extension XMPPClient {
     public func groupRoomRefusedJoin(_ room: String) -> Bool { groupRooms[room]?.joinRefused == true }
     public func groupRoomSnapshot(_ room: String) throws -> XMPPGroupRoomSnapshot? {
         guard let state = groupRooms[room], !state.members.isEmpty else { return nil }
-        return try .init(room: room, members: state.members, revision: state.revision, joined: state.joined)
+        return try .init(room: room, members: state.members, revision: state.revision, joined: state.sendable)
     }
     func validateGroupWrite(_ snapshot: XMPPGroupRoomSnapshot?) throws {
         guard let snapshot else { return }
-        guard let current = groupRooms[snapshot.room], current.joined,
+        guard let current = groupRooms[snapshot.room], current.sendable,
               current.revision == snapshot.revision, current.members == snapshot.members else { throw XMPPGroupError.membershipChanged }
     }
 
-    /// The server offers no transactional membership revision. The first validation on a connection needs two matching
+    /// The server offers no transactional membership revision. The first validation on a stream needs two matching
     /// full reads with no presence change between; later refreshes accept one read equal to the last validated list (a
-    /// change and its reversal between reads is invisible to two reads as well). Callers still revalidate before a send
+    /// change and its reversal between reads is invisible to two reads as well). A resume that restored the room's
+    /// occupancy continues the stream it was validated on. Callers still revalidate before a send
     /// (`validateGroupWrite` compares the revision at write time).
     public func refreshGroupRoom(_ room: String) async throws -> XMPPGroupRoomSnapshot {
         try await refreshGroupRoom(room, reusingValidation: false)
@@ -318,7 +336,7 @@ extension XMPPClient {
             let members: [String]
             switch current.refreshDecision(reusingValidation: key.reusesValidation) {
             case .cached:
-                return try XMPPGroupRoomSnapshot(room: room, members: current.members, revision: revision, joined: current.joined)
+                return try XMPPGroupRoomSnapshot(room: room, members: current.members, revision: revision, joined: current.sendable)
             case .readOnceExpecting(let previous):
                 let first = try await readGroupMembers(room)
                 guard revision == groupRooms[room]?.revision else { continue }
@@ -337,7 +355,7 @@ extension XMPPClient {
             state.markValidated(members)
             state.occupants = state.occupants.filter { members.contains($0.value) }
             groupRooms[room] = state
-            return try XMPPGroupRoomSnapshot(room: room, members: members, revision: revision, joined: state.joined)
+            return try XMPPGroupRoomSnapshot(room: room, members: members, revision: revision, joined: state.sendable)
         }
         throw XMPPGroupError.membershipChanged
     }
@@ -352,7 +370,8 @@ extension XMPPClient {
         async let members = requestIQ(type: "get", to: room, payload: affiliationQuery("member"))
         async let admins = requestIQ(type: "get", to: room, payload: affiliationQuery("admin"))
         async let owners = requestIQ(type: "get", to: room, payload: affiliationQuery("owner"))
-        try GroupChatWire.checkFeatures(try await disco, room: room)
+        let answersSelfPing = try GroupChatWire.checkFeatures(try await disco, room: room)
+        groupRooms[room]?.answersSelfPing = answersSelfPing
         var all = try GroupChatWire.members(try await members, room: room, affiliation: "member")
         all += try GroupChatWire.members(try await admins, room: room, affiliation: "admin")
         all += try GroupChatWire.members(try await owners, room: room, affiliation: "owner")
@@ -360,13 +379,12 @@ extension XMPPClient {
         return all.sorted()
     }
     public func joinGroupRoom(_ room: String, nickname: String) async throws -> XMPPGroupRoomSnapshot {
-        guard !nickname.isEmpty, nickname.utf8.count <= 128, !nickname.contains("/"),
-              !nickname.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else { throw XMPPGroupError.invalidMessage }
+        guard GroupChatWire.validNickname(nickname) else { throw XMPPGroupError.invalidMessage }
         _ = try await refreshGroupRoom(room)
         guard var state = groupRooms[room] else { throw XMPPGroupError.notJoined }
         state.requestNickname(nickname)
         groupRooms[room] = state
-        let snapshot = try XMPPGroupRoomSnapshot(room: room, members: state.members, revision: state.revision, joined: state.joined)
+        let snapshot = try XMPPGroupRoomSnapshot(room: room, members: state.members, revision: state.revision, joined: state.sendable)
         try await groupWrite("<presence to='\(xmlEscaped(room + "/" + nickname))'><x xmlns='\(GroupChatWire.muc)'><history maxstanzas='0'/></x></presence>")
         return snapshot
     }
