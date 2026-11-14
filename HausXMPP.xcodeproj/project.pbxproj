@@ -77,6 +77,7 @@
 		1DC55EAB6C92BBB9035EE451 /* TimelineMessageFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F9D8E4211A8C9225BF99F6 /* TimelineMessageFocus.swift */; };
 		1DDF31583511C1603C68A8A6 /* SharedStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3E88F1465023725C99969B /* SharedStorageTests.swift */; };
 		1E14F8E706C004F820D442EE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A39CD7D5EC3E4CE71B683D27 /* PrivacyInfo.xcprivacy */; };
+		1E716F075C08A73C7CBD0C74 /* SuspensionLockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A026B8AD8BA1932862DB65BA /* SuspensionLockTests.swift */; };
 		1E75E35902DA72E991C2D25C /* KeyRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78365EB9C0FD315465BADD51 /* KeyRecovery.swift */; };
 		1ECC9981CD306392B0B90743 /* AttachmentSendLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1855DE3A5B4667032083D97 /* AttachmentSendLabUITests.swift */; };
 		1F4BBC2BA3DB5929DA85B868 /* LastSeen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */; };
@@ -843,6 +844,7 @@
 		9D4872DC53C47404DC785AB9 /* ContactsUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ContactsUI.framework; path = System/Library/Frameworks/ContactsUI.framework; sourceTree = SDKROOT; };
 		9EF221C2ABB51FAA3FC260E0 /* GroupMailbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupMailbox.swift; sourceTree = "<group>"; };
 		9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetupTests.swift; sourceTree = "<group>"; };
+		A026B8AD8BA1932862DB65BA /* SuspensionLockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuspensionLockTests.swift; sourceTree = "<group>"; };
 		A1CB468485582E56EB551F30 /* EmojiCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiCatalog.swift; sourceTree = "<group>"; };
 		A30F5EC1BE6CAD1654139384 /* LinkPreviewFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewFetchTests.swift; sourceTree = "<group>"; };
 		A39CD7D5EC3E4CE71B683D27 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -1244,6 +1246,7 @@
 				0E3E88F1465023725C99969B /* SharedStorageTests.swift */,
 				E09AAB9CCD29D09D48DB3B8B /* ShareExtensionTests.swift */,
 				EFAEBE0A73193DF3378A75A6 /* SignOutCleanupTests.swift */,
+				A026B8AD8BA1932862DB65BA /* SuspensionLockTests.swift */,
 				C0177CE11C01DFEB2F32246D /* TimelineCellSemanticsTests.swift */,
 				FFCF48ABDE1B7D75DFCDDE88 /* TimelineMessageFocusTests.swift */,
 				D79B0F9D17AAB865512526A1 /* TimelinePositionTests.swift */,
@@ -2257,6 +2260,7 @@
 				46FE3C087CDFFD53492C8664 /* ShareExtensionTests.swift in Sources */,
 				1DDF31583511C1603C68A8A6 /* SharedStorageTests.swift in Sources */,
 				F0F804043031214D114D3EC1 /* SignOutCleanupTests.swift in Sources */,
+				1E716F075C08A73C7CBD0C74 /* SuspensionLockTests.swift in Sources */,
 				0BF82DF7C145DAE33FEE73B9 /* TimelineCellSemanticsTests.swift in Sources */,
 				FE2D7076A0980B94F5A80BBF /* TimelineMessageFocusTests.swift in Sources */,
 				A5E4F824FE81D10D17BC1562 /* TimelinePositionTests.swift in Sources */,

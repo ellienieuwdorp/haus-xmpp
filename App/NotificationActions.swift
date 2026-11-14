@@ -206,10 +206,13 @@ struct BackgroundTaskID: Equatable {
 
 #if os(iOS)
 @MainActor final class UIKitBackgroundTime: NotificationActionBackgroundTime {
+    // Counted with `StorageParking`, so storage reopens for the action and parks before its time ends.
     func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
-        UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
+        let task = UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
+        if task != .invalid { StorageParking.shared.hold() }
+        return task
     }
-    func end(_ task: UIBackgroundTaskIdentifier) { UIApplication.shared.endBackgroundTask(task) }
+    func end(_ task: UIBackgroundTaskIdentifier) { StorageParking.shared.release { UIApplication.shared.endBackgroundTask(task) } }
     var remaining: TimeInterval { UIApplication.shared.backgroundTimeRemaining }
 }
 #else

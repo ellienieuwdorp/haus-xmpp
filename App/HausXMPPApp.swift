@@ -87,6 +87,7 @@ struct HausXMPPApp: App {
         if step.to == .inactive, departure == nil {
             departure = BackgroundActivity("Leave the foreground", onExpire: { [weak self] in self?.model.engine.backgroundTimeExpiring() })
         }
+        StorageParking.shared.sceneChanged(active: step.to == .active)
         model.applyLifecycle(driver.updates(for: .phaseChanged(from: step.from, to: step.to)))
         if step.to != .inactive { departure?.end(); departure = nil }
     }
@@ -97,6 +98,7 @@ struct HausXMPPApp: App {
         if inBackground { merge = ScenePhaseMerge(applied: .background) }
         let updates = driver.updates(for: .launched(inBackground: inBackground))
         guard inBackground else { return updates }
+        StorageParking.shared.sceneChanged(active: false)
         backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: PlatformApplication.didBecomeActiveNotification,
                                                                           object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {

@@ -278,6 +278,8 @@ private struct TerminationPermission: NSViewRepresentable {
     #if os(iOS)
     private var task: UIBackgroundTaskIdentifier
     private let onExpire: (@MainActor () -> Void)?
+    // Counted with `StorageParking` from init, even when iOS refused the time.
+    private var ended = false
     #else
     private var activity: (any NSObjectProtocol)?
     #endif
@@ -289,6 +291,7 @@ private struct TerminationPermission: NSViewRepresentable {
         self.name = name
         #if os(iOS)
         self.onExpire = onExpire
+        StorageParking.shared.hold()
         task = .invalid
         task = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
             MainActor.assumeIsolated { expire(name) }
@@ -302,6 +305,12 @@ private struct TerminationPermission: NSViewRepresentable {
             self?.end()
         }
         #endif
+    }
+
+    static func during(_ name: String, _ work: () async -> Void) async {
+        let activity = BackgroundActivity(name)
+        defer { activity.end() }
+        await work()
     }
 
     // nil on iOS, where the scene's own lifetime covers this work.
@@ -324,16 +333,121 @@ private struct TerminationPermission: NSViewRepresentable {
     }
     #endif
 
+    // On iOS the last end away from the front waits for `StorageParking`.
     func end() {
         #if os(iOS)
-        guard task != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(task)
-        task = .invalid
-        Self.log.notice("background activity ended: \(self.name, privacy: .public)")
+        guard !ended else { return }
+        ended = true
+        let task = task, name = name
+        self.task = .invalid
+        StorageParking.shared.release {
+            guard task != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(task)
+            Self.log.notice("background activity ended: \(name, privacy: .public)")
+        }
         #else
         guard let activity else { return }
         ProcessInfo.processInfo.endActivity(activity)
         self.activity = nil
         #endif
+    }
+}
+
+// iOS ends an app suspended holding a file lock in the App Group (0xdead10cc); an idle WAL connection locks the database
+// and its -shm. So the last background time away from the front ends only once every store has closed SQLite and may
+// not reopen until the front or new background time. A failed or late park keeps the time. The Mac never parks.
+@MainActor final class StorageParking {
+    static let shared = StorageParking()
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
+    let deadline: Duration = .seconds(2)
+    var clock: any Clock<Duration> = ContinuousClock()
+    private(set) var holders = 0
+    // Background time a failed park keeps until the front or another background time.
+    var kept: Int { waiting.count }
+    private var inFront = true
+    var parkStores: @MainActor () async -> Bool = { await MessageStore.parkAll() }
+    // Background time whose end waits for a park.
+    private var waiting: [@MainActor () -> Void] = []
+    private var parking: Task<Void, Never>?
+    // Counts every reopening, so a park that overlapped one parks again.
+    private var reopenings = 0
+
+    func sceneChanged(active: Bool) {
+        inFront = active
+        if active { resume() }
+    }
+
+    func hold() {
+        holders += 1
+        resume()
+    }
+
+    // `finish` ends the background time, at once unless it is the last held away from the front.
+    func release(_ finish: @escaping @MainActor () -> Void) {
+        holders -= 1
+        guard holders == 0, !inFront else { return finish() }
+        waiting.append(finish)
+        if parking == nil { parking = Task { await park() } }
+    }
+
+    // Returns once no park is under way.
+    func settled() async {
+        while let parking { await parking.value }
+    }
+
+    // Storage may reopen, and background time a park was holding back ends: the front or newer time covers the work.
+    private func resume() {
+        reopenings += 1
+        MessageStore.reopeningAllowed = true
+        endWaiting()
+    }
+
+    private func endWaiting() {
+        let finished = waiting
+        waiting = []
+        for finish in finished { finish() }
+    }
+
+    private func park() async {
+        defer { parking = nil }
+        var parked = false, started = reopenings - 1
+        // Background time begun meanwhile may have reopened a store and ended again: then parking starts over.
+        while started != reopenings {
+            // Background time still held, or the front, keeps storage open; its own end parks again.
+            guard holders == 0, !inFront else { return resume() }
+            started = reopenings
+            MessageStore.reopeningAllowed = false
+            parked = await parkWithinDeadline()
+        }
+        guard holders == 0, !inFront else { return resume() }
+        guard parked else { return Self.log.fault("storage not parked in time or refused: background time kept") }
+        guard !MessageStore.processHasOpenConnection else { return Self.log.fault("a SQLite connection is still open: background time kept") }
+        Self.log.notice("storage parked")
+        endWaiting()
+    }
+
+    private func parkWithinDeadline() async -> Bool {
+        let race = ParkingRace()
+        let parkStores = self.parkStores, clock = self.clock, deadline = self.deadline
+        return await withCheckedContinuation { continuation in
+            race.continuation = continuation
+            let timer = Task { @MainActor in
+                guard (try? await clock.sleep(for: deadline)) != nil else { return }
+                race.finish(false)
+            }
+            Task { @MainActor in
+                let parked = await parkStores()
+                timer.cancel()
+                race.finish(parked)
+            }
+        }
+    }
+}
+
+@MainActor private final class ParkingRace {
+    var continuation: CheckedContinuation<Bool, Never>?
+    func finish(_ parked: Bool) {
+        continuation?.resume(returning: parked)
+        continuation = nil
     }
 }
