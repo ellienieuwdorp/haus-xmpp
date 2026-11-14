@@ -67,15 +67,10 @@ extension OMEMOService {
     func refreshGroupLocked(account: String, room: String, transport: any OMEMOGroupTransport) async throws -> GroupEncryptionOverview {
         let snapshot = try await transport.refreshGroupRoom(room)
         guard snapshot.room == room, snapshot.members.contains(account), snapshot.members.count <= 100 else { throw XMPPGroupError.incompleteMembership }
-        // Every member's devices as a chat refresh with that member stores them, the account's own read once for all.
-        let (fetchedRevision, fetched) = try await load(account)
-        var refreshedState = fetched
         let owners = Array(Set(snapshot.members + [account])).sorted()
-        var lookups = DeviceLookups(transport: transport)
-        await lookups.ask(lists: listLookups(owners), bundles: try await advertisedLookups(owners, account: account, profile: .modern, state: fetched))
-        let refreshed = try await mergeRefreshed(owners, account: account, profile: .modern, lookups: lookups, into: &refreshedState)
-        try await save(refreshedState, revision: fetchedRevision, account: account)
-        guard refreshed.otherVersionOnly.isEmpty else { throw OMEMOError.unsupportedProfile }
+        if !freshDevices.current(owners, account: account, profile: .modern, epoch: await transport.omemoDeviceEpoch(), noOtherVersionOnly: true) {
+            try await refreshMembersLocked(owners, account: account, transport: transport)
+        }
         let confirmed = try await transport.refreshGroupRoom(room)
         guard confirmed.members == snapshot.members else { throw XMPPGroupError.membershipChanged }
         let (revision, old) = try await load(account)

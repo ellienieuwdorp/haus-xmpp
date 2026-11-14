@@ -9,6 +9,11 @@ public protocol OMEMOTransport: Sendable {
     func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle
     func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws
     func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws
+    /// Nil when the transport cannot vouch for lookups it answered; every refresh then asks again.
+    func omemoDeviceEpoch() async -> XMPPDeviceEpoch?
+}
+extension OMEMOTransport {
+    public func omemoDeviceEpoch() -> XMPPDeviceEpoch? { nil }
 }
 extension XMPPClient: OMEMOTransport {}
 
@@ -29,6 +34,7 @@ public actor OMEMOService {
     // Versions whose bundle the latest `initialize` published; only those may be advertised by
     // `maintainLocalAdvertisement`.
     var publishedBundles: [String: Set<XMPPOMEMOProfile>] = [:]
+    var freshDevices = DeviceFreshness()
     public init(store: MessageStore, protection: StateProtection) {
         self.store = store; self.protection = protection
     }
@@ -45,6 +51,7 @@ public actor OMEMOService {
         let owners = Array(Set([account, peer])).sorted()
         // Both versions of every owner's list are read, so the version probe below needs no lookup of its own.
         var lookups = DeviceLookups(transport: transport)
+        let reading = await transport.omemoDeviceEpoch().map { DeviceFreshness.Reading(epoch: $0, at: freshDevices.now()) }
         let selected = requested ?? state.profiles[peer]
         var known: [DeviceLookups.Bundle] = []
         if let selected { known = try await advertisedLookups(owners, account: account, profile: selected, state: state) }
@@ -65,6 +72,9 @@ public actor OMEMOService {
         if updateSelection, !(probedEmpty && !peerAdvertises) { state.profiles[peer] = profile }
         if updateSelection { state.incompatiblePeers[peer] = incompatible }
         try await save(state, revision: revision, account: account)
+        if let reading, await transport.omemoDeviceEpoch()?.isUnchanged(since: reading.epoch) == true {
+            freshDevices.record(owners, account: account, profile: profile, reading: reading, otherVersionOnly: refreshed.otherVersionOnly)
+        }
         var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible,
                                   waiting: try await waitingDevices(state, account: account, peer: peer, sending: profile))
         result.unavailableDevices = refreshed.unavailable
@@ -127,24 +137,6 @@ public actor OMEMOService {
             state.devices.append(device)
             state.bundles[device.id] = bundle
         }
-    }
-
-    // Receive path for an unseen sender device: one device list and one bundle, leaving selection and other devices
-    // alone. An unlisted device or a missing bundle leaves state unchanged and the caller waits for keys.
-    func refreshSenderDeviceLocked(account: String, owner: String, deviceID: UInt32, profile: XMPPOMEMOProfile,
-                                   transport: any OMEMOTransport) async throws {
-        let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
-        guard ids.contains(deviceID) else { return }
-        // A given-up own device is not added until reclaimed; its message waits until then.
-        if owner == account, try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed]).contains(deviceID) { return }
-        let bundle: XMPPOMEMOBundle
-        do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: deviceID, profile: profile) }
-        catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse { return }
-        try validateBundle(bundle, id: deviceID, profile: profile)
-        let (revision, old) = try await load(account)
-        var state = old
-        mergeDevice(bundle, owner: owner, profile: profile, id: deviceID, into: &state)
-        try await save(state, revision: revision, account: account)
     }
 
     public func overview(account: String, peer: String) async throws -> EncryptionOverview {
@@ -408,7 +400,8 @@ public actor OMEMOService {
                     let saved = try wire.map { try JSONDecoder().decode(PreparedEnvelope.self, from: $0) }
                     let refresh = [message.chatID, saved?.envelope.profile.rawValue ?? "selected"].joined(separator: " ")
                     if !refreshed.contains(refresh) {
-                        _ = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)
+                        try await self.refreshUnlessCurrent(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport,
+                                                            updateSelection: saved == nil)
                         refreshed.insert(refresh)
                     }
                     if let saved {
@@ -596,7 +589,7 @@ public actor OMEMOService {
                 let profile: XMPPOMEMOProfile = legacy ? .legacy : .modern
                 guard selected.profiles[update.chatID] == profile else { throw update.kind == .retraction || update.kind == .correction ? OMEMOError.unsupportedMessageUpdate : .unsupportedEncryptedReactions }
                 if !refreshed.contains([update.chatID, profile.rawValue]) {
-                    _ = try await refreshLocked(account: account, peer: update.chatID, profile: profile, transport: transport, updateSelection: false)
+                    try await refreshUnlessCurrent(account: account, peer: update.chatID, profile: profile, transport: transport, updateSelection: false)
                     refreshed.insert([update.chatID, profile.rawValue])
                 }
                 if let wire = try await store.updateWire(accountID: account, updateID: update.id) {
