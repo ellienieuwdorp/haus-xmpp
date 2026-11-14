@@ -142,28 +142,39 @@ public struct ConnectionSetup: Sendable {
         await uploads
     }
 
-    // Features, then carbons when offered. nil ends setup: cancelled, or carbons failed (already published).
+    // Features and carbons in one round trip. Carbons are asked for beside discovery unless the features in hand rule
+    // them out, and only a server that lists them fails setup by refusing. nil ends setup: cancelled, or carbons failed
+    // (already published).
     private func negotiate(_ operations: Operations, sink: @escaping Sink) async -> Set<String>? {
-        var step = Self.featuresStep
-        await sink(.step(step))
+        await sink(.step(Self.featuresStep))
+        let known = skipsFeatures ? memory.features : nil
+        let enables = !skipsCarbons && (known ?? memory.features)?.contains(Self.carbonsFeature) != false
+        async let carbons: (any Error)? = {
+            guard enables else { return nil }
+            do { try await operations.enableCarbons() } catch { return error }
+            return nil
+        }()
         let features: Set<String>
-        if skipsFeatures, let known = memory.features {
+        if let known {
             features = known
         } else {
             do { features = try await operations.features() } catch {
                 guard !Task.isCancelled, !(error is CancellationError) else { return nil }
-                await sink(.degraded(step: step, detail: Self.detail(error)))
+                await sink(.degraded(step: Self.featuresStep, detail: Self.detail(error)))
                 features = memory.features ?? Self.assumedFeatures
             }
         }
+        let refusal = await carbons
         guard features.contains(Self.carbonsFeature), !skipsCarbons else { return features }
-        do {
-            try Task.checkCancellation()
-            step = Self.carbonsStep
-            await sink(.step(step))
-            try await operations.enableCarbons()
-        } catch {
-            await publishFailure(StepFailure(step: step, error: error), sink: sink)
+        guard !Task.isCancelled else { return nil }
+        await sink(.step(Self.carbonsStep))
+        // Listed but never asked: the features in hand said otherwise.
+        let failure: (any Error)?
+        if enables { failure = refusal } else {
+            do { try await operations.enableCarbons(); failure = nil } catch { failure = error }
+        }
+        if let failure {
+            await publishFailure(StepFailure(step: Self.carbonsStep, error: failure), sink: sink)
             return nil
         }
         return features
