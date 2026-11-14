@@ -1,4 +1,5 @@
 import Foundation
+import MessagingCore
 
 // Chat-level trust is separate: it comes from stored device trust.
 enum SessionState: Equatable {

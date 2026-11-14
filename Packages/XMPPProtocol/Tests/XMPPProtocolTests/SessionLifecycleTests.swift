@@ -176,6 +176,31 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
+    // Out of time, the owner cannot wait on a silent server: the hard close ends the farewell and every pending request
+    // at once, writes nothing more and leaves the session saved, so the next connect resumes it.
+    @Test func hardCloseEndsAStuckFarewellAndKeepsTheSessionResumable() async throws {
+        let server = try await LoopbackServer.start()
+        let persistence = Persistence(nil)
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        let pending = Task { try await client.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: .seconds(60)) }
+        #expect(try await server.next().name == "iq")
+        let closing = Task { await client.disconnectAndWait() }
+        #expect(try await server.next().name == "r")
+        #expect(try await server.next().name == "iq")
+        let mark = await server.mark()
+        await client.disconnect()
+        await closing.value
+        // Its own limit is a minute away: only the closed socket ends it now.
+        await #expect(throws: XMPPClientError.connectionClosed) { try await pending.value }
+        #expect(try await server.remainder().isEmpty)
+        #expect(await !server.written(since: mark).contains("</stream:stream>"))
+        #expect(await persistence.value?.streamID == "s2")
+        #expect(await !client.isOnline)
+        await server.stop()
+    }
+
     // A probe on demand (the app was told the server pushed for this session): an answer keeps the stream, silence
     // ends it so the owner reconnects.
     @Test func livenessProbeKeepsAnAnsweringStreamAndEndsASilentOne() async throws {
@@ -192,6 +217,44 @@ struct SessionLifecycleTests {
         #expect(try await server.next().name == "r")
         #expect(await !silent)
         #expect(await !client.isOnline)
+        await server.stop()
+    }
+
+    // The background grace waits for this: a message counts until the server's `<a/>` covers it; presence never does.
+    @Test func aMessageAwaitsAcknowledgementUntilTheServerCountsIt() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        try await bindFresh(client, on: server)
+        // The initial presence occupies the first slot.
+        #expect(await !client.awaitsAcknowledgement())
+        _ = try await client.sendMessage(to: "bob@localhost", body: "hi", id: "m1")
+        #expect(try await server.next().name == "message")
+        #expect(await client.awaitsAcknowledgement())
+        // The client handles stanzas in order, so its answer to the `<r/>` means the `<a/>` is in.
+        try await server.send("<a xmlns='urn:xmpp:sm:3' h='2'/><r xmlns='urn:xmpp:sm:3'/>")
+        #expect(try await server.next().name == "a")
+        #expect(await !client.awaitsAcknowledgement())
+        await client.disconnect()
+        #expect(await !client.awaitsAcknowledgement())
+        await server.stop()
+    }
+
+    // A deadline cannot wait for the farewell: abort cancels the socket without the actor, and the stream ends as for
+    // any socket failure, so a disconnect still reaches the consumer.
+    @Test func abortEndsTheStreamWithoutAFarewell() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        let ended = Task {
+            for await event in client.events { if case .state(.disconnected) = event { return true } }
+            return false
+        }
+        try await bindFresh(client, on: server)
+        client.abort()
+        #expect(await ended.value)
+        #expect(await !client.isOnline)
+        #expect(try await server.remainder().isEmpty)
         await server.stop()
     }
 

@@ -11,8 +11,9 @@ struct NotificationAccount: Codable, Sendable, Equatable {
     let security: XMPPTransportSecurity
     // False: that endpoint only (a manual server, the lab). True: SRV discovery when it fails.
     let discoversEndpoint: Bool
-    // Set once SCRAM succeeded; PLAIN is refused from then on (downgrade protection).
-    let requiresSCRAM: Bool
+    // What earlier sign-ins proved the server offers (SCRAM, SASL2, channel binding); less is refused as a downgrade.
+    let pin: XMPPAuthenticationPin
+    var requiresSCRAM: Bool { pin.scram }
     let domain: String
     let username: String
     let password: String
@@ -20,9 +21,9 @@ struct NotificationAccount: Codable, Sendable, Equatable {
 
     // The defaults read records written before discovery and SCRAM: direct TLS to one fixed endpoint, with PLAIN.
     init(accountID: String, host: String, port: UInt16, security: XMPPTransportSecurity = .directTLS, discoversEndpoint: Bool = false,
-         requiresSCRAM: Bool = false, domain: String, username: String, password: String, push: XMPPPushConfiguration?) {
+         pin: XMPPAuthenticationPin = .none, domain: String, username: String, password: String, push: XMPPPushConfiguration?) {
         self.accountID = accountID; self.host = host; self.port = port; self.security = security
-        self.discoversEndpoint = discoversEndpoint; self.requiresSCRAM = requiresSCRAM
+        self.discoversEndpoint = discoversEndpoint; self.pin = pin
         self.domain = domain; self.username = username; self.password = password; self.push = push
     }
 
@@ -32,26 +33,41 @@ struct NotificationAccount: Codable, Sendable, Equatable {
                   port: try values.decode(UInt16.self, forKey: .port),
                   security: try values.decodeIfPresent(XMPPTransportSecurity.self, forKey: .security) ?? .directTLS,
                   discoversEndpoint: try values.decodeIfPresent(Bool.self, forKey: .discoversEndpoint) ?? false,
-                  requiresSCRAM: try values.decodeIfPresent(Bool.self, forKey: .requiresSCRAM) ?? false,
+                  pin: XMPPAuthenticationPin(scram: try values.decodeIfPresent(Bool.self, forKey: .requiresSCRAM) ?? false,
+                                             sasl2: try values.decodeIfPresent(Bool.self, forKey: .requiresSASL2) ?? false,
+                                             channelBinding: try values.decodeIfPresent(Bool.self, forKey: .requiresChannelBinding) ?? false),
                   domain: try values.decode(String.self, forKey: .domain), username: try values.decode(String.self, forKey: .username),
                   password: try values.decode(String.self, forKey: .password), push: try values.decodeIfPresent(XMPPPushConfiguration.self, forKey: .push))
     }
 
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(accountID, forKey: .accountID); try values.encode(host, forKey: .host); try values.encode(port, forKey: .port)
+        try values.encode(security, forKey: .security); try values.encode(discoversEndpoint, forKey: .discoversEndpoint)
+        try values.encode(pin.scram, forKey: .requiresSCRAM); try values.encode(pin.sasl2, forKey: .requiresSASL2)
+        try values.encode(pin.channelBinding, forKey: .requiresChannelBinding)
+        try values.encode(domain, forKey: .domain); try values.encode(username, forKey: .username)
+        try values.encode(password, forKey: .password); try values.encodeIfPresent(push, forKey: .push)
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case accountID, host, port, security, discoversEndpoint, requiresSCRAM, domain, username, password, push
+        case accountID, host, port, security, discoversEndpoint, requiresSCRAM, requiresSASL2, requiresChannelBinding, domain, username
+        case password, push
     }
 
     var endpoint: XMPPEndpoint { XMPPEndpoint(host: host, port: port, security: security) }
+    // The extensions sign in without carbons, with this install's client id and the shared FAST token.
+    var backgroundSASL2: XMPPSASL2Configuration { SharedSession.sasl2(accountID: accountID, carbons: false) }
     var route: XMPPRoute { discoversEndpoint ? .discover(preferred: host.isEmpty ? nil : endpoint) : .fixed(endpoint) }
 
     func replacingPush(_ push: XMPPPushConfiguration?) -> Self {
         NotificationAccount(accountID: accountID, host: host, port: port, security: security, discoversEndpoint: discoversEndpoint,
-                            requiresSCRAM: requiresSCRAM, domain: domain, username: username, password: password, push: push)
+                            pin: pin, domain: domain, username: username, password: password, push: push)
     }
 
     func connected(_ session: XMPPConnectedSession) -> Self {
         NotificationAccount(accountID: accountID, host: session.endpoint.host, port: session.endpoint.port, security: session.endpoint.security,
-                            discoversEndpoint: discoversEndpoint, requiresSCRAM: requiresSCRAM || session.authenticatedWithSCRAM,
+                            discoversEndpoint: discoversEndpoint, pin: pin.union(session.pin),
                             domain: domain, username: username, password: password, push: push)
     }
 
@@ -84,14 +100,15 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         try NotificationAccessGate.enable(at: NotificationAccessGate.location())
     }
 
-    static func remove() throws {
+    // The account's FAST token goes with the record it stands beside.
+    static func remove(fastTokenOf account: String) throws {
         var disabled = false
         do {
             try NotificationAccessGate.disable(at: NotificationAccessGate.location())
             disabled = true
         } catch { /* Still attempt credential deletion if the separate tombstone cannot be saved. */ }
         let status = SecItemDelete(keychainQuery as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        guard status == errSecSuccess || status == errSecItemNotFound, (try? FastTokenKeychain.remove(account: account)) != nil else {
             throw Failure.credentialsRemain(backgroundDisabled: disabled)
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import MessagingCore
 import XMPPProtocol
 
 // Blocking is XEP-0191; reports ride on a block (XEP-0377) and may quote archived stanza IDs only when the server keeps

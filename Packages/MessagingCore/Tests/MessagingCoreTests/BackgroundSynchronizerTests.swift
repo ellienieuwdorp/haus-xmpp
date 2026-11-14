@@ -189,6 +189,39 @@ struct BackgroundSynchronizerTests {
         }
     }
 
+    // The read state is fetched beside the own archive's walk, whose page here waits for that fetch, and applied only
+    // once the walk committed, before the direct presentation claims.
+    @Test func theReadStateIsFetchedBesideTheOwnArchiveAndAppliedAfterItsCommit() async throws {
+        try await withStore { store in
+            let run = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: false, trouble: nil)
+            let fetching = CatchUpMark(), appliedAt = BackgroundProbe()
+            try await bounded {
+                try await run.run(budget: .seconds(5), onPull: {
+                    let cursor = try? await store.archiveCheckpoint(accountID: "alice@example.org", archiveID: "alice@example.org")?.cursor
+                    await appliedAt.record(cursor ?? "none")
+                }, onFetch: { await fetching.reach() }, beforeOwnPage: {
+                    while await !fetching.reached { await Task.yield() }
+                })
+            }
+            #expect(await appliedAt.events == ["own-1"])
+            #expect(await run.trace.events == ["pull", "post"])
+            #expect(await run.posting.added.map(\.body) == ["Direct"])
+        }
+    }
+
+    // Without rooms the direct messages are still posted as the own archive commits, before the transport's farewell,
+    // and the final presentation only commits.
+    @Test func withoutRoomsTheDirectMessagesArePostedBeforeTheTransportStops() async throws {
+        try await withStore { store in
+            var fixture = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: false, trouble: nil)
+            fixture.noRooms = true
+            let run = fixture
+            try await bounded { try await run.run(budget: .seconds(5), giveWay: GiveWaySwitch()) }
+            #expect(await run.trace.events == ["pull", "post", "stop"])
+            #expect(run.progress.isCommitted && run.progress.report.posted == 1)
+        }
+    }
+
     // The early presentation's last add (the one with the sound) fails: the final presentation posts both again and
     // plays the run's one sound, and the report counts every add that completed.
     @Test func aDirectPresentationThatFailsPartWayLeavesTheSoundToTheFinalOne() async throws {
@@ -247,7 +280,7 @@ struct BackgroundSynchronizerTests {
             let third = Task { await coordinator.deliver(ticket: expiring) }
             try await eventually("both pushes to join") { joined.progress?.joined == 3 }
             #expect(coordinator.activeRuns == 1)
-            #expect(coordinator.expire(ticket: expiring) == .fallback(.expired))
+            #expect(await coordinator.expire(ticket: expiring) == .fallback(.expired))
             // The stalled room is cut a second after the post.
             try await run.clock.sleeper(until: .seconds(1))
             run.clock.advance(by: .seconds(1))

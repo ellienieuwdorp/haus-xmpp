@@ -18,6 +18,11 @@ public enum NotificationIdentity {
         "f-" + hex("xmpp-notification-fallback-v1\u{0}" + accountID)
     }
 
+    /// The one notice that a message is still unsent; posting again replaces it.
+    public static func unsent(accountID: String) -> String {
+        "u-" + hex("xmpp-notification-unsent-v1\u{0}" + accountID)
+    }
+
     /// The one summary for chats a run had no room for; a later run replaces or removes it.
     public static func overflow(accountID: String) -> String {
         "o-" + hex("xmpp-notification-overflow-v1\u{0}" + accountID)

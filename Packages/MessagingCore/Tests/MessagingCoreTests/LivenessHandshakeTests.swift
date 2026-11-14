@@ -90,6 +90,27 @@ struct LivenessHandshakeTests {
         #expect(LivenessHandshake.answer(to: LivenessRequest(sentAt: now), conditions: conditions, now: now) == nil)
     }
 
+    // In its background grace the iPhone answers while it holds the lease with the stream up, though the transport is
+    // no longer wanted and new work is refused; never for another account, and never once the grace is over.
+    @Test func anIPhoneInItsGraceAnswersOnlyWithTheLeaseAndALiveStream() {
+        let now = Date()
+        func answers(_ conditions: LivenessConditions) -> Bool {
+            LivenessHandshake.answer(to: LivenessRequest(sentAt: now), conditions: conditions, now: now) != nil
+        }
+        let grace = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: true, servesExtensionAccount: true,
+                                       presentsCatchUp: false, graceWithLiveStream: true)
+        #expect(answers(grace))
+        var without = grace
+        without.ownsLease = false
+        #expect(!answers(without))
+        without = grace
+        without.servesExtensionAccount = false
+        #expect(!answers(without))
+        without = grace
+        without.graceWithLiveStream = false
+        #expect(!answers(without), "a quiesce after the grace")
+    }
+
     // A ring delivered late (an app resumed from suspension) or a request from the future is not answered.
     @Test func onlyAFreshRequestIsAnswered() {
         let sent = Date(timeIntervalSince1970: 1_000)

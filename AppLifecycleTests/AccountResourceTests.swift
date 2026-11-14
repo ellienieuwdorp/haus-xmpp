@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import MessagingCore
 import XMPPProtocol
 @testable import HausXMPP
 
@@ -70,11 +71,14 @@ final class AccountResourceTests: XCTestCase {
         BlockedAddresses.save(XMPPBlocklist(["spam@example.org"]), accountID: account, defaults: group)
         ShareSuggestionSetting.set(false, accountID: account, defaults: group)
         _ = SharedSession.resource(accountID: account, defaults: group)
+        _ = SharedSession.clientID(accountID: account, defaults: group)
         _ = UploadServiceMemory(defaults: app, mirror: group)
             .settle(account: account, previous: nil, discovery: .success(XMPPUploadService(jid: "upload.example.org", maximumFileSize: 1)))
-        let profiles = ServerProfileMemory(defaults: app)
+        let profiles = ServerProfileMemory(defaults: app, streamProfiles: group)
         profiles.discovered(["urn:xmpp:mam:2"], account: account)
         profiles.carbonsEnabled(account: account, stream: "stream-1")
+        profiles.saveStreamProfile(XMPPStreamProfile(endpoint: XMPPEndpoint(host: "xmpp.example.org", port: 5223, security: .directTLS),
+                                                     mechanisms: ["SCRAM-SHA-256"], streamManagement: true), account: account)
 
         let declared = { (domain: AccountResource.Domain) in Set(self.preferences.filter { $0.1.contains(domain) }.map(\.2)) }
         for (domain, defaults) in [(AccountResource.Domain.app, app), (.group, group)] {

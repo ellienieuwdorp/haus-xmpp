@@ -16,6 +16,15 @@ int om_generate_shared_identity(om_engine *, om_engine *source,
 int om_replenish(om_engine *, uint32_t first_id, uint32_t count);
 size_t om_record_count(om_engine *);
 const char *om_record_name(om_engine *, size_t index);
+// Names and values in list order, valid until the next write.
+size_t om_record_list(om_engine *, const char **names, const uint8_t **values,
+                      size_t *lengths, size_t capacity);
+size_t om_prekey_count(om_engine *);
+// Every record write after begin is undone by revert or kept by keep; one
+// change at a time.
+int om_change_begin(om_engine *);
+void om_change_keep(om_engine *);
+int om_change_revert(om_engine *);
 int om_record_read(om_engine *, const char *key, om_bytes *out);
 int om_record_write(om_engine *, const char *key, const uint8_t *bytes,
                     size_t length);

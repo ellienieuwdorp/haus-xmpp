@@ -1,3 +1,4 @@
+import MessagingCore
 import OMEMO
 import XCTest
 import XMPPProtocol
@@ -215,7 +216,7 @@ final class ConnectionSetupTests: XCTestCase {
             XCTAssertEqual(events.last, .settled)
             let marks = await recorder.marks
             XCTAssertTrue(marks.contains("walk-end"))
-            XCTAssertEqual(marks.contains("carbons"), known != nil, "carbons only when the known features list them")
+            XCTAssertEqual(events.contains(.step("carbons")), known != nil, "a carbons step only when the known features list them")
         }
 
         let tolerant = Recorder()
@@ -229,8 +230,8 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertTrue(tolerantEvents.contains(.ready))
         XCTAssertEqual(tolerantEvents.last, .settled)
         XCTAssertFalse(tolerantEvents.contains { if case .degraded = $0 { true } else { false } })
+        XCTAssertFalse(tolerantEvents.contains(.step("carbons")))
         let marks = await tolerant.marks
-        XCTAssertFalse(marks.contains("carbons"))
         XCTAssertTrue(marks.contains("walk-start"))
     }
 

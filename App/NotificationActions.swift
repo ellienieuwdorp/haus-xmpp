@@ -5,6 +5,7 @@ import UIKit
 import UserNotifications
 import MessageStore
 import MessagingCore
+import XMPPProtocol
 
 enum NotificationActionIdentifier {
     static let reply = "reply"
@@ -108,6 +109,21 @@ struct NotificationActionBudget: Sendable, Equatable {
     func remaining(at now: ContinuousClock.Instant, atMost limit: Duration) -> Duration { max(.zero, min(limit, deadline - now)) }
     func presentationTimeout(at now: ContinuousClock.Instant) -> Duration {
         max(.zero, min(Self.presentation, deadline + Self.teardown - .seconds(2) - now))
+    }
+}
+
+// The action's own connection: stream management on the store, the app's resource and stream profile, and the away
+// presence, because the user is not in front and the session must not make them look online.
+enum NotificationActionConnection {
+    static func client(persistence: StreamPersistence, resource: String, profiles: StreamProfileMemory, sasl2: XMPPSASL2Configuration,
+                       availability: XMPPAvailability) async throws -> XMPPClient {
+        let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
+        try await client.configureStreamManagement(persistence: persistence)
+        try await client.configureResource(resource)
+        try await client.configureStreamProfiles(profiles)
+        try await client.configureSASL2(sasl2)
+        try await client.setAvailability(availability, clientActive: false)
+        return client
     }
 }
 

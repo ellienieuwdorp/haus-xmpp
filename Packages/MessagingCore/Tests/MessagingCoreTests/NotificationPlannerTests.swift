@@ -174,6 +174,8 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(!thread.contains("peer"))
     let failure = NotificationIdentity.replyFailure(accountID: "me@example.org", chatID: "peer@example.org")
     #expect(failure.hasPrefix("e-") && !failure.contains("peer") && failure != NotificationIdentity.replyFailure(accountID: "me@example.org", chatID: "carol@example.org"))
+    let unsent = NotificationIdentity.unsent(accountID: "me@example.org")
+    #expect(unsent.hasPrefix("u-") && !unsent.contains("example") && unsent != NotificationIdentity.unsent(accountID: "other@example.org"))
 }
 
 extension NotificationCandidate {

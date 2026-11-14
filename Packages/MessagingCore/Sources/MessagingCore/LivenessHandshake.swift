@@ -30,16 +30,22 @@ public struct LivenessConditions: Sendable, Equatable {
     public var ownsLease: Bool
     public var servesExtensionAccount: Bool
     /// The app may sleep or reconnect after answering, so the message can arrive in its next catch-up; only an app
-    /// that posts banners for caught-up messages keeps the promise. The iPhone drops them, so it never answers.
+    /// that posts banners for caught-up messages keeps the promise. The iPhone drops them, so in front it never answers.
     public var presentsCatchUp: Bool
+    /// The iPhone in its background grace with the stream up: what the server pushed for arrives on that stream, and
+    /// the app presents it as the extension would, or posts the extension's fallback if its probe finds the stream dead.
+    public var graceWithLiveStream: Bool
 
-    public init(wantsConnection: Bool, quiescing: Bool, ownsLease: Bool, servesExtensionAccount: Bool, presentsCatchUp: Bool) {
+    public init(wantsConnection: Bool, quiescing: Bool, ownsLease: Bool, servesExtensionAccount: Bool, presentsCatchUp: Bool,
+                graceWithLiveStream: Bool = false) {
         self.wantsConnection = wantsConnection; self.quiescing = quiescing
         self.ownsLease = ownsLease; self.servesExtensionAccount = servesExtensionAccount
-        self.presentsCatchUp = presentsCatchUp
+        self.presentsCatchUp = presentsCatchUp; self.graceWithLiveStream = graceWithLiveStream
     }
 
-    var canPromise: Bool { wantsConnection && !quiescing && ownsLease && servesExtensionAccount && presentsCatchUp }
+    var canPromise: Bool {
+        ownsLease && servesExtensionAccount && (wantsConnection && !quiescing && presentsCatchUp || graceWithLiveStream)
+    }
 }
 
 /// How the extension rings a running app and reads its answer.

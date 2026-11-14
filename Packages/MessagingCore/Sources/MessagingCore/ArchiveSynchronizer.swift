@@ -31,12 +31,13 @@ public enum BackfillOutcome: Sendable, Equatable {
 }
 
 /// One bounded page at a time. Ratchet, message or pending-ciphertext commits precede the archive cursor, which
-/// precedes the SM handled acknowledgement. Repeating a partial page is safe: OMEMO replay identity is independent
-/// of the archive and outer stanza identifiers. Without a forward checkpoint a walk starts at the newest page
-/// (`<before/>`) and records a backward cursor that `backfill` pages through on demand.
+/// precedes the SM handled acknowledgement of the page; results held ahead of the walk are acknowledged on arrival.
+/// Repeating a partial page is safe: OMEMO replay identity is independent of the archive and outer stanza
+/// identifiers. Without a forward checkpoint a walk starts at the newest page (`<before/>`) and records a backward
+/// cursor that `backfill` pages through on demand.
 public struct ArchiveSynchronizer: Sendable {
-    private let store: MessageStore
-    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    let store: MessageStore
+    static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
     public init(store: MessageStore) { self.store = store }
 
     /// `ownArchiveWalked` runs before the first room; a throw from it ends the walk and closes the stream.
@@ -46,7 +47,10 @@ public struct ArchiveSynchronizer: Sendable {
                             ownArchiveWalked: (@Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void)? = nil) async throws -> ArchiveSyncOutcome {
         var operations = productionOperations(account: account, client: client, encryption: encryption, progress: progress)
         if let ownArchiveWalked { operations.ownArchiveWalked = ownArchiveWalked }
-        return try await synchronize(account: account, operations: operations)
+        let outcome = try await synchronize(account: account, operations: operations)
+        // Prekeys the walk consumed are published once, after it; a failure stays pending in the state.
+        try? await encryption.flushBundlePublications(account: account, transport: client)
+        return outcome
     }
 
     /// Pages backwards from the archive's backfill cursor, committing each page (messages, cursor, acknowledgement)
@@ -55,8 +59,11 @@ public struct ArchiveSynchronizer: Sendable {
     /// forward and never backfills.
     public func backfill(account: String, archive: String?, pageBudget: Int, client: XMPPClient, encryption: OMEMOService,
                          progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws -> BackfillOutcome {
-        try await backfill(account: account, archive: archive, pageBudget: pageBudget,
-                           operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
+        let outcome = try await backfill(account: account, archive: archive, pageBudget: pageBudget,
+                                         operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
+        // A publication that fails stays pending in the state for the next flush.
+        try? await encryption.flushBundlePublications(account: account, transport: client)
+        return outcome
     }
 
     /// Ask just before joining, so the first walk can tell existing history from what arrived after the join, in
@@ -89,11 +96,16 @@ public struct ArchiveSynchronizer: Sendable {
     // Shared by both walks, so their processing and acknowledgement cannot drift.
     private func productionOperations(account: String, client: XMPPClient, encryption: OMEMOService,
                                       progress: (@Sendable (ArchiveSyncProgress) async -> Void)?) -> ArchiveSyncOperations {
-        ArchiveSyncOperations(
+        let walk = UUID()
+        return ArchiveSyncOperations(
             knownRooms: { Array(try await encryption.knownGroupRooms(account: account).keys).sorted() },
             refreshRoom: { room in _ = try await client.refreshGroupRoom(room) },
-            fetchPage: { bound, room in try await client.fetchArchivePage(bound, limit: 100, room: room) },
+            fetchPage: { bound, room in try await client.fetchArchivePage(bound, limit: 100, room: room, walk: walk) },
+            newestEntry: { room in try await client.newestArchiveEntry(room: room) },
+            prefetchesPages: true,
+            pagesFromNewest: true,
             process: { archived in try await self.process(account: account, archived: archived, encryption: encryption, transport: client) },
+            processPage: { entries in try await self.processPage(account: account, entries: entries, encryption: encryption, transport: client) },
             acknowledge: { tokens in
                 try await client.acknowledgeInbound(tokens)
                 // Lets the server count our journal so it trims the page, room and bundle IQs. A server without SM
@@ -104,6 +116,28 @@ public struct ArchiveSynchronizer: Sendable {
             progress: { await progress?($0) },
             isOnline: { await client.isOnline }
         )
+    }
+
+    // Consecutive encrypted direct messages, with the plain receipts between them, go to OMEMO as one run, which commits
+    // the messages together; every other entry is processed on its own between runs, so writes stay in archive order.
+    func processPage(account: String, entries: [XMPPArchiveMessage], encryption: OMEMOService, transport: XMPPClient) async throws {
+        var run: [ArchivedDirectEntry] = []
+        for archived in entries {
+            try Task.checkCancellation()
+            if let entry = Self.directEntry(archived) { run.append(entry); continue }
+            if !run.isEmpty { try await encryption.receiveArchived(account: account, entries: run, transport: transport) }
+            run = []
+            try await process(account: account, archived: archived, encryption: encryption, transport: transport)
+        }
+        if !run.isEmpty { try await encryption.receiveArchived(account: account, entries: run, transport: transport) }
+    }
+
+    // What `process` would hand to `receive` or `receivePlaintextReceipt`, checked in its order.
+    static func directEntry(_ archived: XMPPArchiveMessage) -> ArchivedDirectEntry? {
+        guard archived.messageError == nil, archived.rejectedContent == nil, archived.encryptedGroupMessage == nil else { return nil }
+        if let encrypted = archived.encryptedMessage { return .encrypted(ArchivedEncryptedMessage(message: encrypted, sentAt: archived.timestamp)) }
+        guard archived.reaction == nil, archived.retraction == nil, let receipt = archived.receipt else { return nil }
+        return .receipt(receipt, sentAt: archived.timestamp)
     }
 
     // Every path is durable before it returns; a throw means nothing durable exists for the entry and the page must
@@ -181,6 +215,14 @@ public struct ArchiveSynchronizer: Sendable {
         }
     }
 
+    // The connection stays, so nothing fetched ahead may stay unacknowledged on it.
+    private static func endWalk(after error: any Error, room: String?, source: ArchivePageSource, operations: ArchiveSyncOperations) async throws {
+        guard await endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
+        log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(describe(error), privacy: .public)")
+        let ahead = await source.cancel()
+        if !ahead.isEmpty { try await operations.acknowledge(ahead) }
+    }
+
     // Servers compare archive times at whole-second or coarser precision; repeated entries are harmless.
     static let reanchorMargin: TimeInterval = 2
 
@@ -191,19 +233,24 @@ public struct ArchiveSynchronizer: Sendable {
             guard Set(rooms).count == rooms.count, !rooms.contains(account) else { throw XMPPIQError.malformedResponse }
             // Own-archive group entries are validated by OMEMO against persisted room membership, so no refresh is
             // needed. An archived occupant nickname alone never recovers a real sender JID.
+            // Beside the own archive's walk: a prelude processes nothing, so entries are decrypted in the same order.
+            async let preludes = prepareRooms(account: account, rooms: rooms, operations: operations)
             let ownArchiveComplete = try await synchronizePages(account: account, room: nil, operations: operations)
             try await operations.ownArchiveWalked(ownArchiveComplete, rooms.count)
+            let prepared = try await preludes
             var unfinishedRooms: [String] = []
             for room in rooms {
                 try Task.checkCancellation()
                 do {
-                    try await operations.refreshRoom(room)
+                    // A prelude's failure counts here, after the own archive, as the room's own refresh would.
+                    if let prelude = prepared[room] { try prelude.refresh.get() } else { try await operations.refreshRoom(room) }
                 } catch {
                     guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
                     Self.log.notice("room skipped before its archive walk: \(Self.describe(error), privacy: .public)")
                     unfinishedRooms.append(room)
                     continue
                 }
+                if try await walkIsProvenEmpty(account: account, room: room, probe: prepared[room]?.probe) { continue }
                 if try await !synchronizePages(account: account, room: room, operations: operations) { unfinishedRooms.append(room) }
             }
             return ArchiveSyncOutcome(ownArchiveComplete: ownArchiveComplete, unfinishedRooms: unfinishedRooms)
@@ -225,71 +272,80 @@ public struct ArchiveSynchronizer: Sendable {
         var bound: XMPPArchiveBound = checkpoint.map { .after($0.cursor) } ?? .before(nil)
         var pages = 0, messages = 0, reanchored = false
         var lostCursor: (cursor: String, since: Date?)?
-        while true {
-            try Task.checkCancellation()
-            // Room fetches revalidate complete membership without joining the room.
-            let page: XMPPArchivePage
-            do { page = try await operations.fetchPage(bound, room) }
-            catch {
-                if !reanchored, (error as? XMPPIQError) == .stanza(condition: "item-not-found"),
-                   case .after(let lost?) = bound, let lostCheckpoint = checkpoint {
-                    reanchored = true
-                    lostCursor = (lost, lostCheckpoint.stamp)
-                    bound = lostCheckpoint.stamp.map { .since($0.addingTimeInterval(-Self.reanchorMargin)) } ?? .before(nil)
-                    Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
-                    continue
-                }
-                guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
-                Self.log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(Self.describe(error), privacy: .public)")
-                return false
-            }
-            // An archive that refuses the re-anchored query too has lost nothing we could still fetch.
-            if let lost = lostCursor {
-                try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost.cursor, since: lost.since)
-                lostCursor = nil
-            }
-            for archived in page.messages {
+        let source = ArchivePageSource(operations: operations, room: room)
+        do {
+            while true {
                 try Task.checkCancellation()
-                try await operations.process(archived)
-            }
-            try Task.checkCancellation()
-            let newestFirst = if case .before = bound { true } else { false }
-            if let cursor = page.lastID {
-                guard cursor != checkpoint?.cursor else { throw XMPPIQError.malformedResponse }
-                // `finish` checked that `lastID` names the page's newest entry.
-                let stamp = page.messages.last?.timestamp
-                if newestFirst {
-                    guard let oldest = page.firstID else { throw XMPPIQError.malformedResponse }
-                    // One transaction: a checkpoint without a backfill row means walked from the start, and a backfill
-                    // row without its checkpoint would sit behind a gap. A first page counts as read history; one
-                    // replacing a lost cursor does not, since it holds what this device missed.
-                    _ = try await store.saveNewestArchivePage(accountID: account, archiveID: archive, cursor: cursor, stamp: stamp,
-                                                              oldestID: oldest, complete: page.complete,
-                                                              historyThrough: checkpoint == nil ? page.messages.map(\.timestamp).max() : nil,
-                                                              replacing: checkpoint?.revision)
-                } else {
-                    _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive,
-                                                             expectedRevision: checkpoint?.revision, cursor: cursor, stamp: stamp)
+                // Room fetches revalidate complete membership without joining the room.
+                let page: XMPPArchivePage
+                do { page = try await source.page(bound) }
+                catch {
+                    if !reanchored, (error as? XMPPIQError) == .stanza(condition: "item-not-found"),
+                       case .after(let lost?) = bound, let lostCheckpoint = checkpoint {
+                        reanchored = true
+                        lostCursor = (lost, lostCheckpoint.stamp)
+                        bound = lostCheckpoint.stamp.map { .since($0.addingTimeInterval(-Self.reanchorMargin)) } ?? .before(nil)
+                        Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
+                        continue
+                    }
+                    try await Self.endWalk(after: error, room: room, source: source, operations: operations)
+                    return false
                 }
-                checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: archive)
-                bound = .after(cursor)
-            } else if !page.complete {
-                throw XMPPIQError.malformedResponse
+                // An archive that refuses the re-anchored query too has lost nothing we could still fetch.
+                if let lost = lostCursor {
+                    try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost.cursor, since: lost.since)
+                    lostCursor = nil
+                }
+                let newestFirst = if case .before = bound { true } else { false }
+                source.handed(page, continuing: newestFirst || !page.complete, forward: !newestFirst)
+                try await operations.processEntries(page.messages)
+                try Task.checkCancellation()
+                checkpoint = try await commitCursor(of: page, newestFirst: newestFirst, after: checkpoint, account: account, archive: archive)
+                if let cursor = page.lastID { bound = .after(cursor) }
+                if !page.handledTokens.isEmpty { try await operations.acknowledge(page.handledTokens) }
+                pages += 1; messages += page.messages.count
+                await operations.progress(ArchiveSyncProgress(archive: room, pages: pages, messages: messages))
+                // Recorded so the next connection's first page, which arrived meanwhile, is not taken for history.
+                if page.lastID == nil, newestFirst {
+                    if checkpoint == nil { try await store.recordEmptyArchive(accountID: account, archiveID: archive) }
+                    return true
+                }
+                if page.complete, !newestFirst { return true }
             }
-            if !page.handledTokens.isEmpty { try await operations.acknowledge(page.handledTokens) }
-            pages += 1; messages += page.messages.count
-            await operations.progress(ArchiveSyncProgress(archive: room, pages: pages, messages: messages))
-            // Recorded so the next connection's first page, which arrived meanwhile, is not taken for history.
-            if page.lastID == nil, newestFirst {
-                if checkpoint == nil { try await store.recordEmptyArchive(accountID: account, archiveID: archive) }
-                return true
-            }
-            if page.complete, !newestFirst { return true }
+        } catch {
+            _ = await source.cancel()
+            throw error
         }
     }
 
+    // After the page's messages are durable. A page without entries moves nothing and must be the last.
+    private func commitCursor(of page: XMPPArchivePage, newestFirst: Bool, after checkpoint: ArchiveCheckpoint?,
+                              account: String, archive: String) async throws -> ArchiveCheckpoint? {
+        guard let cursor = page.lastID else {
+            guard page.complete else { throw XMPPIQError.malformedResponse }
+            return checkpoint
+        }
+        guard cursor != checkpoint?.cursor else { throw XMPPIQError.malformedResponse }
+        // `finish` checked that `lastID` names the page's newest entry.
+        let stamp = page.messages.last?.timestamp
+        if newestFirst {
+            guard let oldest = page.firstID else { throw XMPPIQError.malformedResponse }
+            // One transaction: a checkpoint without a backfill row means walked from the start, and a backfill row
+            // without its checkpoint would sit behind a gap. A first page counts as read history; one replacing a lost
+            // cursor does not, since it holds what this device missed.
+            _ = try await store.saveNewestArchivePage(accountID: account, archiveID: archive, cursor: cursor, stamp: stamp,
+                                                      oldestID: oldest, complete: page.complete,
+                                                      historyThrough: checkpoint == nil ? page.messages.map(\.timestamp).max() : nil,
+                                                      replacing: checkpoint?.revision)
+        } else {
+            _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive,
+                                                     expectedRevision: checkpoint?.revision, cursor: cursor, stamp: stamp)
+        }
+        return try await store.archiveCheckpoint(accountID: account, archiveID: archive)
+    }
+
     // No addresses or content.
-    private static func describe(_ error: any Error) -> String {
+    static func describe(_ error: any Error) -> String {
         if case .stanza(let condition)? = error as? XMPPIQError { return condition }
         return String(describing: error)
     }
@@ -346,10 +402,7 @@ public struct ArchiveSynchronizer: Sendable {
                 await operations.disconnect(); throw error
             }
             do {
-                for archived in page.messages {
-                    try Task.checkCancellation()
-                    try await operations.process(archived)
-                }
+                try await operations.processEntries(page.messages)
                 try Task.checkCancellation()
                 let oldest = page.firstID ?? cursor.oldestID
                 guard page.firstID == nil || oldest != cursor.oldestID else { throw XMPPIQError.malformedResponse }
@@ -368,20 +421,6 @@ public struct ArchiveSynchronizer: Sendable {
         }
         return .budgetExhausted
     }
-}
-
-// Test seam for durable-before-cursor and interruption ordering; production adapters delegate provenance and
-// cryptography to their packages.
-struct ArchiveSyncOperations: Sendable {
-    let knownRooms: @Sendable () async throws -> [String]
-    let refreshRoom: @Sendable (String) async throws -> Void
-    let fetchPage: @Sendable (XMPPArchiveBound, String?) async throws -> XMPPArchivePage
-    let process: @Sendable (XMPPArchiveMessage) async throws -> Void
-    let acknowledge: @Sendable ([XMPPInboundToken]) async throws -> Void
-    let disconnect: @Sendable () async -> Void
-    let progress: @Sendable (ArchiveSyncProgress) async -> Void
-    var isOnline: @Sendable () async -> Bool = { true }
-    var ownArchiveWalked: @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void = { _, _ in }
 }
 
 // Counts and milliseconds only, no addresses or content. `fetch` runs from query to `<fin/>`; `other` is mostly cursor
@@ -416,22 +455,4 @@ final class ArchiveWalkTimings: Sendable {
     }
 
     static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
-}
-
-extension ArchiveSyncOperations {
-    func timed(by walk: ArchiveWalkTimings) -> ArchiveSyncOperations {
-        let base = self
-        return ArchiveSyncOperations(
-            knownRooms: base.knownRooms, refreshRoom: base.refreshRoom,
-            fetchPage: { bound, room in
-                let page = try await walk.measure(.fetch, "fetch page") { try await base.fetchPage(bound, room) }
-                walk.fetched(entries: page.messages.count)
-                return page
-            },
-            process: { archived in try await walk.measure(.process, "process entry") { try await base.process(archived) } },
-            acknowledge: { tokens in try await walk.measure(.acknowledge, "acknowledge") { try await base.acknowledge(tokens) } },
-            disconnect: base.disconnect,
-            progress: { progress in await walk.measure(.progress, "progress") { await base.progress(progress) } },
-            isOnline: base.isOnline)
-    }
 }

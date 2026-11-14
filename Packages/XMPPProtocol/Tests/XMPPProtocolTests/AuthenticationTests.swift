@@ -18,7 +18,7 @@ private struct Vector {
         serverFinal: "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=")
 
     func negotiation() throws -> SASLNegotiation {
-        try SASLNegotiation(offered: [offered, "PLAIN"], username: "user", password: "pencil", requireSCRAM: false, nonce: nonce)
+        try SASLNegotiation(offered: [offered, "PLAIN"], username: "user", password: "pencil", pin: .none, nonce: nonce)
     }
 }
 
@@ -70,7 +70,8 @@ private func rejectsUnsafeServerFirstMessages(_ serverFirst: String) throws {
         (["PLAIN", "SCRAM-SHA-256"], "\u{05D0}\u{05D1}", true, .failure(.authenticationUnavailable)),
     ]
     for (offered, password, requireSCRAM, expected) in cases {
-        let chosen = Result { try SASLNegotiation(offered: offered, username: "user", password: password, requireSCRAM: requireSCRAM).mechanism.rawValue }
+        let pin = XMPPAuthenticationPin(scram: requireSCRAM)
+        let chosen = Result { try SASLNegotiation(offered: offered, username: "user", password: password, pin: pin).mechanism.rawValue }
             .mapError { $0 as! XMPPClientError }
         #expect(chosen == expected, "\(offered) required: \(requireSCRAM)")
     }

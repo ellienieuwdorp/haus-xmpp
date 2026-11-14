@@ -14,11 +14,14 @@ public struct OutboxDrain: Sendable {
     let sender: OutboxSender
     // A group message waits for its room to be joined on this connection.
     let joinedGroups: Set<String>
+    // Receipts and markers wait for a pass after the archive walk, so they neither contend with its decryption nor go
+    // out one pass at a time while it queues them.
+    let defersReceipts: Bool
 
     public init(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore, sender: OutboxSender,
-                joinedGroups: Set<String>) {
+                joinedGroups: Set<String>, defersReceipts: Bool = false) {
         self.account = account; self.client = client; self.encryption = encryption; self.store = store
-        self.sender = sender; self.joinedGroups = joinedGroups
+        self.sender = sender; self.joinedGroups = joinedGroups; self.defersReceipts = defersReceipts
     }
 
     /// `hold` and `groupFailed` return the chats they marked as held for trust.
@@ -47,6 +50,10 @@ public struct OutboxDrain: Sendable {
         var heldForTrust = await hooks.hold(preparation.blockedChats)
         if !preparation.droppedReplies.isEmpty { await hooks.repliesDropped(preparation.droppedReplies) }
         var preparedIDs = preparation.messageIDs
+        let requestAcknowledgement: @Sendable () async -> Void = {
+            // A request that cannot be written leaves the stanzas unacknowledged, for a resume or the archive to settle.
+            try? await client.requestAcknowledgement()
+        }
         for message in try await store.queuedOutgoing(accountID: account) where joinedGroups.contains(message.chatID) {
             do {
                 try await encryption.prepareGroupMessage(account: account, messageID: message.id, room: message.chatID, transport: client)
@@ -57,24 +64,28 @@ public struct OutboxDrain: Sendable {
                 heldForTrust.formUnion(await hooks.groupFailed(message.chatID, error))
             }
         }
-        try await sender.drain(accountID: account, messageIDs: preparedIDs, send: { message in
-            if joinedGroups.contains(message.chatID) {
-                let prepared: PreparedGroupMessage
-                do { prepared = try await encryption.outgoingGroupEnvelope(account: account, messageID: message.id, room: message.chatID, transport: client) }
-                catch { throw OutboxSendFailure.notAttempted }
-                _ = try await client.sendEncryptedGroupMessage(room: message.chatID, envelope: prepared.envelope, id: message.id, expectedMembers: prepared.members)
-            } else {
-                let envelope: XMPPOMEMOEnvelope
-                do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
-                catch { throw OutboxSendFailure.notAttempted }
-                // Always requested; the receipt settings only gate what we send back.
-                _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
-                                                          requestReceipt: true, markable: true)
-            }
-            try? await client.requestAcknowledgement()
-        }, didChange: hooks.didChange)
+        try await Self.acknowledging(request: requestAcknowledgement) { messagesWritten in
+            try await sender.drain(accountID: account, messageIDs: preparedIDs, send: { message in
+                if joinedGroups.contains(message.chatID) {
+                    let prepared: PreparedGroupMessage
+                    do {
+                        prepared = try await encryption.outgoingGroupEnvelope(account: account, messageID: message.id, room: message.chatID, transport: client)
+                    } catch { throw OutboxSendFailure.notAttempted }
+                    await messagesWritten.note()
+                    _ = try await client.sendEncryptedGroupMessage(room: message.chatID, envelope: prepared.envelope, id: message.id, expectedMembers: prepared.members)
+                } else {
+                    let envelope: XMPPOMEMOEnvelope
+                    do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
+                    catch { throw OutboxSendFailure.notAttempted }
+                    await messagesWritten.note()
+                    // Always requested; the receipt settings only gate what we send back.
+                    _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
+                                                              requestReceipt: true, markable: true)
+                }
+            }, didChange: hooks.didChange)
+        }
         // Preparation seals; the flush re-validates and sends.
-        let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client)
+        let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client, deferringReceipts: defersReceipts)
         heldForTrust.formUnion(await hooks.hold(updates.blockedChats))
         var updateIDs = updates.messageIDs
         for update in try await store.queuedReactions(accountID: account) where joinedGroups.contains(update.chatID) {
@@ -86,7 +97,16 @@ public struct OutboxDrain: Sendable {
                 heldForTrust.formUnion(await hooks.groupFailed(update.chatID, error))
             }
         }
+        try await Self.acknowledging(request: requestAcknowledgement) { updatesWritten in
+            try await flush(updateIDs, noting: updatesWritten)
+        }
+        return heldForTrust
+    }
+
+    private func flush(_ updateIDs: Set<String>, noting written: WrittenStanzas) async throws {
+        let client = client
         try await encryption.flushUpdates(account: account, updateIDs: updateIDs, groupTransport: client) { update, prepared in
+            await written.note()
             switch prepared {
             case .encrypted(let to, let envelope):
                 // A legacy correction carries its reference outside the ciphertext; the sealed target is the reference.
@@ -101,8 +121,21 @@ public struct OutboxDrain: Sendable {
             case .plainReceipt(let to, let targetID, let kind):
                 _ = try await client.sendReceipt(to: to, targetID: targetID, kind: kind, id: update.id)
             }
-            try? await client.requestAcknowledgement()
         }
-        return heldForTrust
     }
+
+    // One acknowledgement request after a run of writes covers each of them, also when the run ended in an error.
+    static func acknowledging(request: () async -> Void, _ run: (WrittenStanzas) async throws -> Void) async throws {
+        let written = WrittenStanzas()
+        do { try await run(written) } catch {
+            if await written.any { await request() }
+            throw error
+        }
+        if await written.any { await request() }
+    }
+}
+
+actor WrittenStanzas {
+    private(set) var any = false
+    func note() { any = true }
 }

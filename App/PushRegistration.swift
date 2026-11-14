@@ -117,7 +117,15 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
 extension PushRegistration: UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         installNotificationDelegate()
+        // Before any scene: the system delivers uploads that finished while the app was away once their session exists.
+        _ = AttachmentUploader.shared(scope: AppModel.uploadScope)
         return true
+    }
+
+    // The system relaunched or woke the app for upload events; it may suspend the app once the handler is called.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        let completion = MainThreadCompletion<Void>({ _ in completionHandler() })
+        if !AttachmentUploader.handleEvents(forSession: identifier, completion: { completion.call(()) }) { completionHandler() }
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

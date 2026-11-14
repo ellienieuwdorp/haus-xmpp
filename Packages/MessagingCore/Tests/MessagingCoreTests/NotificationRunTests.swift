@@ -87,11 +87,11 @@ struct NotificationRunCoordinatorTests {
         let ticket = UUID()
         let delivery = Task { await coordinator.deliver(ticket: ticket) }
         try await bounded { await started.wait() }
-        #expect(coordinator.expire(ticket: ticket) == .fallback(.expired))
+        #expect(try await bounded { await coordinator.expire(ticket: ticket) } == .fallback(.expired))
         try await bounded { await cancelled.wait() }
         #expect(try await bounded { await delivery.value } == .fallback(.cancelled))
         // Expiring an unknown or already finished request still answers, and never suppresses.
-        #expect(coordinator.expire(ticket: UUID()) == .fallback(.expired))
+        #expect(await coordinator.expire(ticket: UUID()) == .fallback(.expired))
     }
 
     @Test func expiryAfterCommitSuppressesAndOtherWaitersKeepTheRun() async throws {
@@ -111,14 +111,139 @@ struct NotificationRunCoordinatorTests {
         let second = Task { await coordinator.deliver(ticket: late) }
         try await eventually("the second push to join") { run.progress?.joined == 2 }
         // Unknown outcome: fall back, but the joined request keeps the run alive.
-        #expect(coordinator.expire(ticket: early) == .fallback(.expired))
+        #expect(await coordinator.expire(ticket: early) == .fallback(.expired))
         await committed.release()
         try await eventually("the run to commit") { run.progress?.isCommitted == true }
-        guard case let .settled(report) = coordinator.expire(ticket: late) else { Issue.record("Committed run must suppress"); return }
-        #expect(report.posted == 3)
+        // The last waiter's expiry cancels the run and waits for it to end.
+        let expiry = Task { await coordinator.expire(ticket: late) }
         await finish.release()
+        guard case let .settled(report) = try await bounded({ await expiry.value }) else { Issue.record("Committed run must suppress"); return }
+        #expect(report.posted == 3)
         _ = try await bounded { (await first.value, await second.value) }
     }
+
+    // iOS may suspend the extension once the handler ran, so expiry answers only after the run it cancelled released
+    // the lease: here the cancelled walk first waits for its socket to close.
+    @Test func expiryMidWalkAnswersOnlyAfterTheRunReleasedTheLease() async throws {
+        try await withLeaseStores { store, other in
+            let walking = Gate(), socketClosed = Gate(), trace = BackgroundProbe(), clock = TestClock()
+            let coordinator = NotificationRunCoordinator(clock: clock) { progress in
+                guard (try? await store.acquireTransportOwnership()) != nil else { return .fallback(.leaseBusy) }
+                progress.enter(.syncing)
+                await walking.release()
+                await untilCancelled()
+                await socketClosed.wait()
+                try? await store.close()
+                await trace.record("released")
+                return .fallback(.cancelled)
+            }
+            let ticket = UUID()
+            let delivery = Task { await coordinator.deliver(ticket: ticket) }
+            try await bounded { await walking.wait() }
+            let expiry = Task {
+                let outcome = await coordinator.expire(ticket: ticket)
+                await trace.record("answered")
+                return outcome
+            }
+            // The run limit and the expiry's bound.
+            try await clock.sleepers(2)
+            #expect(await trace.events.isEmpty)
+            await #expect(throws: MessageStoreError.transportOwnedElsewhere) { try await other.acquireTransportOwnership() }
+            await socketClosed.release()
+            #expect(try await bounded { await expiry.value } == .fallback(.expired))
+            #expect(await trace.events == ["released", "answered"])
+            #expect(clock.elapsed == .zero)
+            try await other.acquireTransportOwnership()
+            try await other.releaseTransportOwnership()
+            #expect(try await bounded { await delivery.value } == .fallback(.cancelled))
+        }
+    }
+
+    // A run that ignores its cancellation is waited for only up to the bound; the push then falls back, and the lease
+    // stays with the run still working rather than being taken from it.
+    @Test func expiryPastItsBoundFallsBackAndNeverUnlocksLiveWork() async throws {
+        try await withLeaseStores { store, other in
+            let started = Gate(), stuck = Gate(), clock = TestClock()
+            let coordinator = NotificationRunCoordinator(clock: clock) { progress in
+                guard (try? await store.acquireTransportOwnership()) != nil else { return .fallback(.leaseBusy) }
+                progress.enter(.syncing)
+                await started.release()
+                await stuck.wait()
+                try? await store.close()
+                return .fallback(.cancelled)
+            }
+            let ticket = UUID()
+            let delivery = Task { await coordinator.deliver(ticket: ticket) }
+            try await bounded { await started.wait() }
+            let expiry = Task { await coordinator.expire(ticket: ticket) }
+            try await clock.sleepers(2)
+            clock.advance(by: NotificationRunCoordinator.expiryWait)
+            #expect(try await bounded { await expiry.value } == .fallback(.expired))
+            await #expect(throws: MessageStoreError.transportOwnedElsewhere) { try await other.acquireTransportOwnership() }
+            await stuck.release()
+            _ = try await bounded { await delivery.value }
+            try await other.acquireTransportOwnership()
+            try await other.releaseTransportOwnership()
+        }
+    }
+
+    // The run ends itself before iOS's expiry: at its limit it is cancelled and answers once the lease is released.
+    @Test func aRunAtItsLimitIsCancelledAndAnswersAfterTheRelease() async throws {
+        try await withLeaseStores { store, other in
+            let started = Gate(), clock = TestClock()
+            let coordinator = NotificationRunCoordinator(runLimit: .seconds(25), clock: clock) { progress in
+                guard (try? await store.acquireTransportOwnership()) != nil else { return .fallback(.leaseBusy) }
+                progress.enter(.syncing)
+                await started.release()
+                await untilCancelled()
+                try? await store.close()
+                return .fallback(.cancelled)
+            }
+            let delivery = Task { await coordinator.deliver(ticket: UUID()) }
+            try await bounded { await started.wait() }
+            try await clock.sleeper(until: .seconds(25))
+            clock.advance(by: .seconds(25))
+            #expect(try await bounded { await delivery.value } == .fallback(.deadline))
+            try await other.acquireTransportOwnership()
+            try await other.releaseTransportOwnership()
+            #expect(coordinator.activeRuns == 0)
+        }
+    }
+
+    // The limit counts from the first push, so a run queued behind a slow one that used it all never starts.
+    @Test func aRunQueuedPastItsLimitNeverStarts() async throws {
+        let presenting = Gate(), finish = Gate(), runs = Counter(), clock = TestClock()
+        let coordinator = NotificationRunCoordinator(runLimit: .seconds(25), clock: clock) { progress in
+            if await runs.increment() == 1 {
+                progress.enter(.presenting)
+                await presenting.release()
+                await finish.wait()
+            }
+            return .settled(progress.report)
+        }
+        let first = Task { await coordinator.deliver(ticket: UUID()) }
+        try await bounded { await presenting.wait() }
+        let second = Task { await coordinator.deliver(ticket: UUID()) }
+        try await clock.sleepers(2)
+        clock.advance(by: .seconds(25))
+        await finish.release()
+        #expect(try await bounded { await first.value }.suppressesRemoteAlert)
+        #expect(try await bounded { await second.value } == .fallback(.deadline))
+        #expect(await runs.value == 1)
+    }
+}
+
+// A store file, and a second store on it that stands for another process wanting the lease.
+private func withLeaseStores(_ body: (_ store: MessageStore, _ other: MessageStore) async throws -> Void) async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "coordinator-\(UUID())", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "messages.sqlite")
+    let store = try MessageStore(url: url)
+    let other = try MessageStore(url: url, schema: .currentOnly)
+    try await body(store, other)
+    try await other.close()
+    try await store.close()
 }
 
 struct NotificationTimeoutTests {
@@ -182,6 +307,7 @@ struct NotificationLeaseAndLogTests {
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.deadlineExceeded) == .deadline)
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.connectionEnded) == .network)
         #expect(NotificationFallbackReason(BackgroundSynchronizationError.identityUnavailable) == .identityUnavailable)
+        #expect(NotificationFallbackReason(BackgroundSynchronizationError.takeoverUnconfirmed) == .takeoverUnconfirmed)
         #expect(NotificationFallbackReason(NotificationRunError.noAccount) == .noAccount)
         #expect(NotificationFallbackReason(NotificationRunError.protectedDataUnavailable) == .protectedData)
         #expect(NotificationFallbackReason(CancellationError()) == .cancelled)

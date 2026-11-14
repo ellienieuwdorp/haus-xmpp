@@ -58,19 +58,14 @@
       "_ = try? await client.updatePushRegistration(revoke, configuration: old, environment: PushService.environment ?? .sandbox)",
       "_ = try? await processor.process(event)",
       "if alsoSubscribe { try? await client.sendSubscription(.subscribe, to: event.from) }",
-      "if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }",
       "if let store { try? await DeliveredNotificationCleaner.removeRead(accountID: message.accountID, store: store) }",
       "let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }",
       "ownTypingSend = Task { await previous?.value; try? await client.sendChatState(state, to: chatID, groupchat: group) }",
-      "retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })",
       "try? FileManager.default.removeItem(at: AttachmentFiles.root(directory: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.directory(root: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))",
-      "try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))",
       "try? NotificationAccessGate.disable(at: NotificationAccessGate.location())",
       "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
-      "try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID",
-      "try? await Task.sleep(for: .milliseconds(10))",
       "try? await Task.sleep(for: .seconds(2))",
       "try? await Task.sleep(for: UploadFailureBudget.backOff)",
       "try? await Task.sleep(for: duration)",
@@ -83,18 +78,14 @@
       "try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)",
       "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.keysPending], sender: owner)",
       "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])",
-      "try? await encryption?.flushBundlePublications(account: account, transport: client)",
       "try? await store.close()",
       "try? await store.close()",
       "try? await store.close()",
       "try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)",
-      "try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)",
       "try? await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: UUID().uuidString, chatID: message.chatID, actorID: account,",
       "try? await store.recordReceipt(accountID: accountID, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: message.chatID,",
       "try? await store.releaseTransportOwnership()",
-      "try? await store.releaseTransportOwnership()",
-      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
-      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)"
+      "try? await store.releaseTransportOwnership()"
     ]
   },
   "App/Attachments.swift" : {
@@ -106,11 +97,6 @@
     "unsafe.discarded-try" : [
       "Task { try? await Task.sleep(for: pinCommitDelay); await model.markChatRead(chat.id) }",
       "try? await Task.sleep(for: pinCommitDelay)"
-    ]
-  },
-  "App/ConnectionSetup.swift" : {
-    "unsafe.discarded-try" : [
-      "async let domain: Set<String>? = { try? await server() }()"
     ]
   },
   "App/ContactDirectory.swift" : {
@@ -431,12 +417,6 @@
       "try? url.setResourceValues(values)"
     ]
   },
-  "Packages/MessagingCore/Sources/MessagingCore/OutboxDrain.swift" : {
-    "unsafe.discarded-try" : [
-      "try? await client.requestAcknowledgement()",
-      "try? await client.requestAcknowledgement()"
-    ]
-  },
   "Packages/MessagingCore/Sources/MessagingCore/OutgoingEnqueue.swift" : {
     "unsafe.discarded-try" : [
       "try? FileManager.default.createDirectory(at: root.appending(path: sub), withIntermediateDirectories: true,"
@@ -447,8 +427,7 @@
       "_ = try? await processor.process(event)",
       "try? FileManager.default.removeItem(at: staged)",
       "try? await Task.sleep(for: .milliseconds(200))",
-      "try? await Task.sleep(until: deadline, clock: .continuous)",
-      "try? await client.requestAcknowledgement()"
+      "try? await Task.sleep(until: deadline, clock: .continuous)"
     ]
   },
   "Packages/MessagingCore/Sources/MessagingCore/TransferArchive.swift" : {
@@ -518,7 +497,6 @@
   },
   "Packages/OMEMO/Sources/OMEMO/OMEMOService.swift" : {
     "unsafe.discarded-try" : [
-      "_ = try? await queueReceiptLocked(account: account, chatID: peer, messageID: stored.id, kind: .receipt)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: reaction.id, expectedWire: wire)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: receipt.id, expectedWire: wire)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: retraction.id, expectedWire: wire)"

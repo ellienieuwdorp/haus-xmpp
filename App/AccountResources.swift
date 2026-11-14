@@ -1,12 +1,14 @@
 import Foundation
+import MessagingCore
 
 // Per-account state outside the store (whose tables are `AccountTable`), and what sign-out and a transfer do to it. A
 // pre-upgrade copy takes both preference domains whole, `PreUpgradeSnapshot.folders`, the account record and the push
 // registrations. AccountResourceTests checks the preferences and folders against the code that handles them.
 enum AccountResource: CaseIterable {
-    case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, uploadService, uploadServiceCheckedAt
-    case blocklist, shareSuggestions, xmppResource
-    case accountRecord, pushRegistration, wrappingKey
+    case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, streamProfile, uploadService
+    case uploadServiceCheckedAt
+    case blocklist, shareSuggestions, xmppResource, xmppClientID
+    case accountRecord, fastToken, pushRegistration, wrappingKey
     case attachmentFolder, avatarFolder
     case deliveredNotifications, appBadge, donations
 
@@ -53,6 +55,7 @@ enum AccountResource: CaseIterable {
         case .serverFeatures: Policy(location: .preference([.app], key: { "serverFeatures." + $0 }), signOut: .delete, transfer: .copy)
         case .carbonsStream:
             Policy(location: .preference([.app], key: { "carbonsStream." + $0 }), signOut: .delete, transfer: .omit(reason: "names a stream of this install"))
+        case .streamProfile: Policy(location: .preference([.group], key: { "streamProfile." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadService: Policy(location: .preference([.app, .group], key: { "uploadService." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadServiceCheckedAt: Policy(location: .preference([.app], key: { "uploadServiceCheckedAt." + $0 }), signOut: .delete, transfer: .copy)
         case .blocklist: Policy(location: .preference([.group], key: { "blocklist." + $0 }), signOut: .delete, transfer: .copy)
@@ -60,7 +63,14 @@ enum AccountResource: CaseIterable {
         case .xmppResource:
             Policy(location: .preference([.group], key: { "xmppResource." + $0 }),
                    signOut: .keep(reason: "a bind under it replaces the session the app or an extension left"), transfer: .omit(reason: "each install binds its own"))
+        case .xmppClientID:
+            Policy(location: .preference([.group], key: { "xmppClientID." + $0 }),
+                   signOut: .keep(reason: "a Bind 2 server derives the resource from it, as from xmppResource"),
+                   transfer: .omit(reason: "each install is its own client"))
         case .accountRecord: Policy(location: .keychain(service: NotificationAccount.service), signOut: .delete, transfer: .copy)
+        case .fastToken:
+            Policy(location: .keychain(service: FastTokenKeychain.service), signOut: .delete,
+                   transfer: .omit(reason: "issued to this install's client id; a moved account's tokens are deleted"))
         case .pushRegistration:
             Policy(location: .keychain(service: PushRegistrationState.service),
                    signOut: .keep(reason: "saved turned off, so the gateway revokes it and the server disables it"), transfer: .copy)
@@ -76,9 +86,19 @@ enum AccountResource: CaseIterable {
     // Sign-out's share of the preferences, after the account was deselected.
     static func forgetPreferencesAtSignOut(of account: String, app: UserDefaults, group: UserDefaults?) {
         UploadServiceMemory(defaults: app, mirror: group).forget(account: account)
-        ServerProfileMemory(defaults: app).forget(account: account)
+        ServerProfileMemory(defaults: app, streamProfiles: group).forget(account: account)
         BlockedAddresses.forget(accountID: account, defaults: group)
         ShareSuggestionSetting.forget(accountID: account, defaults: group)
         app.removeObject(forKey: "lastAccount")
+    }
+}
+
+extension AccountTransfer {
+    // Install- or device-specific keys stay behind; system keys (capitalised, e.g. `AppleLanguages`) stay too.
+    static let installOnlyPrefixes = ["xmppResource.", "xmppClientID.", "leftForeground", "attachmentKeyboard.", "carbonsStream."]
+
+    static func isTransferable(preference key: String) -> Bool {
+        guard let first = key.unicodeScalars.first, CharacterSet.lowercaseLetters.contains(first) else { return false }
+        return !installOnlyPrefixes.contains { key.hasPrefix($0) }
     }
 }

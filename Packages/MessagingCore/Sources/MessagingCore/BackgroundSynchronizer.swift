@@ -11,8 +11,10 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let domain: String
     public let username: String
     public let password: String
-    /// PLAIN is refused once the account has authenticated with SCRAM.
-    public let requiresSCRAM: Bool
+    /// What the account's earlier sign-ins rule out (PLAIN after SCRAM, RFC 6120 SASL after SASL2, no binding after it).
+    public let pin: XMPPAuthenticationPin
+    /// SASL2, Bind 2 and FAST; nil signs in with RFC 6120 SASL.
+    public let sasl2: XMPPSASL2Configuration?
     public let labCertificateAuthority: Data?
     /// Nil keeps a random one for this run.
     public let resource: String?
@@ -20,15 +22,18 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let push: XMPPPushConfiguration?
     /// Announced as XEP-0319 idle when the account shares last seen.
     public let leftForeground: Date?
+    /// The app's shared `StreamProfileMemory`: the connection sends ahead with what the server last offered, and
+    /// learns or refuses for every process. Nil connects in the plain order.
+    public let streamProfiles: (any XMPPStreamProfileStore)?
     public var accountID: String { username + "@" + domain }
 
-    public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
-                labCertificateAuthority: Data? = nil, resource: String? = nil,
-                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil) {
+    public init(route: XMPPRoute, domain: String, username: String, password: String, pin: XMPPAuthenticationPin = .none,
+                sasl2: XMPPSASL2Configuration? = nil, labCertificateAuthority: Data? = nil, resource: String? = nil,
+                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil, streamProfiles: (any XMPPStreamProfileStore)? = nil) {
         self.route = route; self.domain = domain
-        self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
+        self.username = username; self.password = password; self.pin = pin; self.sasl2 = sasl2
         self.labCertificateAuthority = labCertificateAuthority
-        self.resource = resource; self.push = push; self.leftForeground = leftForeground
+        self.resource = resource; self.push = push; self.leftForeground = leftForeground; self.streamProfiles = streamProfiles
     }
     public var description: String { "BackgroundAccount(<redacted>)" }
     public var debugDescription: String { description }
@@ -38,8 +43,10 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
     case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
     /// The own archive query was refused or unanswered, so the run cannot claim catch-up.
     case ownArchiveIncomplete
-    /// The app answered the liveness handshake and presents the push itself.
+    /// The app answered the liveness handshake, or took over the lease this run gave way to, and presents the push itself.
     case handedOff
+    /// This run gave the lease way to the app, which did not confirm it took over in time.
+    case takeoverUnconfirmed
 }
 
 /// One bounded catch-up under the same kernel lease as the app. Success means durable archive completion, not that a
@@ -47,18 +54,24 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
+    /// The network work's share of the coordinator's `runLimit`: the farewell, the final presentation and closing the
+    /// store follow it.
+    public static let timeBudget: Duration = .seconds(17)
+    public static let maximumTimeBudget: Duration = .seconds(20)
+
     /// Runs under the lease.
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
     /// `leaseWait` is spent inside `timeBudget`. With `liveness`, a busy lease first asks a running app; an answer in
-    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed and rooms follow, and
-    /// once at the end.
+    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed, and once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
+    /// store and throws `handedOff` once the app confirms its takeover, `takeoverUnconfirmed` otherwise. Cancelling the
+    /// run closes its socket at once; it returns once the store is closed.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
-                            timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
-                            liveness: (any LivenessChannel)? = nil,
+                            timeBudget: Duration = Self.timeBudget, leaseWait: Duration = .seconds(6),
+                            liveness: (any LivenessChannel)? = nil, giveWay: GiveWaySwitch? = nil,
                             progress: NotificationRunProgress? = nil,
                             presentation: Presentation? = nil) async throws {
-        guard timeBudget > .zero, timeBudget <= .seconds(25), leaseWait >= .zero, leaseWait < timeBudget else {
+        guard timeBudget > .zero, timeBudget <= Self.maximumTimeBudget, leaseWait >= .zero, leaseWait < timeBudget else {
             throw BackgroundSynchronizationError.invalidTimeBudget
         }
         try Task.checkCancellation()
@@ -72,7 +85,7 @@ public struct BackgroundSynchronizer: Sendable {
             progress?.enter(.leaseWait)
             let clock = ContinuousClock(), waitStarted = clock.now
             let waited: Duration
-            do { waited = try await acquireTransportOwnership(store, waitingUpTo: leaseWait, liveness: liveness) }
+            do { waited = try await acquireTransportOwnership(store, waitingUpTo: leaseWait, liveness: liveness, giveWay: giveWay) }
             catch BackgroundSynchronizationError.handedOff {
                 progress?.update { $0.leaseWaitMilliseconds = Int((clock.now - waitStarted) / .milliseconds(1)) }
                 throw BackgroundSynchronizationError.handedOff
@@ -83,21 +96,15 @@ public struct BackgroundSynchronizer: Sendable {
                 throw BackgroundSynchronizationError.identityUnavailable
             }
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
-            let client = XMPPClient(labCertificateAuthority: account.labCertificateAuthority)
-            try await client.configureStreamManagement(persistence: StreamPersistence(
-                store: store, accountID: account.accountID, encryption: encryption))
-            if let resource = account.resource { try await client.configureResource(resource) }
-            let preferences = try await store.accountPreferences(accountID: account.accountID)
-            try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen,
-                                                                            leftForeground: account.leftForeground),
-                                             clientActive: false)
+            let client = try await account.client(store: store, encryption: encryption)
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
             try await BackgroundCatchUp(
                 connect: {
                     try await client.connect(route: account.route, domain: account.domain, username: account.username,
-                                             password: account.password, requireSCRAM: account.requiresSCRAM)
+                                             password: account.password, pin: account.pin)
+                    progress?.noteOnline(resumed: await client.sessionResumed)
                 },
                 sessionDuties: { ownArchiveWalked in
                     // A fresh bind replaced the session the server pushed for, so re-enable push and rejoin rooms.
@@ -122,19 +129,31 @@ public struct BackgroundSynchronizer: Sendable {
                                                                             progress: walkProgress, ownArchiveWalked: ownArchiveWalked)
                 },
                 pull: { timeout in
-                    try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
+                    let apply = try await ReadSync(store: store).fetched(account: account.accountID, encryption: encryption) {
+                        try await client.fetchDisplayedSync(timeout: timeout)
+                    }
+                    return { _ = try await apply() }
                 },
                 consume: {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
                 },
-                stop: { await client.disconnectAndWait() }
+                stop: { await stopTransport(client) }, giveWay: giveWay ?? GiveWaySwitch()
             ).run(store: store, deadline: deadline, clock: ContinuousClock(), progress: progress, presentation: presentation)
         } catch {
             // runBackgroundWork has joined crypto, archive and reader work. close releases ownership only if this
             // instance acquired it.
             try await store.close()
-            throw error
+            try await Self.rethrow(error, givingWay: giveWay)
         }
+    }
+
+    // The candidates a run that gave way stored stay for the app's claim; the push is the app's only once it holds the
+    // lease.
+    private static func rethrow(_ error: any Error, givingWay giveWay: GiveWaySwitch?) async throws -> Never {
+        guard let stop = error as? GiveWayStop, let giveWay else { throw error }
+        let confirmed = try await giveWay.takeover(of: stop.request, clock: ContinuousClock())
+        BackgroundSession.log.notice("gave way to the app, takeover confirmed=\(confirmed, privacy: .public)")
+        throw confirmed ? BackgroundSynchronizationError.handedOff : BackgroundSynchronizationError.takeoverUnconfirmed
     }
 }
 
@@ -146,31 +165,38 @@ struct BackgroundCatchUp: Sendable {
     let sessionDuties: @Sendable (_ ownArchiveWalked: CatchUpMark) async -> Void
     let walk: @Sendable (_ progress: @escaping @Sendable (ArchiveSyncProgress) async -> Void,
                          _ ownArchiveWalked: @escaping @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void) async throws -> Void
-    let pull: @Sendable (Duration) async throws -> Void
+    // Fetches the read state within the timeout; what it returns applies it.
+    let pull: @Sendable (Duration) async throws -> ReadStatePrefetch.Apply
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
     var roomsAfterPost: Duration = .seconds(5)
+    var giveWay = GiveWaySwitch()
 
     // The budget's timer ends at `deadline`.
     func run<C: Clock<Duration>>(store: MessageStore, deadline: C.Instant, clock: C, progress: NotificationRunProgress?,
                                  presentation: BackgroundSynchronizer.Presentation?) async throws {
-        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
-        // A slow or lost server leaves the run a success.
+        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger(), early = ReadStatePrefetch()
+        // A slow or lost server leaves the run a success. The first pull takes the fetch made beside the own archive's
+        // walk; a later one fetches again.
         @Sendable func pullReadState() async throws {
-            if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout) }
+            if let apply = try await early.take() { try await apply() }
+            else if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout)() }
             await ledger.notePull()
         }
+        let giveWay = giveWay
         @Sendable func walkArchives() async throws {
-            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
+            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, _ in
                 await ownArchiveWalked.reach()
                 // The own archive holds the direct messages a push is about; without it the run shows the fallback.
                 guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
+                progress?.noteOwnArchiveCommitted()
                 await caughtUp.reach()
-                guard rooms > 0 else { return }
-                // Before the claim, so chats read on another device lose their candidates.
+                // Before the claim, so chats read on another device lose their candidates. Also without rooms: the
+                // final presentation waits for the farewell's round trip.
                 try await pullReadState()
                 guard let presentation else { return }
-                do { try await presentation(store, .direct) }
+                // A stop waits for a presentation that is posting, so nothing is posted twice.
+                do { try await giveWay.shielded { try await presentation(store, .direct) } }
                 catch is CancellationError { throw CancellationError() }
                 // The final presentation retries everything still pending.
                 catch { BackgroundSession.log.notice("direct presentation failed: \(String(describing: type(of: error)), privacy: .public)") }
@@ -178,9 +204,14 @@ struct BackgroundCatchUp: Sendable {
                 if (progress?.report.posted ?? 0) > 0 { await ledger.notePostedEarly() }
             })
         }
-        try await runBackgroundWork(timeBudget: clock.now.duration(to: deadline), clock: clock, caughtUp: caughtUp, operation: {
+        try await runBackgroundWork(timeBudget: clock.now.duration(to: deadline), clock: clock, caughtUp: caughtUp, giveWay: giveWay, operation: {
             try await connect()
             try Task.checkCancellation()
+            await early.start()
+            async let prefetched: Void = early.fetch {
+                guard let timeout = readSyncTimeout(until: deadline, now: clock.now) else { return nil }
+                return try await pull(timeout)
+            }
             async let duties: Void = sessionDuties(ownArchiveWalked)
             do {
                 try await withThrowingTaskGroup(of: Void.self) { group in
@@ -201,11 +232,13 @@ struct BackgroundCatchUp: Sendable {
                 await ledger.noteRoomWalkFailed(error)
             }
             if await ledger.needsPull { try await pullReadState() }
+            await prefetched
             await duties
         }, consume: {
             try await consumeUntilDisconnect(after: caughtUp) { try await consume() }
         }, stop: stop)
         try Task.checkCancellation()
+        giveWay.close()
         // From here a new push starts the next run.
         progress?.enter(.presenting)
         let stage = await ledger.finalStage(pastDeadline: clock.now >= deadline)
@@ -251,6 +284,30 @@ actor CatchUpLedger {
         }
         return PresentationStage(isFinal: true, unfinished: roomError)
     }
+}
+
+extension BackgroundAccount {
+    // Stream management on the account's store, the app's resource and stream profile; away, so the session never
+    // makes the user look online.
+    func client(store: MessageStore, encryption: OMEMOService) async throws -> XMPPClient {
+        let client = XMPPClient(labCertificateAuthority: labCertificateAuthority)
+        try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
+        if let resource { try await client.configureResource(resource) }
+        if let streamProfiles { try await client.configureStreamProfiles(streamProfiles) }
+        try await client.configureSASL2(sasl2)
+        let preferences = try await store.accountPreferences(accountID: accountID)
+        try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: leftForeground),
+                                         clientActive: false)
+        return client
+    }
+}
+
+extension NotificationRunProgress {
+    func noteOnline(resumed: Bool) {
+        update { $0.onlineMilliseconds = Int(Date().timeIntervalSince(started) * 1000); $0.resumed = resumed }
+    }
+
+    func noteOwnArchiveCommitted() { update { $0.ownArchiveMilliseconds = Int(Date().timeIntervalSince(started) * 1000) } }
 }
 
 /// A fresh bind away from the foreground replaced the app's session, which had push enabled and sat in the rooms.
@@ -343,13 +400,15 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
 
 // Polls the non-blocking kernel lease; returns the time spent waiting. With `liveness`, the first busy answer asks a
 // running app once; an accepted answer throws `handedOff`. The lease is still tried first on every round. `now` is the
-// wall clock both processes stamp the handshake with.
+// wall clock both processes stamp the handshake with. An app waiting to give way to ends the wait without the lease.
 func acquireTransportOwnership<C: Clock<Duration>>(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
-                                                   liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50),
+                                                   liveness: (any LivenessChannel)? = nil, giveWay: GiveWaySwitch? = nil,
+                                                   answerPoll: Duration = .milliseconds(50),
                                                    clock: C = ContinuousClock(), now: @Sendable () -> Date = Date.init) async throws -> Duration {
     let start = clock.now
     var question: (request: LivenessRequest, listensUntil: C.Instant)?, asked = false
     while true {
+        if let request = giveWay?.request { throw GiveWayStop(request: request) }
         do {
             try await store.acquireTransportOwnership()
             return start.duration(to: clock.now)
@@ -389,6 +448,17 @@ func finishBackgroundPresentation(store: MessageStore,
     }
 }
 
+// A cancelled run (an expiry or the run limit) has no time for the farewell: the socket closes at once, which ends every
+// read and write and leaves the stream-management session to resume.
+func stopTransport(_ client: XMPPClient) async {
+    await withTaskCancellationHandler {
+        if Task.isCancelled { await client.disconnect() }
+        await client.disconnectAndWait()
+    } onCancel: {
+        Task { await client.disconnect() }
+    }
+}
+
 // No automatic trust changes, no outbox, no plaintext (the processor ignores `.message`). A storage failure propagates
 // so the sync stops before the next barrier.
 func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: InboundProcessor) async throws {
@@ -401,9 +471,11 @@ func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: Inboun
     throw BackgroundSynchronizationError.connectionEnded
 }
 
-// Structured children cannot outlive lease ownership, even when the deadline wins the race. Once `caughtUp` is
-// reached the deadline ends the work without failing it.
+// Structured children cannot outlive lease ownership. Once `caughtUp` is reached the deadline ends the work without
+// failing it; a granted `giveWay` throws `GiveWayStop`. Either way store transactions run whole on their actor, and a
+// decryption cancelled before its commit keeps the ciphertext and the ratchet.
 func runBackgroundWork(timeBudget: Duration, clock: some Clock<Duration> = ContinuousClock(), caughtUp: CatchUpMark? = nil,
+                       giveWay: GiveWaySwitch? = nil,
                        operation: @escaping @Sendable () async throws -> Void,
                        consume: @escaping @Sendable () async throws -> Void,
                        stop: @escaping @Sendable () async -> Void) async throws {
@@ -415,6 +487,7 @@ func runBackgroundWork(timeBudget: Duration, clock: some Clock<Duration> = Conti
             if let caughtUp, await caughtUp.reached { return }
             throw BackgroundSynchronizationError.deadlineExceeded
         }
+        if let giveWay { group.addTask { throw GiveWayStop(request: try await giveWay.untilStop()) } }
         do {
             try await group.next()
             group.cancelAll()
