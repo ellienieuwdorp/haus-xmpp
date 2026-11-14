@@ -6669,7 +6669,7 @@
    ],
    [
     "private func handle(_ node: XMLNode, token: UUID) async throws {",
-    43
+    26
    ],
    [
     "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
@@ -6679,7 +6679,7 @@
   "file_length": [
    [
     "",
-    1259
+    1211
    ]
   ],
   "force_unwrapping": [
@@ -6691,7 +6691,7 @@
   "function_body_length": [
    [
     "private func handle(_ node: XMLNode, token: UUID) async throws {",
-    169
+    91
    ],
    [
     "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
@@ -6755,7 +6755,7 @@
   "type_body_length": [
    [
     "public actor XMPPClient {",
-    1142
+    1091
    ]
   ]
  },
