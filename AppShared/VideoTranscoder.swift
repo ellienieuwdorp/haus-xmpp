@@ -54,26 +54,26 @@ enum VideoTranscoder {
         try reader.start()
         try writer.start()
         writer.startSession(atSourceTime: .zero)
-        try await withTaskCancellationHandler {
-            do {
-                try await withThrowingTaskGroup(of: Bool.self) { group in
-                    for pump in pumps { group.addTask { try await pump.run(); return true } }
-                    group.addTask { try await clock.sleep(for: deadline); return false }
-                    var finished = 0
-                    while let done = try await group.next() {
-                        guard done else { throw TimedOut() }
-                        finished += 1
-                        if finished == pumps.count { group.cancelAll(); break }
-                    }
+        // The providers and receivers end on task cancellation themselves; cancelling the reader from another thread
+        // while a provider waits for a sample crashes AVFoundation, so the reader and writer stop only once both
+        // pumps have returned.
+        do {
+            try await withThrowingTaskGroup(of: Bool.self) { group in
+                for pump in pumps { group.addTask { try await pump.run(); return true } }
+                group.addTask { try await clock.sleep(for: deadline); return false }
+                var finished = 0
+                while let done = try await group.next() {
+                    guard done else { throw TimedOut() }
+                    finished += 1
+                    if finished == pumps.count { group.cancelAll(); break }
                 }
-                try session.checkReader()
-                try await session.finish()
-            } catch {
-                session.cancel()
-                throw error
             }
-        } onCancel: {
+            try Task.checkCancellation()
+            try session.checkReader()
+            try await session.finish()
+        } catch {
             session.cancel()
+            throw error
         }
     }
 
@@ -152,9 +152,7 @@ private struct Pump: @unchecked Sendable {
     }
 }
 
-// The reader and writer are touched from the pumps and the cancellation handler; AVFoundation documents
-// `cancelReading` and `cancelWriting` as callable at any time, and each pump owns its own output and input.
-private final class Session: @unchecked Sendable {
+private final class Session {
     private let reader: AVAssetReader
     private let writer: AVAssetWriter
 

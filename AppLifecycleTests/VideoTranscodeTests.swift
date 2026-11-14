@@ -17,33 +17,44 @@ import XCTest
         try? FileManager.default.removeItem(at: folder)
     }
 
+    // A hardware encoder can miss a short clip's average bitrate by more than the 5% margin; the one retry then lands a
+    // rung lower, so the output is the plan or smaller, never larger, and never over the limit.
     func testSixtyFramesThatCannotKeepTheirQualityDropToThirtyAtTheRungThatFits() async throws {
         let clip = try await makeClip(width: 1280, height: 720, frameRate: 60, seconds: 3)
         let limit = 500_000
+        let planned = try await Self.plan(clip, limit: limit)
+        let plan = try XCTUnwrap(planned)
+        XCTAssertEqual([plan.width, plan.height], [960, 540])
+        XCTAssertEqual(plan.frameRate, 30)
         let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit)
         let output = try await describe(prepared)
         XCTAssertLessThanOrEqual(prepared.data.count, limit)
         XCTAssertEqual(output.codec, kCMVideoCodecType_H264)
         XCTAssertEqual(output.audioCodec, kAudioFormatMPEG4AAC)
-        XCTAssertEqual(output.size, CGSize(width: 960, height: 540))
+        XCTAssertLessThanOrEqual(output.size.height, 540)
+        XCTAssertEqual(output.size.width / output.size.height, 16 / 9, accuracy: 0.01)
         XCTAssertEqual(output.frameRate, 30, accuracy: 0.5)
         XCTAssertEqual(output.seconds, 3, accuracy: 0.1)
         XCTAssertEqual(prepared.mediaType, "video/mp4")
         XCTAssertEqual(prepared.name, "clip.mp4")
-        XCTAssertEqual(prepared.width, 960)
-        XCTAssertEqual(prepared.height, 540)
-        record("540p30: planned \(try await Self.planned(clip, limit: limit)) bytes, wrote \(prepared.data.count) of \(limit)")
+        XCTAssertEqual(prepared.width.map(CGFloat.init), output.size.width)
+        XCTAssertEqual(prepared.height.map(CGFloat.init), output.size.height)
+        record("planned \(plan.plannedBytes) bytes at 960x540, 30 fps; wrote \(prepared.data.count) of \(limit) at \(output.size), \(output.frameRate) fps")
     }
 
     func testSixtyFramesThatStillLookGoodAtSixtyKeepThem() async throws {
         let clip = try await makeClip(width: 1280, height: 720, frameRate: 60, seconds: 3)
         let limit = 2_000_000
+        let planned = try await Self.plan(clip, limit: limit)
+        let plan = try XCTUnwrap(planned)
+        XCTAssertEqual([plan.width, plan.height], [1280, 720])
+        XCTAssertEqual(plan.frameRate, 60)
         let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit)
         let output = try await describe(prepared)
         XCTAssertLessThanOrEqual(prepared.data.count, limit)
-        XCTAssertEqual(output.size, CGSize(width: 1280, height: 720))
+        XCTAssertLessThanOrEqual(output.size.height, 720)
         XCTAssertEqual(output.frameRate, 60, accuracy: 0.5)
-        record("720p60: planned \(try await Self.planned(clip, limit: limit)) bytes, wrote \(prepared.data.count) of \(limit)")
+        record("planned \(plan.plannedBytes) bytes at 1280x720, 60 fps; wrote \(prepared.data.count) of \(limit) at \(output.size), \(output.frameRate) fps")
     }
 
     func testARotatedRecordingComesOutUprightAtItsDisplaySize() async throws {
@@ -157,10 +168,10 @@ import XCTest
         add(attachment)
     }
 
-    private nonisolated static func planned(_ clip: URL, limit: Int) async throws -> Int {
+    private nonisolated static func plan(_ clip: URL, limit: Int) async throws -> VideoSizePlan? {
         let source = try await VideoTranscoder.source(of: AVURLAsset(url: clip), keepingFirst: nil)
-        guard case .encode(let plan) = VideoSizePlan.plan(source, limit: limit) else { return 0 }
-        return plan.plannedBytes
+        guard case .encode(let plan) = VideoSizePlan.plan(source, limit: limit) else { return nil }
+        return plan
     }
 
     private func leftovers() throws -> Set<String> {
