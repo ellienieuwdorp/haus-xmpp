@@ -76,6 +76,8 @@ final class AccountResourceTests: XCTestCase {
         let profiles = ServerProfileMemory(defaults: app)
         profiles.discovered(["urn:xmpp:mam:2"], account: account)
         profiles.carbonsEnabled(account: account, stream: "stream-1")
+        profiles.saveStreamProfile(XMPPStreamProfile(endpoint: XMPPEndpoint(host: "xmpp.example.org", port: 5223, security: .directTLS),
+                                                     mechanisms: ["SCRAM-SHA-256"], streamManagement: true), account: account)
 
         let declared = { (domain: AccountResource.Domain) in Set(self.preferences.filter { $0.1.contains(domain) }.map(\.2)) }
         for (domain, defaults) in [(AccountResource.Domain.app, app), (.group, group)] {

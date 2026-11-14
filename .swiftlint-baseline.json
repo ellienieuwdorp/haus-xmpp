@@ -6728,10 +6728,6 @@
     0
    ],
    [
-    "let jid = node.child(\"bind\", namespace: \"urn:ietf:params:xml:ns:xmpp-bind\")?.child(\"jid\", namespace: \"urn:ietf:params:xml:ns:xmpp-bind\")?.text, !jid.isEmpty else { throw XMPPClientError.bindingFailed }",
-    0
-   ],
-   [
     "let response = try await requestIQ(type: \"get\", to: jid, payload: \"<pubsub xmlns='\\(OMEMOWire.pubsub)'><items node='\\(AvatarWire.dataNode)'><item id='\\(id)'/></items></pubsub>\")",
     0
    ],
@@ -6753,10 +6749,6 @@
    ],
    [
     "static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil, requestReceipt: Bool = false, markable: Bool = false) throws -> String {",
-    0
-   ],
-   [
-    "try await write(\"<auth xmlns='\\(SASLNegotiation.namespace)' mechanism='\\(negotiation.mechanism.rawValue)'>\\(SASLNegotiation.encode(negotiation.initialResponse))</auth>\")",
     0
    ]
   ],

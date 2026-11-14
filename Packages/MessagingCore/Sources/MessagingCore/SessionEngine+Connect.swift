@@ -47,6 +47,7 @@ extension SessionEngine {
         guard generation == token else { throw Superseded() }
         try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
         try await connection.configureResource(login.resource())
+        try await connection.configureStreamProfiles(profiles)
         let presence = login.presence()
         try await connection.setAvailability(presence.availability, clientActive: presence.clientActive)
         guard generation == token else { throw Superseded() }

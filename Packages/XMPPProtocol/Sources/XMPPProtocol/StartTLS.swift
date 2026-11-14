@@ -5,7 +5,8 @@ import Security
 // Both modes verify TLS the same way: the account domain as SNI and service identity, TLS 1.2 or later, system trust
 // (or only the explicit lab CA).
 enum XMPPTransport {
-    static func parameters(for security: XMPPTransportSecurity, domain: String, labCertificateAuthority: Data?, queue: DispatchQueue) -> NWParameters {
+    static func parameters(for security: XMPPTransportSecurity, domain: String, startTLSAhead: Bool = false, labCertificateAuthority: Data?,
+                           queue: DispatchQueue) -> NWParameters {
         let tls = tlsOptions(domain: domain, labCertificateAuthority: labCertificateAuthority, queue: queue)
         let tcp = NWProtocolTCP.Options()
         tcp.enableKeepalive = true; tcp.keepaliveIdle = 30; tcp.keepaliveInterval = 10; tcp.keepaliveCount = 3
@@ -19,6 +20,7 @@ enum XMPPTransport {
             let framer = NWProtocolFramer.Options(definition: StartTLSFramer.definition)
             framer[StartTLSFramer.domainKey] = domain
             framer[StartTLSFramer.tlsKey] = tls
+            framer[StartTLSFramer.aheadKey] = startTLSAhead
             parameters.defaultProtocolStack.applicationProtocols.insert(framer, at: 0)
             return parameters
         }
@@ -52,10 +54,12 @@ enum XMPPTransport {
 final class StartTLSFramer: NWProtocolFramerImplementation {
     static let label = "XMPP STARTTLS"
     static let definition = NWProtocolFramer.Definition(implementation: StartTLSFramer.self)
-    static let domainKey = "domain", tlsKey = "tls"
+    static let domainKey = "domain", tlsKey = "tls", aheadKey = "ahead"
     private static let tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
+    private static let startTLS = "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>"
     private var parser = XMLStreamFramer(maximumBytes: 65_536)
     private var awaitingProceed = false
+    private var sentStartTLS = false
     // Set once TLS is prepended or the connection failed; no further plaintext is read.
     private var finished = false
 
@@ -65,7 +69,13 @@ final class StartTLSFramer: NWProtocolFramerImplementation {
         guard let domain = framer.options[Self.domainKey] as? String else {
             framer.markFailed(error: .posix(.EINVAL)); return .willMarkReady
         }
-        framer.writeOutput(data: Data("<?xml version='1.0'?><stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>".utf8))
+        var opening = "<?xml version='1.0'?><stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>"
+        // Written ahead, `<starttls/>` is read after the server sent its features, which must still offer it.
+        if framer.options[Self.aheadKey] as? Bool == true {
+            opening += Self.startTLS
+            sentStartTLS = true
+        }
+        framer.writeOutput(data: Data(opening.utf8))
         return .willMarkReady
     }
 
@@ -99,7 +109,7 @@ final class StartTLSFramer: NWProtocolFramerImplementation {
                 guard node.name == "features", node.namespace == "http://etherx.jabber.org/streams" else { throw NWError.posix(.EBADMSG) }
                 guard node.child("starttls", namespace: Self.tlsNamespace) != nil else { throw XMPPTransport.startTLSRefused }
                 awaitingProceed = true
-                framer.writeOutput(data: Data("<starttls xmlns='\(Self.tlsNamespace)'/>".utf8))
+                if !sentStartTLS { framer.writeOutput(data: Data(Self.startTLS.utf8)) }
                 continue
             }
             guard node.namespace == Self.tlsNamespace else { throw NWError.posix(.EBADMSG) }

@@ -5,7 +5,8 @@ import MessagingCore
 // pre-upgrade copy takes both preference domains whole, `PreUpgradeSnapshot.folders`, the account record and the push
 // registrations. AccountResourceTests checks the preferences and folders against the code that handles them.
 enum AccountResource: CaseIterable {
-    case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, uploadService, uploadServiceCheckedAt
+    case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, streamProfile, uploadService
+    case uploadServiceCheckedAt
     case blocklist, shareSuggestions, xmppResource
     case accountRecord, pushRegistration, wrappingKey
     case attachmentFolder, avatarFolder
@@ -54,6 +55,7 @@ enum AccountResource: CaseIterable {
         case .serverFeatures: Policy(location: .preference([.app], key: { "serverFeatures." + $0 }), signOut: .delete, transfer: .copy)
         case .carbonsStream:
             Policy(location: .preference([.app], key: { "carbonsStream." + $0 }), signOut: .delete, transfer: .omit(reason: "names a stream of this install"))
+        case .streamProfile: Policy(location: .preference([.app], key: { "streamProfile." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadService: Policy(location: .preference([.app, .group], key: { "uploadService." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadServiceCheckedAt: Policy(location: .preference([.app], key: { "uploadServiceCheckedAt." + $0 }), signOut: .delete, transfer: .copy)
         case .blocklist: Policy(location: .preference([.group], key: { "blocklist." + $0 }), signOut: .delete, transfer: .copy)

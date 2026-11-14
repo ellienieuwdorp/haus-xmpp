@@ -59,6 +59,7 @@ private func plan(_ directTLS: SRVLookup, _ startTLS: SRVLookup) -> [XMPPEndpoin
 
 // A plaintext server on loopback that answers the client's stream header and `<starttls/>` as scripted, and
 // records every byte the client sends. Without `features` it never answers. A TLS ClientHello ends the connection.
+// `untilStartTLS` holds the header's answer until `<starttls/>` arrived too, so only a client that sent it ahead goes on.
 private final class PlaintextServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "test.plaintext-server")
@@ -66,9 +67,10 @@ private final class PlaintextServer: @unchecked Sendable {
     private var bytes = Data()
     private let features: String?
     private let starttlsReply: String
+    private let untilStartTLS: Bool
 
-    init(features: String?, starttlsReply: String = "") throws {
-        self.features = features; self.starttlsReply = starttlsReply
+    init(features: String?, starttlsReply: String = "", untilStartTLS: Bool = false) throws {
+        self.features = features; self.starttlsReply = starttlsReply; self.untilStartTLS = untilStartTLS
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -99,7 +101,7 @@ private final class PlaintextServer: @unchecked Sendable {
             // TLS this server cannot speak (direct TLS, or after our reply to <starttls/>): hang up.
             if !header, data.first == 0x16 { connection.cancel(); return }
             guard let features else { receive(connection, answeredHeader: true, answeredStartTLS: true); return }
-            if !header, text.contains("<stream:stream") {
+            if !header, text.contains("<stream:stream"), !untilStartTLS || text.contains("<starttls") {
                 header = true
                 connection.send(content: Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' from='example.test' id='1' version='1.0'>" + features).utf8), completion: .idempotent)
             }
@@ -156,6 +158,56 @@ private func startTLSHandsOverToTLSOnlyOnACleanProceed(_ reply: String, _ handsh
     let afterStartTLS = sent.suffix(from: try #require(sent.range(of: Data("<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>".utf8))).upperBound)
     #expect((afterStartTLS.first == 0x16) == handshakes)
     #expect((afterStartTLS.range(of: Data("example.test".utf8)) != nil) == handshakes)
+}
+
+private final class RememberedEndpoint: XMPPStreamProfileStore, @unchecked Sendable {
+    let profile: XMPPStreamProfile
+    init(port: UInt16) {
+        profile = XMPPStreamProfile(endpoint: XMPPEndpoint(host: "127.0.0.1", port: port, security: .startTLS), mechanisms: ["SCRAM-SHA-256"],
+                                    streamManagement: true)
+    }
+    func streamProfile(account: String) -> XMPPStreamProfile? { profile }
+    func saveStreamProfile(_ profile: XMPPStreamProfile?, account: String) {}
+}
+
+// An endpoint that negotiated STARTTLS before gets `<starttls/>` with its header, and still hands over to TLS only on
+// a `<proceed/>` its features earned.
+@Test func aRememberedStartTLSEndpointSendsStartTLSWithTheHeader() async throws {
+    let server = try PlaintextServer(features: "<stream:features>\(starttls)</stream:features>",
+                                     starttlsReply: "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>", untilStartTLS: true)
+    let port = try await server.start()
+    defer { server.stop() }
+    let client = XMPPClient()
+    try await client.configureStreamProfiles(RememberedEndpoint(port: port))
+    await #expect(throws: (any Error).self) {
+        try await client.connect(host: "127.0.0.1", port: port, security: .startTLS, domain: "example.test", username: "alice", password: "secret-password")
+    }
+    let sent = server.received
+    let text = String(decoding: sent, as: UTF8.self)
+    #expect(!text.contains("<auth") && !text.contains("secret"))
+    #expect(text.components(separatedBy: "<stream:stream").count == 2)
+    let afterStartTLS = sent.suffix(from: try #require(sent.range(of: Data("<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>".utf8))).upperBound)
+    #expect(afterStartTLS.first == 0x16)
+}
+
+// Features without STARTTLS fail an early `<starttls/>` closed, and the injection guard behind `<proceed/>` holds;
+// the second is retried once in the plain order, where it fails the same way. No TLS byte and nothing secret is sent.
+@Test(arguments: [("<stream:features>\(sasl)</stream:features>", "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>", 2),
+                  ("<stream:features>\(starttls)</stream:features>",
+                   "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/><stream:features>\(sasl)</stream:features>", 3)])
+private func anEarlyStartTLSStillFailsClosed(_ features: String, _ reply: String, _ headers: Int) async throws {
+    let server = try PlaintextServer(features: features, starttlsReply: reply)
+    let port = try await server.start()
+    defer { server.stop() }
+    let client = XMPPClient()
+    try await client.configureStreamProfiles(RememberedEndpoint(port: port))
+    await #expect(throws: (any Error).self) {
+        try await client.connect(host: "127.0.0.1", port: port, security: .startTLS, domain: "example.test", username: "alice", password: "secret-password")
+    }
+    let sent = server.received
+    let text = String(decoding: sent, as: UTF8.self)
+    #expect(!text.contains("<auth") && !text.contains("secret") && !sent.contains(0x16))
+    #expect(text.components(separatedBy: "<stream:stream").count == headers)
 }
 
 // XEP-0368: the direct TLS ClientHello asks for ALPN `xmpp-client` and names the account domain.

@@ -22,6 +22,9 @@ actor LoopbackServer {
     private var frames: [XMLStreamFrame] = []
     private var restartPending = false
     private var ended = false
+    // Set by `expectReconnect`: the next connection replaces the ended one, and waiting for a frame outlasts the end.
+    private var reconnectExpected = false
+    private(set) var connections = 0
     // Every byte the client wrote, in order, for tests that pin the exact wire text.
     private var received = Data()
 
@@ -67,23 +70,32 @@ actor LoopbackServer {
     }
 
     private func adopt(_ connection: NWConnection) {
-        guard self.connection == nil else { connection.cancel(); return }
+        guard self.connection == nil || reconnectExpected else { connection.cancel(); return }
+        self.connection?.cancel()
         self.connection = connection
+        reconnectExpected = false; ended = false; restartPending = false
+        framer = XMLStreamFramer(); frames = []
+        connections += 1
         connection.start(queue: queue)
         receive(on: connection)
     }
+
+    // Call before the reply that makes the client give up on this connection and dial again.
+    func expectReconnect() { reconnectExpected = true }
 
     private nonisolated func receive(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, complete, error in
             let finished = complete || error != nil
             Task {
-                await self.ingest(data ?? Data(), ended: finished)
+                await self.ingest(data ?? Data(), ended: finished, from: connection)
                 if !finished { self.receive(on: connection) }
             }
         }
     }
 
-    private func ingest(_ data: Data, ended: Bool) {
+    private func ingest(_ data: Data, ended: Bool, from source: NWConnection) {
+        // A replaced connection's last reads belong to nobody.
+        guard source === connection else { return }
         if !data.isEmpty {
             received.append(data)
             // The client restarts the stream only after it read `<success/>`, so its next bytes open a new one.
@@ -112,7 +124,7 @@ actor LoopbackServer {
     private func nextFrame(within limit: Duration) async throws -> XMLStreamFrame {
         let deadline = ContinuousClock.now + limit
         while frames.isEmpty {
-            guard !ended else { throw Failure(description: "connection ended") }
+            guard !ended || reconnectExpected else { throw Failure(description: "connection ended") }
             guard ContinuousClock.now < deadline else { throw Failure(description: "nothing received") }
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -138,6 +150,17 @@ actor LoopbackServer {
         }
     }
 
+    // The client's stream header, as the next frame.
+    func expectOpening() async throws {
+        guard try await nextFrame(within: .seconds(5)) == .opened else { throw Failure(description: "expected the stream") }
+    }
+
+    // A `<success/>` after which the client's next bytes open a new stream.
+    func sendSuccess(_ xml: String) async throws {
+        restartPending = true
+        try await send(xml)
+    }
+
     // Stream opening, SASL PLAIN and the restarted stream, ending with the post-authentication features.
     func authenticate(features: String = "<sm xmlns='urn:xmpp:sm:3'/><csi xmlns='urn:xmpp:csi:0'/>") async throws {
         guard try await nextFrame(within: .seconds(5)) == .opened else { throw Failure(description: "expected the stream") }
@@ -149,7 +172,7 @@ actor LoopbackServer {
         try await send(Self.header + "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/>\(features)</stream:features>")
     }
 
-    private static var header: String {
+    static var header: String {
         "<?xml version='1.0'?><stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' id='\(UUID().uuidString)' from='\(domain)' version='1.0'>"
     }
 

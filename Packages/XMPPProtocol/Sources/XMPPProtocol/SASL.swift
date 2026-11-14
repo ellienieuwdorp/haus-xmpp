@@ -16,18 +16,25 @@ struct SASLNegotiation {
 
     init(offered: Set<String>, username: String, password: String, requireSCRAM: Bool, nonce: String = SCRAM.makeNonce()) throws {
         let prepared = SASLprep.prepare(password)
-        let variant = [SCRAM.Variant.sha256, .sha1].first { offered.contains($0.mechanism.rawValue) }
-        if let prepared, let variant {
-            let scram = SCRAM(variant: variant, username: username, password: prepared, nonce: nonce)
-            mechanism = variant.mechanism; self.scram = scram
+        mechanism = try Self.choose(offered: offered, preparable: prepared != nil, requireSCRAM: requireSCRAM)
+        switch mechanism {
+        case .scramSHA256, .scramSHA1:
+            let scram = SCRAM(variant: mechanism == .scramSHA256 ? .sha256 : .sha1, username: username, password: prepared ?? "", nonce: nonce)
+            self.scram = scram
             initialResponse = Data(scram.clientFirst.utf8)
-        } else if requireSCRAM {
-            // A password SCRAM accepted before prepares the same way again, so a missing SCRAM is the server's doing.
-            throw variant == nil ? XMPPClientError.authenticationDowngrade : XMPPClientError.authenticationUnavailable
-        } else if offered.contains(Mechanism.plain.rawValue) {
-            mechanism = .plain
+        case .plain:
             initialResponse = Data(("\0" + username + "\0" + password).utf8)
-        } else { throw XMPPClientError.authenticationUnavailable }
+        }
+    }
+
+    // The one rule for every offer, whether the server's or a remembered one.
+    static func choose(offered: Set<String>, preparable: Bool, requireSCRAM: Bool) throws -> Mechanism {
+        let variant = [SCRAM.Variant.sha256, .sha1].first { offered.contains($0.mechanism.rawValue) }
+        if preparable, let variant { return variant.mechanism }
+        // A password SCRAM accepted before prepares the same way again, so a missing SCRAM is the server's doing.
+        if requireSCRAM { throw variant == nil ? XMPPClientError.authenticationDowngrade : XMPPClientError.authenticationUnavailable }
+        if offered.contains(Mechanism.plain.rawValue) { return .plain }
+        throw XMPPClientError.authenticationUnavailable
     }
 
     var usesSCRAM: Bool { scram != nil }
