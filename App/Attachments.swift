@@ -122,39 +122,116 @@ struct UploadFailureBudget {
     }
 }
 
-// The system finishes PUTs for a suspended app; task identifiers persist on the attachment row for reattaching at
-// relaunch.
-final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "haus.xmpp.ios.uploads." + scope)
-        configuration.isDiscretionary = false
-        configuration.sessionSendsLaunchEvents = true
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    }()
-    private let scope: String
-    // Called off the main thread, including for tasks reattached after relaunch.
-    var onFinish: @Sendable (_ taskID: Int, _ succeeded: Bool) -> Void = { _, _ in }
+// The system finishes PUTs for a suspended or exited app. One per session identifier, made at launch (and on a
+// relaunch for session events) so the system can deliver what finished while the app was away; each completion is
+// journaled before the delegate returns and matched to its row by tag.
+final class AttachmentUploader: UploadTasks, Sendable {
+    static let identifierPrefix = "haus.xmpp.ios.uploads."
+    private static let registry = Registry()
 
-    init(scope: String) { self.scope = scope }
+    let journal: UploadJournal
+    private let events: UploadSessionEvents
+    private let session: URLSession
 
-    func runningTaskIDs() async -> Set<Int> {
-        Set(await session.allTasks.filter { $0.state == .running || $0.state == .suspended }.map(\.taskIdentifier))
+    static func shared(scope: String) -> AttachmentUploader { registry.uploader(scope: scope) }
+
+    // The app delegate's session-events callback. False for a session this app does not own.
+    static func handleEvents(forSession identifier: String, completion: @escaping @MainActor @Sendable () -> Void) -> Bool {
+        guard identifier.hasPrefix(identifierPrefix) else { return false }
+        shared(scope: String(identifier.dropFirst(identifierPrefix.count))).events.awaitDelivery(completion)
+        return true
     }
 
-    func start(file: URL, slot: XMPPUploadSlot, size: Int, contentType: String) -> Int {
+    private init(scope: String) {
+        journal = UploadJournal(file: UploadJournal.file(scope: scope))
+        events = UploadSessionEvents(journal: journal)
+        let configuration = URLSessionConfiguration.background(withIdentifier: Self.identifierPrefix + scope)
+        configuration.isDiscretionary = false
+        configuration.sessionSendsLaunchEvents = true
+        session = URLSession(configuration: configuration, delegate: events, delegateQueue: nil)
+    }
+
+    // Called off the main thread after each completion is journaled.
+    func onFinish(_ handler: @escaping @Sendable () -> Void) { events.onFinish(handler) }
+
+    // Suspended until resumed, so the row names the attempt before any completion can arrive.
+    func prepare(file: URL, slot: XMPPUploadSlot, size: Int, contentType: String, tag: UploadTag) -> URLSessionUploadTask {
         var request = URLRequest(url: slot.put)
         request.httpMethod = "PUT"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue(String(size), forHTTPHeaderField: "Content-Length")
         for (name, value) in slot.headers { request.setValue(value, forHTTPHeaderField: name) }
         let task = session.uploadTask(with: request, fromFile: file)
-        task.resume()
-        return task.taskIdentifier
+        task.taskDescription = tag.taskDescription
+        return task
     }
 
+    func states() async -> [UploadTaskState] {
+        await session.allTasks.compactMap { task in
+            let phase: UploadTaskState.Phase
+            switch task.state {
+            case .running, .suspended: phase = .live
+            case .completed: phase = .finished(succeeded: UploadSessionEvents.succeeded(task, error: task.error))
+            case .canceling: return nil
+            @unknown default: return nil
+            }
+            return UploadTaskState(taskID: task.taskIdentifier, tag: UploadTag(taskDescription: task.taskDescription), phase: phase)
+        }
+    }
+
+    func apply(resume: Set<Int>, cancel: Set<Int>) async {
+        guard !resume.isEmpty || !cancel.isEmpty else { return }
+        for task in await session.allTasks {
+            if cancel.contains(task.taskIdentifier) { task.cancel() } else if resume.contains(task.taskIdentifier) { task.resume() }
+        }
+    }
+
+    // `lock` serialises `uploaders`.
+    private final class Registry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var uploaders: [String: AttachmentUploader] = [:]
+
+        func uploader(scope: String) -> AttachmentUploader {
+            lock.withLock {
+                if let uploader = uploaders[scope] { return uploader }
+                let uploader = AttachmentUploader(scope: scope)
+                uploaders[scope] = uploader
+                return uploader
+            }
+        }
+    }
+}
+
+// `lock` serialises the two handlers; the journal locks itself.
+private final class UploadSessionEvents: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let journal: UploadJournal
+    private let lock = NSLock()
+    private var finished: @Sendable () -> Void = {}
+    private var delivered: (@MainActor @Sendable () -> Void)?
+
+    init(journal: UploadJournal) { self.journal = journal }
+
+    func onFinish(_ handler: @escaping @Sendable () -> Void) { lock.withLock { finished = handler } }
+    func awaitDelivery(_ completion: @escaping @MainActor @Sendable () -> Void) { lock.withLock { delivered = completion } }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
-        let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
-        onFinish(task.taskIdentifier, error == nil && (200...299).contains(status))
+        guard let tag = UploadTag(taskDescription: task.taskDescription) else { return }
+        journal.record(UploadOutcome(tag: tag, succeeded: Self.succeeded(task, error: error), finishedAt: Date()))
+        lock.withLock { finished }()
+    }
+
+    // Every completion of a relaunch was delivered, and journaled, before this.
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        let completion = lock.withLock {
+            defer { delivered = nil }
+            return delivered
+        }
+        guard let completion else { return }
+        Task { @MainActor in completion() }
+    }
+
+    static func succeeded(_ task: URLSessionTask, error: (any Error)?) -> Bool {
+        error == nil && (200...299).contains((task.response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 }
 

@@ -274,7 +274,9 @@ final class AppModel {
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
     var canSendAttachments: Bool { isDemo || uploadService != nil }
-    @ObservationIgnored let testSessionID: String? = {
+    @ObservationIgnored let testSessionID = AppModel.launchTestSessionID
+    // Read before any model exists too: the app delegate makes the upload session at launch.
+    nonisolated static let launchTestSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
               let id = UUID(uuidString: value) else { return nil }
@@ -416,8 +418,8 @@ final class AppModel {
             }
             store = opened
             storageDirectory = directory
-            let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
-            uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
+            let uploader = AttachmentUploader.shared(scope: Self.uploadScope)
+            uploader.onFinish { [weak self] in Task { @MainActor in await self?.reconcileUploads(stranding: false) } }
             self.uploader = uploader
             outboxSender = OutboxSender(store: opened)
             accountID = savedAccount
@@ -1784,8 +1786,13 @@ final class AppModel {
                 }
                 do {
                     let slot = try await client.requestUploadSlot(service: service, filename: attachment.name, size: size, contentType: "application/octet-stream")
-                    let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
-                    try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
+                    let tag = UploadTag(account: account, messageID: message.id, url: slot.get.absoluteString)
+                    let task = uploader.prepare(file: staged, slot: slot, size: size, contentType: "application/octet-stream", tag: tag)
+                    do { try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: task.taskIdentifier, url: tag.url) } catch {
+                        task.cancel()
+                        throw error
+                    }
+                    task.resume()
                     if self?.accountID == account, let host = slot.get.host()?.lowercased() { self?.noteLinkPreviewHosts([host]) }
                 } catch {
                     // A dropped connection is not the server refusing; the reconnect starts uploads again.
@@ -1815,41 +1822,35 @@ final class AppModel {
         startOutbox()
     }
 
-    // Tasks the system dropped while we were gone get a fresh slot; running ones are left alone.
-    private func reconcileUploads() async {
-        guard let store, let uploader, !accountID.isEmpty else { return }
-        let running = await uploader.runningTaskIDs()
-        let pending = (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []
-        let stranded = pending.filter { message in message.attachment?.uploadTaskID.map { !running.contains($0) } ?? true }
+    nonisolated static var uploadScope: String { launchTestSessionID ?? "primary" }
+
+    // Adopts what the session runs or finished while the app was away. Only a reconcile, once the session delivered
+    // that, gives a slot with neither a new one.
+    private func reconcileUploads(stranding: Bool = true) async {
+        guard let store, let uploader, let files, !accountID.isEmpty else { return }
+        let account = accountID
+        let settler = UploadSettler(store: store, tasks: uploader, journal: uploader.journal)
+        let settled = await settler.settle(account: account, detectsStranded: stranding, now: Date())
+        guard accountID == account else { return }
+        for id in settled.uploaded {
+            uploadFailures.reset(id)
+            // A staged file left behind goes with the cache; the upload is recorded either way.
+            try? FileManager.default.removeItem(at: files.stagingURL(messageID: id))
+        }
+        for message in settled.failed { await uploadFailed(message, account: account) }
+        if !settled.uploaded.isEmpty, accountID == account { await refresh(); startOutbox() }
+        guard stranding, accountID == account else { return }
+        let stranded = ((try? await store.attachmentsAwaitingUpload(accountID: account)) ?? []).filter { $0.attachment?.uploadTaskID == nil }
+        guard accountID == account else { return }
         if uploadService == nil, !stranded.isEmpty {
             // The server no longer offers uploads, so these files would hold their chats forever.
-            for message in stranded { try? await store.failQueuedOutgoing(accountID: accountID, messageID: message.id) }
+            for message in stranded { try? await store.failQueuedOutgoing(accountID: account, messageID: message.id) }
             error = "This server no longer accepts files, so \(stranded.count == 1 ? "a file was" : "\(stranded.count) files were") not sent."
             await refresh()
             startOutbox()
             return
         }
-        for message in pending {
-            if let taskID = message.attachment?.uploadTaskID, !running.contains(taskID) {
-                try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
-            }
-        }
         startUploads()
-    }
-
-    private func uploadFinished(taskID: Int, succeeded: Bool) async {
-        guard let store, let files, !accountID.isEmpty,
-              let message = ((try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []).first(where: { $0.attachment?.uploadTaskID == taskID }) else { return }
-        if succeeded {
-            uploadFailures.reset(message.id)
-            try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)
-            try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))
-            await refresh()
-            startOutbox()
-        } else {
-            try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
-            await uploadFailed(message, account: accountID)
-        }
     }
 
     // Verified before they exist locally; `downloads` decides which wait for a tap.
