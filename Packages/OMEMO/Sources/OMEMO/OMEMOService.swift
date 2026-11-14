@@ -25,68 +25,9 @@ public actor OMEMOService {
     private var stateCache: [String: (revision: Int, state: AccountEncryptionState)] = [:]
     // Versions whose bundle the latest `initialize` published; only those may be advertised by
     // `maintainLocalAdvertisement`.
-    private var publishedBundles: [String: Set<XMPPOMEMOProfile>] = [:]
+    var publishedBundles: [String: Set<XMPPOMEMOProfile>] = [:]
     public init(store: MessageStore, protection: StateProtection) {
         self.store = store; self.protection = protection
-    }
-
-    public func initialize(account: String, transport: any OMEMOTransport) async throws {
-        try await gate.run { try await self.initializeLocked(account: account, transport: transport) }
-    }
-
-    private func initializeLocked(account: String, transport: any OMEMOTransport) async throws {
-        // A pass that fails before a version's bundle goes out (another identity under our ID, a timeout) leaves that
-        // version unadvertised by `maintainLocalAdvertisement`.
-        publishedBundles[account] = nil
-        if try await store.encryptionState(accountID: account) == nil {
-            // State under another spelling of this account is its identity: never create a second one beside it.
-            guard try await !store.encryptionStateAccountIDs().contains(where: { bare($0) == bare(account) }) else { throw OMEMOError.stateUnavailable }
-            // A device ID this account gave up (`startOver`) is never taken again.
-            let deviceID = try Self.newDeviceID(avoiding: try await store.retiredOwnDevices(accountID: account))
-            let legacy = try OMEMOEngine(profile: .legacy, deviceID: deviceID)
-            let modern = try OMEMOEngine(profile: .modern, sharingIdentityWith: legacy)
-            let state = AccountEncryptionState(engines: ["legacy": try legacy.snapshot(), "modern": try modern.snapshot()])
-            try await store.saveEncryptionState(accountID: account, expectedRevision: nil, data: encode(state, account: account))
-        }
-        let (_, identityState) = try await load(account)
-        let legacyIdentity = try engine(identityState, .legacy)
-        let modernIdentity = try engine(identityState, .modern)
-        guard try OMEMOEngine.fingerprintBytes(for: legacyIdentity.identityKey, profile: .legacy) == OMEMOEngine.fingerprintBytes(for: modernIdentity.identityKey, profile: .modern), legacyIdentity.deviceID == modernIdentity.deviceID else {
-            // Both profiles share one identity per device ID. Fail closed otherwise; never repair by silently
-            // replacing a published identity or prepared ciphertext.
-            throw OMEMOError.stateUnavailable
-        }
-        // Kept in plain text so the device can still be retired if the wrapping key is ever lost.
-        try await store.recordEncryptionDeviceID(accountID: account, deviceID: legacyIdentity.deviceID)
-        for profile in [XMPPOMEMOProfile.legacy, .modern] {
-            let (revision, old) = try await load(account)
-            var state = old
-            let engine = try engine(state, profile)
-            if try engine.rotateSignedPreKeyIfNeeded() {
-                state.engines[profile.rawValue] = try engine.snapshot()
-                try await save(state, revision: revision, account: account)
-            }
-            let devices = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-            if devices.contains(engine.deviceID) {
-                do {
-                    let published = try await transport.fetchOMEMOBundle(for: account, deviceID: engine.deviceID, profile: profile)
-                    guard published.identityKey == (try engine.identityKey) else { throw OMEMOError.identityChanged }
-                } catch XMPPIQError.stanza(condition: "item-not-found") {
-                    // Listed without a bundle: publishing ours replaces nothing. Any other failure (timeout, wait-type
-                    // or server error, unreadable answer) is not proof of absence and fails the setup unchanged.
-                }
-            }
-            try await transport.publishOMEMOBundle(wireBundle(try engine.bundle(), profile: profile))
-            publishedBundles[account, default: []].insert(profile)
-            // Another client may register while the bundle publishes: re-read the list before changing it.
-            try await maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport, removingRetired: true)
-            let (publishedRevision, publishedOld) = try await load(account)
-            if publishedOld.pendingBundlePublications.contains(profile.rawValue) {
-                var published = publishedOld
-                published.pendingBundlePublications.remove(profile.rawValue)
-                try await save(published, revision: publishedRevision, account: account)
-            }
-        }
     }
 
     public func refreshDevices(account: String, peer: String, profile: XMPPOMEMOProfile? = nil,
@@ -386,7 +327,7 @@ public actor OMEMOService {
     // `removingRetired` (connection setup only, so it never trades publications with a restored old installation)
     // also drops `pending` given-up IDs. A `removed` ID listed again becomes `reclaimed` and is left alone. Removal is
     // best effort: an ID still listed after three tries stays `pending` for the next connection.
-    private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport,
+    func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport,
                                                   removingRetired: Bool) async throws {
         let (_, state) = try await load(account)
         let local = try engine(state, profile)
@@ -418,11 +359,7 @@ public actor OMEMOService {
     private func readOwnDevices(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport,
                                 removed: inout Set<UInt32>) async throws -> [UInt32] {
         let list = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-        let back = removed.intersection(list)
-        if !back.isEmpty {
-            try await store.advanceRetiredOwnDevices(accountID: account, profile: profile.rawValue, deviceIDs: back, to: .reclaimed)
-            removed.subtract(back)
-        }
+        try await reclaimListed(list, account: account, profile: profile, removed: &removed)
         return list
     }
 
@@ -1437,7 +1374,7 @@ public actor OMEMOService {
         guard engine.profile == profile.crypto else { throw OMEMOError.stateUnavailable }
         return engine
     }
-    private func wireBundle(_ bundle: DeviceBundle, profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
+    func wireBundle(_ bundle: DeviceBundle, profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
         XMPPOMEMOBundle(profile: profile, deviceID: bundle.deviceID, identityKey: bundle.identityKey,
                         signedPreKeyID: bundle.signedPreKeyID, signedPreKey: bundle.signedPreKey,
                         signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)

@@ -118,11 +118,10 @@ public struct ConnectionSetup: Sendable {
         let discoversUploads = !skipsUploads
         async let uploads: Void = { if discoversUploads { await operations.discoverUploads() } }()
 
-        guard let features = await negotiate(operations, sink: sink) else { return }
-        let walks = features.contains(Self.archiveFeature)
+        let negotiated = Negotiated()
         let held: StepFailure?
         do {
-            held = try await Self.concurrently(operations, identityExists: identityExists, walks: walks, sink: sink)
+            held = try await concurrently(operations, negotiated: negotiated, sink: sink)
         } catch let failure as StepFailure {
             await publishFailure(failure, sink: sink)
             return
@@ -130,7 +129,7 @@ public struct ConnectionSetup: Sendable {
             return
         }
         guard !Task.isCancelled else { return }
-        if walks { await sink(.catchingUp(nil)) }
+        if await negotiated.walks { await sink(.catchingUp(nil)) }
         if let held {
             await publishFailure(held, sink: sink)
             return
@@ -142,39 +141,78 @@ public struct ConnectionSetup: Sendable {
         await uploads
     }
 
-    // Features, then carbons when offered. nil ends setup: cancelled, or carbons failed (already published).
+    // Features and carbons in one round trip. Carbons are asked for beside discovery unless the features in hand rule
+    // them out, and only a server that lists them fails setup by refusing. nil ends setup: cancelled, or carbons failed
+    // (already published).
     private func negotiate(_ operations: Operations, sink: @escaping Sink) async -> Set<String>? {
-        var step = Self.featuresStep
-        await sink(.step(step))
+        await sink(.step(Self.featuresStep))
+        let known = skipsFeatures ? memory.features : nil
+        let enables = !skipsCarbons && (known ?? memory.features)?.contains(Self.carbonsFeature) != false
+        async let carbons: (any Error)? = {
+            guard enables else { return nil }
+            do { try await operations.enableCarbons() } catch { return error }
+            return nil
+        }()
         let features: Set<String>
-        if skipsFeatures, let known = memory.features {
+        if let known {
             features = known
         } else {
             do { features = try await operations.features() } catch {
                 guard !Task.isCancelled, !(error is CancellationError) else { return nil }
-                await sink(.degraded(step: step, detail: Self.detail(error)))
+                await sink(.degraded(step: Self.featuresStep, detail: Self.detail(error)))
                 features = memory.features ?? Self.assumedFeatures
             }
         }
+        let refusal = await carbons
         guard features.contains(Self.carbonsFeature), !skipsCarbons else { return features }
-        do {
-            try Task.checkCancellation()
-            step = Self.carbonsStep
-            await sink(.step(step))
-            try await operations.enableCarbons()
-        } catch {
-            await publishFailure(StepFailure(step: step, error: error), sink: sink)
+        guard !Task.isCancelled else { return nil }
+        await sink(.step(Self.carbonsStep))
+        // Listed but never asked: the features in hand said otherwise.
+        let failure: (any Error)?
+        if enables { failure = refusal } else {
+            do { try await operations.enableCarbons(); failure = nil } catch { failure = error }
+        }
+        if let failure {
+            await publishFailure(StepFailure(step: Self.carbonsStep, error: failure), sink: sink)
             return nil
         }
         return features
     }
 
-    // A thrown failure ends setup at once; a returned one waits for the walk.
-    private static func concurrently(_ operations: Operations, identityExists: Bool, walks: Bool,
-                                     sink: @escaping Sink) async throws -> StepFailure? {
-        try await withThrowingTaskGroup(of: StepFailure?.self, returning: StepFailure?.self) { group in
-            group.addTask { try await identityThenRooms(operations, identityExists: identityExists, sink: sink) }
-            if walks { group.addTask { try await walk(operations, sink: sink) } }
+    // Hands the features from negotiation to the identity step, which starts beside it. nil: setup ended there.
+    private actor Negotiated {
+        private var features: Set<String>??
+        private var waiting: [CheckedContinuation<Set<String>?, Never>] = []
+        var walks: Bool { features??.contains(ConnectionSetup.archiveFeature) ?? false }
+
+        func finish(_ result: Set<String>?) {
+            features = .some(result)
+            waiting.forEach { $0.resume(returning: result) }
+            waiting = []
+        }
+
+        func result() async -> Set<String>? {
+            if let features { return features }
+            return await withCheckedContinuation { waiting.append($0) }
+        }
+    }
+
+    private struct Ended: Error {}
+
+    // A thrown failure ends setup at once; a returned one waits for the walk. Negotiation always finishes `negotiated`
+    // before it returns or throws, so the identity step never waits past it.
+    private func concurrently(_ operations: Operations, negotiated: Negotiated, sink: @escaping Sink) async throws -> StepFailure? {
+        let setup = self
+        return try await withThrowingTaskGroup(of: StepFailure?.self, returning: StepFailure?.self) { group in
+            group.addTask { try await Self.identityThenRooms(operations, identityExists: setup.identityExists, negotiated: negotiated, sink: sink) }
+            group.addTask {
+                let features = await setup.negotiate(operations, sink: sink)
+                if features != nil, setup.identityExists { await sink(.step(Self.keysStep)) }
+                await negotiated.finish(features)
+                // Carbons failed (already published) or setup was cancelled.
+                guard let features else { throw Ended() }
+                return features.contains(Self.archiveFeature) ? try await Self.walk(operations, sink: sink) : nil
+            }
             var first: StepFailure?
             do {
                 for try await failure in group where first == nil { first = failure }
@@ -187,14 +225,18 @@ public struct ConnectionSetup: Sendable {
         }
     }
 
-    private static func identityThenRooms(_ operations: Operations, identityExists: Bool, sink: @escaping Sink) async throws -> StepFailure? {
+    // The identity check goes out beside negotiation; its outcome counts only once negotiation ended, as if it had
+    // started then.
+    private static func identityThenRooms(_ operations: Operations, identityExists: Bool, negotiated: Negotiated,
+                                          sink: @escaping Sink) async throws -> StepFailure? {
         var step = keysStep
+        var identity: (any Error)?
+        if identityExists {
+            do { try await operations.initializeEncryption() } catch { identity = error }
+        }
+        guard await negotiated.result() != nil else { return nil }
         do {
-            if identityExists {
-                try Task.checkCancellation()
-                await sink(.step(step))
-                try await operations.initializeEncryption()
-            }
+            if let identity { throw identity }
             try Task.checkCancellation()
             await sink(.ready)
             step = rejoinStep
