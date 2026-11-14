@@ -341,14 +341,21 @@ extension XMPPClient {
         }
         throw XMPPGroupError.membershipChanged
     }
+    // One read is the four queries in flight together: serial queries would be no more atomic, and the
+    // caller's revision checks around the read are what detect a change. The features are checked before any list is
+    // used.
     private func readGroupMembers(_ room: String) async throws -> [String] {
-        let disco = try await requestIQ(type: "get", to: room, payload: "<query xmlns='\(GroupChatWire.disco)'/>")
-        try GroupChatWire.checkFeatures(disco, room: room)
-        var all: [String] = []
-        for affiliation in ["member", "admin", "owner"] {
-            let reply = try await requestIQ(type: "get", to: room, payload: "<query xmlns='\(GroupChatWire.admin)'><item affiliation='\(affiliation)'/></query>")
-            all += try GroupChatWire.members(reply, room: room, affiliation: affiliation)
+        func affiliationQuery(_ affiliation: String) -> String {
+            "<query xmlns='\(GroupChatWire.admin)'><item affiliation='\(affiliation)'/></query>"
         }
+        async let disco = requestIQ(type: "get", to: room, payload: "<query xmlns='\(GroupChatWire.disco)'/>")
+        async let members = requestIQ(type: "get", to: room, payload: affiliationQuery("member"))
+        async let admins = requestIQ(type: "get", to: room, payload: affiliationQuery("admin"))
+        async let owners = requestIQ(type: "get", to: room, payload: affiliationQuery("owner"))
+        try GroupChatWire.checkFeatures(try await disco, room: room)
+        var all = try GroupChatWire.members(try await members, room: room, affiliation: "member")
+        all += try GroupChatWire.members(try await admins, room: room, affiliation: "admin")
+        all += try GroupChatWire.members(try await owners, room: room, affiliation: "owner")
         guard !all.isEmpty, all.count <= 100, Set(all).count == all.count else { throw XMPPGroupError.incompleteMembership }
         return all.sorted()
     }
