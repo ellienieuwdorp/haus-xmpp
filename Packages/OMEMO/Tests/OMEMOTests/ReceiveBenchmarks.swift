@@ -153,6 +153,14 @@ final class ReceiveBenchmarks: XCTestCase {
         for message in messages { _ = try await service.receive(account: account, message: message, transport: transport) }
     }
 
+    private static let batched: Receive = { service, account, messages, transport in
+        try await service.receiveArchived(account: account, messages: messages.map { ArchivedEncryptedMessage(message: $0, sentAt: nil) },
+                                          transport: transport)
+    }
+
+    func testBatchedWith1Session() throws { try measureReceive(sessions: 0, confirmed: true, Self.batched) }
+    func testBatchedWith40Sessions() throws { try measureReceive(sessions: 40, confirmed: true, Self.batched) }
+    func testBatchedPreKeyRun() throws { try measureReceive(sessions: 0, confirmed: false, Self.batched) }
     func testOneByOneWith1Session() throws { try measureReceive(sessions: 0, confirmed: true, Self.oneByOne) }
     func testOneByOneWith40Sessions() throws { try measureReceive(sessions: 40, confirmed: true, Self.oneByOne) }
     func testOneByOnePreKeyRun() throws { try measureReceive(sessions: 0, confirmed: false, Self.oneByOne) }
