@@ -20,15 +20,18 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let push: XMPPPushConfiguration?
     /// Announced as XEP-0319 idle when the account shares last seen.
     public let leftForeground: Date?
+    /// The app's shared `StreamProfileMemory`: the connection sends ahead with what the server last offered, and
+    /// learns or refuses for every process. Nil connects in the plain order.
+    public let streamProfiles: (any XMPPStreamProfileStore)?
     public var accountID: String { username + "@" + domain }
 
     public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
                 labCertificateAuthority: Data? = nil, resource: String? = nil,
-                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil) {
+                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil, streamProfiles: (any XMPPStreamProfileStore)? = nil) {
         self.route = route; self.domain = domain
         self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
         self.labCertificateAuthority = labCertificateAuthority
-        self.resource = resource; self.push = push; self.leftForeground = leftForeground
+        self.resource = resource; self.push = push; self.leftForeground = leftForeground; self.streamProfiles = streamProfiles
     }
     public var description: String { "BackgroundAccount(<redacted>)" }
     public var debugDescription: String { description }
@@ -271,12 +274,13 @@ actor CatchUpLedger {
 }
 
 extension BackgroundAccount {
-    // Stream management on the account's store and the app's resource; away, so the session never makes the user look
-    // online.
+    // Stream management on the account's store, the app's resource and stream profile; away, so the session never
+    // makes the user look online.
     func client(store: MessageStore, encryption: OMEMOService) async throws -> XMPPClient {
         let client = XMPPClient(labCertificateAuthority: labCertificateAuthority)
         try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
         if let resource { try await client.configureResource(resource) }
+        if let streamProfiles { try await client.configureStreamProfiles(streamProfiles) }
         let preferences = try await store.accountPreferences(accountID: accountID)
         try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: leftForeground),
                                          clientActive: false)

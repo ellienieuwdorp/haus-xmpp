@@ -1,8 +1,12 @@
 import Foundation
+import MessagingCore
 import XMPPProtocol
 
 enum SharedSession {
     static var groupDefaults: UserDefaults? { UserDefaults(suiteName: SharedStorage.group) }
+
+    // Each account's stream profile, which every process connects with and learns into.
+    static var streamProfiles: StreamProfileMemory? { groupDefaults.map(StreamProfileMemory.init) }
 
     // Random once, then kept, so a new bind (app, extension or notification action) replaces the previous session.
     static func resource(accountID: String, defaults: UserDefaults? = groupDefaults) -> String {

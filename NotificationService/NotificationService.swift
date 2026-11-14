@@ -165,7 +165,7 @@ private enum ExtensionRun {
                                            resource: SharedSession.resource(accountID: accountID),
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
-                                           leftForeground: SharedSession.leftForeground()),
+                                           leftForeground: SharedSession.leftForeground(), streamProfiles: SharedSession.streamProfiles),
                 liveness: AppLiveness.isOffered
                     ? AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())) : nil,
                 giveWay: listening ? giveWay : nil,

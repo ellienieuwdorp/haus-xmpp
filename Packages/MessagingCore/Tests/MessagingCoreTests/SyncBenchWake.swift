@@ -11,6 +11,7 @@ struct SyncBenchWake {
     let environment: SyncBenchEnvironment
     let proxy: SyncBenchProxy
     let bench: SyncBenchStore
+    let streamProfiles: StreamProfileMemory
 
     private var peer: SyncBenchFixture.Account { environment.fixture.peer }
 
@@ -22,7 +23,8 @@ struct SyncBenchWake {
         let push = SyncBenchClock.now(), before = proxy.counts, cpu = SyncBenchClock.cpuMilliseconds()
         let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: proxy.port, security: .directTLS)),
                                         domain: peer.domain, username: peer.localpart, password: peer.password,
-                                        labCertificateAuthority: environment.authority, resource: environment.fixture.resource)
+                                        labCertificateAuthority: environment.authority, resource: environment.fixture.resource,
+                                        streamProfiles: streamProfiles)
         let accountID = peer.jid
         try await BackgroundSynchronizer().synchronize(
             databaseURL: bench.url.appending(path: "messages.sqlite"), wrappingKey: SyncBenchFixture.key, account: account,

@@ -40,6 +40,8 @@ import XMPPProtocol
         engine.backgroundTimeRemaining = { .seconds(30) }
     }
 
+    // The App Group's profiles in the app: an extension run for this account connects with them.
+    var streamProfiles: StreamProfileMemory { engine.profiles.streams }
     var joinedRooms: Set<String> { joined }
     func uploadsFresh(account: String) -> Bool { uploadsKnown }
 

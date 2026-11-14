@@ -73,7 +73,7 @@ final class AccountResourceTests: XCTestCase {
         _ = SharedSession.resource(accountID: account, defaults: group)
         _ = UploadServiceMemory(defaults: app, mirror: group)
             .settle(account: account, previous: nil, discovery: .success(XMPPUploadService(jid: "upload.example.org", maximumFileSize: 1)))
-        let profiles = ServerProfileMemory(defaults: app)
+        let profiles = ServerProfileMemory(defaults: app, streamProfiles: group)
         profiles.discovered(["urn:xmpp:mam:2"], account: account)
         profiles.carbonsEnabled(account: account, stream: "stream-1")
         profiles.saveStreamProfile(XMPPStreamProfile(endpoint: XMPPEndpoint(host: "xmpp.example.org", port: 5223, security: .directTLS),

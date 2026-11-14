@@ -1,29 +1,51 @@
 import Foundation
 import XMPPProtocol
 
-/// What setup learned about the account's server, per account: its features for a day, the stream that has carbons
-/// enabled, and the stream profile the next connection sends ahead with.
-// Unchecked: `UserDefaults` is thread-safe, and setup operations write it off the main actor.
-public struct ServerProfileMemory: XMPPStreamProfileStore, @unchecked Sendable {
+/// The stream profile each account's next connection sends ahead with. Kept in the App Group's defaults, so the app,
+/// both extensions and notification actions get the same quickstart, and an endpoint's refusal of early data, written
+/// by whichever process met it, holds for all of them.
+// Unchecked: `UserDefaults` is thread-safe, and processes share an App Group suite through it.
+public struct StreamProfileMemory: XMPPStreamProfileStore, @unchecked Sendable {
     public let defaults: UserDefaults
-    public static let featuresLifetime: TimeInterval = 24 * 60 * 60
 
     public init(defaults: UserDefaults) { self.defaults = defaults }
 
-    private static func featuresKey(_ account: String) -> String { "serverFeatures.\(account)" }
-    private static func carbonsKey(_ account: String) -> String { "carbonsStream.\(account)" }
-    private static func streamProfileKey(_ account: String) -> String { "streamProfile.\(account)" }
+    private static func key(_ account: String) -> String { "streamProfile.\(account)" }
 
     public func streamProfile(account: String) -> XMPPStreamProfile? {
-        guard !account.isEmpty, let data = defaults.data(forKey: Self.streamProfileKey(account)) else { return nil }
+        guard !account.isEmpty, let data = defaults.data(forKey: Self.key(account)) else { return nil }
         return try? JSONDecoder().decode(XMPPStreamProfile.self, from: data)
     }
 
     public func saveStreamProfile(_ profile: XMPPStreamProfile?, account: String) {
         guard !account.isEmpty else { return }
-        if let profile, let data = try? JSONEncoder().encode(profile) { defaults.set(data, forKey: Self.streamProfileKey(account)) }
-        else { defaults.removeObject(forKey: Self.streamProfileKey(account)) }
+        if let profile, let data = try? JSONEncoder().encode(profile) { defaults.set(data, forKey: Self.key(account)) }
+        else { defaults.removeObject(forKey: Self.key(account)) }
     }
+
+    public func forget(account: String) { defaults.removeObject(forKey: Self.key(account)) }
+}
+
+/// What setup learned about the account's server, per account: its features for a day and the stream that has carbons
+/// enabled, in the app's defaults, and the shared stream profile in `streams`.
+// Unchecked: `UserDefaults` is thread-safe, and setup operations write it off the main actor.
+public struct ServerProfileMemory: XMPPStreamProfileStore, @unchecked Sendable {
+    public let defaults: UserDefaults
+    public let streams: StreamProfileMemory
+    public static let featuresLifetime: TimeInterval = 24 * 60 * 60
+
+    /// `streamProfiles` is the App Group's defaults; without it the stream profile stays in `defaults`.
+    public init(defaults: UserDefaults, streamProfiles: UserDefaults? = nil) {
+        self.defaults = defaults
+        streams = StreamProfileMemory(defaults: streamProfiles ?? defaults)
+    }
+
+    private static func featuresKey(_ account: String) -> String { "serverFeatures.\(account)" }
+    private static func carbonsKey(_ account: String) -> String { "carbonsStream.\(account)" }
+
+    public func streamProfile(account: String) -> XMPPStreamProfile? { streams.streamProfile(account: account) }
+
+    public func saveStreamProfile(_ profile: XMPPStreamProfile?, account: String) { streams.saveStreamProfile(profile, account: account) }
 
     public func memory(account: String, stream: String?, uploadsFresh: Bool, now: Date = .now) -> ConnectionSetup.Memory {
         guard !account.isEmpty else { return ConnectionSetup.Memory() }
@@ -51,6 +73,6 @@ public struct ServerProfileMemory: XMPPStreamProfileStore, @unchecked Sendable {
     public func forget(account: String) {
         defaults.removeObject(forKey: Self.featuresKey(account))
         defaults.removeObject(forKey: Self.carbonsKey(account))
-        defaults.removeObject(forKey: Self.streamProfileKey(account))
+        streams.forget(account: account)
     }
 }

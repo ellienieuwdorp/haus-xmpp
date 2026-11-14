@@ -421,7 +421,7 @@ import AppKit
                           requiresSCRAM: account.requiresSCRAM, resource: SharedSession.resource(accountID: account.accountID),
                           push: PushRegistrationState.sessionSubscription(saved: account.push,
                                                                           state: try? PushRegistrationState.load(accountID: account.accountID)),
-                          leftForeground: SharedSession.leftForeground())
+                          leftForeground: SharedSession.leftForeground(), streamProfiles: SharedSession.streamProfiles)
     }
     #endif
 }

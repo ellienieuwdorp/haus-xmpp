@@ -116,7 +116,7 @@ import XMPPProtocol
             try await NotificationPresenter(posting: FakePosting()).present(store: bench.store, accountID: environment.fixture.peer.jid,
                                                                             progress: NotificationRunProgress())
             await session.stop()
-            let wake = SyncBenchWake(environment: environment, proxy: proxy, bench: bench)
+            let wake = SyncBenchWake(environment: environment, proxy: proxy, bench: bench, streamProfiles: session.streamProfiles)
             let resumed = try await wake.run("wake-resume", expectResumed: true)
             try resumed.write(to: environment.results)
             #expect(resumed.passed == true)
