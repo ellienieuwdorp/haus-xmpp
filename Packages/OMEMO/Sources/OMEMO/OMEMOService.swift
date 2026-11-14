@@ -586,55 +586,19 @@ public actor OMEMOService {
     }
 
     /// Seals direct reactions, receipts, retractions and corrections (plain wire for legacy peers, envelope for
-    /// modern ones) and returns every update the drain may claim. Key transports are sealed at creation.
-    public func prepareAvailableUpdates(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
-        try await gate.run { try await self.prepareUpdatesLocked(account: account, transport: transport) }
+    /// modern ones) and returns every update the drain may claim. Key transports are sealed at creation. With
+    /// `deferringReceipts`, receipts and markers stay queued, unsealed and unclaimable, for a later pass.
+    public func prepareAvailableUpdates(account: String, transport: any OMEMOTransport, deferringReceipts: Bool = false) async throws -> EncryptionPreparation {
+        try await gate.run { try await self.prepareUpdatesLocked(account: account, transport: transport, deferringReceipts: deferringReceipts) }
     }
 
-    private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
-        // A correction has a body, so it is encrypted for legacy peers too (`plain` is nil) and its reference rides
-        // outside.
-        struct Pending {
-            let id: String; let chatID: String; let kind: StoredUpdate.Kind; let plain: (() throws -> String)?; let plaintext: (_ modern: Bool) throws -> Data
-            var dropsLinkPreview: (_ modern: Bool) -> Bool = { _ in false }
-        }
-        var queued = try await store.queuedReactions(accountID: account).map { update in
-            Pending(id: update.id, chatID: update.chatID, kind: .reaction,
-                    plain: { try XMPPClient.reactionXML(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id) },
-                    plaintext: { _ in try EncryptedContent.encodeReaction(targetWireID: update.targetWireID, reactions: update.reactions, sender: account,
-                                                                          recipient: update.chatID, originID: update.id, modern: true) })
-        }
-        queued += try await store.queuedReceipts(accountID: account).compactMap { update in
-            guard let target = update.targetWireID else { return nil }
-            let kind: MessageContent.Receipt.Kind = update.kind == .marker ? .displayed : .delivered
-            return Pending(id: update.id, chatID: update.chatID, kind: update.kind,
-                           plain: { try XMPPClient.receiptXML(to: update.chatID, targetID: target, kind: kind, id: update.id) },
-                           plaintext: { _ in try EncryptedContent.encodeReceipt(targetWireID: target, kind: kind, sender: account, recipient: update.chatID, originID: update.id) })
-        }
-        queued += try await store.queuedUpdates(accountID: account, kind: .retraction).compactMap { update in
-            guard let target = update.targetWireID else { return nil }
-            return Pending(id: update.id, chatID: update.chatID, kind: .retraction,
-                           plain: { try XMPPClient.retractionXML(to: update.chatID, targetID: target, id: update.id) },
-                           plaintext: { _ in try EncryptedContent.encodeRetraction(targetWireID: target, sender: account, recipient: update.chatID, originID: update.id, modern: true) })
-        }
-        for update in try await store.queuedUpdates(accountID: account, kind: .correction) {
-            guard let target = update.targetWireID, let payload = update.payload, let body = MessageEvent.correctionBody(payload) else { continue }
-            let linkMetadata = MessageEvent.correctionLinkPreview(payload)?.metadata
-            // Editing a caption re-sends the same file reference: a peer that replaces the whole message keeps the attachment.
-            var attachment: StoredAttachment?
-            if let id = update.targetMessageID { attachment = try await store.message(accountID: account, messageID: id)?.attachment }
-            let file = try attachment.map { try fileSharing(for: $0, account: account) }
-            queued.append(Pending(id: update.id, chatID: update.chatID, kind: .correction, plain: nil,
-                                  plaintext: { modern in try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
-                                                                                     modern: modern, originID: update.id, fileSharing: file, correction: target,
-                                                                                     linkMetadata: linkMetadata) },
-                                  dropsLinkPreview: { modern in
-                                      linkMetadata.map { !EncryptedContent.linkMetadataRides($0, body: body, modern: modern, fileSharing: file != nil) } ?? false
-                                  }))
-        }
+    private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport, deferringReceipts: Bool) async throws -> EncryptionPreparation {
+        let queued = try await pendingUpdates(account: account, deferringReceipts: deferringReceipts)
         var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
         var droppedLinkPreviews = Set<String>()
         var failure: OMEMOError?
+        // A chat's devices are fetched once per pass, as for messages, not once per update.
+        var refreshed = Set<[String]>()
         for update in queued {
             do {
                 try Task.checkCancellation()
@@ -649,8 +613,10 @@ public actor OMEMOService {
                 }
                 let profile: XMPPOMEMOProfile = legacy ? .legacy : .modern
                 guard selected.profiles[update.chatID] == profile else { throw update.kind == .retraction || update.kind == .correction ? OMEMOError.unsupportedMessageUpdate : .unsupportedEncryptedReactions }
-                _ = try await refreshLocked(account: account, peer: update.chatID, profile: profile,
-                                            transport: transport, updateSelection: false)
+                if !refreshed.contains([update.chatID, profile.rawValue]) {
+                    _ = try await refreshLocked(account: account, peer: update.chatID, profile: profile, transport: transport, updateSelection: false)
+                    refreshed.insert([update.chatID, profile.rawValue])
+                }
                 if let wire = try await store.updateWire(accountID: account, updateID: update.id) {
                     let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
                     let (_, state) = try await load(account)

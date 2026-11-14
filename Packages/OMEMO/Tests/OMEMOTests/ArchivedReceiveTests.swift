@@ -166,4 +166,21 @@ final class ArchivedReceiveTests: XCTestCase {
         equal(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), ["Message 1", "Message 2", "Message 1"])
         equal(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.trustPending])
     }
+
+    // Receipts deferred during a walk stay queued and unclaimable; the pass after it seals all of them behind one
+    // device refresh for the chat.
+    func testDeferredReceiptsSealTogetherBehindOneRefresh() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        try await f.b.receiveArchived(account: f.bob, messages: archived(try await send(f, 3)), transport: f.bTransport)
+        let receipts = Set(try await f.bStore.queuedReceipts(accountID: f.bob).map(\.id))
+        equal(receipts.count, 3)
+        let deferred = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport, deferringReceipts: true)
+        isTrue(deferred.messageIDs.isDisjoint(with: receipts))
+        for id in receipts { equal(try await f.bStore.updateWire(accountID: f.bob, updateID: id), nil) }
+        let log = TransportLog()
+        let prepared = try await f.b.prepareAvailableUpdates(account: f.bob, transport: CountingTransport(base: f.bTransport, log: log))
+        isTrue(receipts.isSubset(of: prepared.messageIDs))
+        equal(await log.fetches.count, 5, "one refresh: both versions' lists of both accounts and the peer device's bundle")
+    }
 }
