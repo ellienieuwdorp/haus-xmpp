@@ -18,7 +18,7 @@ final class AttachmentPanelUITests: XCTestCase {
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    // UIKit reports a rail tile as a cell even though it carries the button trait.
+    // Matched by identifier: a tile's element type follows its accessibility traits, not its view class.
     @MainActor private func photo(_ index: Int, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: "recentPhoto-\(index)").firstMatch
     }
@@ -62,6 +62,7 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertGreaterThan(rail.frame.minY, attach.frame.maxY, "The panel sits under the composer")
         // UIKit can assert while it sets up scroll edge pockets for a scroll view in the keyboard window.
         let panel = app.otherElements["attachmentPanel"]
+        XCTAssertTrue(panel.exists, "The panel is in the accessibility tree")
         for kind in [XCUIElement.ElementType.scrollView, .collectionView, .table, .textView] {
             XCTAssertEqual(panel.descendants(matching: kind).count, 0, "No \(kind.rawValue) in the panel")
         }

@@ -32,6 +32,7 @@ import XCTest
     func testRailStillTakesDrags() throws {
         let panel = panel(width: 390, height: 335, compact: false)
         let rail = try XCTUnwrap(descendant(of: panel, identifier: "recentPhotos"))
+        XCTAssertFalse(rail is UIScrollView, "The rail scrolls without being a scroll view")
         XCTAssertTrue(rail.gestureRecognizers?.contains { $0 is UIPanGestureRecognizer } == true)
     }
 
