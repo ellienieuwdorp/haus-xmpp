@@ -4,19 +4,22 @@ import OMEMO
 import XMPPProtocol
 @testable import MessagingCore
 
-// From the environment: HAUS_SYNC_BENCH (the work directory with fixture.json and the snapshots), HAUS_LAB_CA (PEM),
-// HAUS_SYNC_BENCH_RTT (relay round trip in ms, default 100), HAUS_SYNC_BENCH_QUICK=1 (fresh, resume and send only) and
-// HAUS_SYNC_BENCH_PROVISION (build the identities, trust, rooms, seeded archive and snapshots instead).
+// Environment: HAUS_SYNC_BENCH (work directory), HAUS_LAB_CA (PEM), HAUS_SYNC_BENCH_RTT (ms, default 100), _QUICK=1
+// (fresh, resume, send), _PORT (direct TLS, default 5223), _SASL2=0 (sessions without SASL2) and _PROVISION (build the
+// identities, trust, rooms, seeded archive and snapshots instead).
 struct SyncBenchEnvironment {
     static let values = ProcessInfo.processInfo.environment
     static var enabled: Bool { values["HAUS_SYNC_BENCH"] != nil && values["HAUS_SYNC_BENCH_PROVISION"] == nil }
     static var provisioning: Bool { values["HAUS_SYNC_BENCH"] != nil && values["HAUS_SYNC_BENCH_PROVISION"] != nil }
+    static var labPort: UInt16 { values["HAUS_SYNC_BENCH_PORT"].flatMap(UInt16.init) ?? 5223 }
     static var full: Bool { enabled && (values["HAUS_SYNC_BENCH_QUICK"] ?? "0") == "0" }
 
     let directory: URL
     let fixture: SyncBenchFixture
     let authority: Data
     let oneWayMilliseconds: Int
+    let port: UInt16
+    let usesSASL2: Bool
 
     init() throws {
         let path = try Self.require("HAUS_SYNC_BENCH")
@@ -28,6 +31,22 @@ struct SyncBenchEnvironment {
         }
         self.authority = authority
         oneWayMilliseconds = (Self.values["HAUS_SYNC_BENCH_RTT"].flatMap(Int.init) ?? 100) / 2
+        port = Self.labPort
+        usesSASL2 = Self.values["HAUS_SYNC_BENCH_SASL2"] != "0"
+    }
+
+    // As the app configures it: one client id per account, kept across runs like the app's per-install id, and tokens in
+    // a file per account that the app session and the extension share, as they share the Keychain.
+    func sasl2(_ account: SyncBenchFixture.Account, carbons: Bool) throws -> XMPPSASL2Configuration? {
+        guard usesSASL2 else { return nil }
+        let ids = directory.appending(path: "client-ids.json")
+        var known = (try? JSONDecoder().decode([String: UUID].self, from: Data(contentsOf: ids))) ?? [:]
+        let id = known[account.jid] ?? UUID()
+        if known[account.jid] == nil {
+            known[account.jid] = id
+            try JSONEncoder().encode(known).write(to: ids)
+        }
+        return XMPPSASL2Configuration(clientID: id, enablesCarbons: carbons, tokens: SyncBenchTokens(directory: directory.appending(path: "tokens")))
     }
 
     private static func require(_ key: String) throws -> String {
@@ -39,6 +58,18 @@ struct SyncBenchEnvironment {
     var senderStore: URL { directory.appending(path: "sender", directoryHint: .isDirectory) }
     var peerStore: URL { directory.appending(path: "peer", directoryHint: .isDirectory) }
     var results: URL { directory.appending(path: "results", directoryHint: .isDirectory) }
+}
+
+// Disposable lab accounts' FAST tokens, one file each in the ignored work directory.
+struct SyncBenchTokens: XMPPFastTokenStore {
+    let directory: URL
+    private func file(_ account: String) -> URL { directory.appending(path: account + ".json") }
+    func fastToken(account: String) -> XMPPFastToken? { try? JSONDecoder().decode(XMPPFastToken.self, from: Data(contentsOf: file(account))) }
+    func saveFastToken(_ token: XMPPFastToken?, account: String) {
+        guard let token, let data = try? JSONEncoder().encode(token) else { try? FileManager.default.removeItem(at: file(account)); return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: file(account), options: .completeFileProtection)
+    }
 }
 
 enum SyncBenchFailure: Error, CustomStringConvertible {

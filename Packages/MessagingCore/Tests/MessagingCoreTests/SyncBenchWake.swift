@@ -23,7 +23,8 @@ struct SyncBenchWake {
         let push = SyncBenchClock.now(), before = proxy.counts, cpu = SyncBenchClock.cpuMilliseconds()
         let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: proxy.port, security: .directTLS)),
                                         domain: peer.domain, username: peer.localpart, password: peer.password,
-                                        labCertificateAuthority: environment.authority, resource: environment.fixture.resource,
+                                        sasl2: try environment.sasl2(peer, carbons: false), labCertificateAuthority: environment.authority,
+                                        resource: environment.fixture.resource,
                                         streamProfiles: streamProfiles)
         let accountID = peer.jid
         try await BackgroundSynchronizer().synchronize(
@@ -62,7 +63,11 @@ struct SyncBenchWake {
     func dropSession() async throws {
         let client = XMPPClient(labCertificateAuthority: environment.authority)
         try await client.configureResource(environment.fixture.resource)
-        try await client.connect(host: "127.0.0.1", port: 5223, domain: peer.domain, username: peer.localpart, password: peer.password)
+        // The client id the peer's sessions sign in with, so a Bind 2 server assigns the same resource.
+        try await client.configureSASL2(try environment.sasl2(peer, carbons: false).map {
+            XMPPSASL2Configuration(clientID: $0.clientID, enablesCarbons: false, tokens: nil)
+        })
+        try await client.connect(host: "127.0.0.1", port: environment.port, domain: peer.domain, username: peer.localpart, password: peer.password)
         await client.disconnectAndWait()
     }
 
@@ -73,7 +78,7 @@ struct SyncBenchWake {
         do {
             try await bench.store.acquireTransportOwnership()
             let client = XMPPClient(labCertificateAuthority: environment.authority)
-            try await client.connect(host: "127.0.0.1", port: 5223, domain: sender.domain, username: sender.localpart, password: sender.password)
+            try await client.connect(host: "127.0.0.1", port: environment.port, domain: sender.domain, username: sender.localpart, password: sender.password)
             let processor = InboundProcessor(encryption: bench.encryption, client: client, account: sender.jid)
             // Without stream management a stanza that fails here is never acknowledged anyway.
             let consumer = Task { for await event in client.events { _ = try? await processor.process(event) } }

@@ -20,7 +20,8 @@ struct SyncBenchProvisionTests {
             let bench = try SyncBenchStore.open(directory)
             try await bench.store.acquireTransportOwnership()
             let client = XMPPClient(labCertificateAuthority: authority)
-            try await client.connect(host: "127.0.0.1", port: 5223, domain: account.domain, username: account.localpart, password: account.password)
+            try await client.connect(host: "127.0.0.1", port: SyncBenchEnvironment.labPort, domain: account.domain, username: account.localpart,
+                                     password: account.password)
             let processor = InboundProcessor(encryption: bench.encryption, client: client, account: account.jid)
             let consumer = Task {
                 // A stanza that fails here is withheld from acknowledgement, which a stream without management never sends.

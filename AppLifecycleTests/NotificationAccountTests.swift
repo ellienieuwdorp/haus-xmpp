@@ -52,6 +52,18 @@ import XMPPProtocol
         XCTAssertEqual(try JSONDecoder().decode(NotificationAccount.self, from: try JSONEncoder().encode(pinned)), pinned)
     }
 
+    // SASL2 and channel binding join the SCRAM pin, survive the record's round trip and a retyped password.
+    func testTheSignInPinOnlyGrowsAndSurvivesTheRecord() throws {
+        let base = account(username: "alice", password: "old")
+        let bound = base.connected(XMPPConnectedSession(endpoint: base.endpoint, authenticatedWithSCRAM: false,
+                                                        pin: XMPPAuthenticationPin(sasl2: true, channelBinding: true)))
+        let after = bound.connected(XMPPConnectedSession(endpoint: base.endpoint, authenticatedWithSCRAM: true))
+        XCTAssertEqual(after.pin, XMPPAuthenticationPin(scram: true, sasl2: true, channelBinding: true))
+        XCTAssertEqual(try JSONDecoder().decode(NotificationAccount.self, from: try JSONEncoder().encode(after)).pin, after.pin)
+        let retyped = AppModel.retainingSavedState(previous: after, replacement: account(username: "alice", password: "new"))
+        XCTAssertEqual(retyped.pin, after.pin)
+    }
+
     private func account(username: String, password: String, push: XMPPPushConfiguration? = nil, discovers: Bool = false,
                          endpoint: XMPPEndpoint = XMPPEndpoint(host: "example.org", port: 5223, security: .directTLS)) -> NotificationAccount {
         NotificationAccount(accountID: username + "@example.org", host: discovers ? "" : endpoint.host, port: discovers ? 0 : endpoint.port,

@@ -291,7 +291,7 @@ final class AppModel {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
-    @ObservationIgnored private lazy var sessionDefaults: UserDefaults? = testSessionID == nil ? SharedSession.groupDefaults : preferences
+    @ObservationIgnored lazy var sessionDefaults: UserDefaults? = testSessionID == nil ? SharedSession.groupDefaults : preferences
 
     init() {
         // Known before storage opens, so the first frame has the account avatar and the Chats stack keeps its identity.
@@ -642,7 +642,7 @@ final class AppModel {
         engine.startEvents(connection, token: token)
         do {
             let login = SessionEngine.Login(account: account, route: endpoint.route, domain: endpoint.domain, username: username, password: password,
-                                            requireSCRAM: endpoint.requiresSCRAM,
+                                            pin: endpoint.pin, sasl2: signInConfiguration(account, carbons: true),
                                             resource: { [weak self] in SharedSession.resource(accountID: account, defaults: self?.sessionDefaults) },
                                             presence: { [weak self] in self?.bindingPresence ?? (.active, true) })
             let connectedSession = try await engine.open(connection, token: token, login: login)
@@ -738,7 +738,7 @@ final class AppModel {
         let connection = client
         var localFailure: String?
         if testSessionID == nil {
-            do { try NotificationAccount.remove() }
+            do { try NotificationAccount.remove(fastTokenOf: account) }
             catch NotificationAccount.Failure.credentialsRemain(backgroundDisabled: true) {
                 localFailure = "Background access is disabled, but saved credentials could not be erased. Try signing out again."
             } catch {
@@ -779,7 +779,7 @@ final class AppModel {
         }
         guard generation == token else { return }
         await quiesceTransport(signingOut: true)
-        if let localFailure { self.error = localFailure }
+        if let localFailure = localFailure ?? forgetFastToken(of: account) { self.error = localFailure }
     }
 
     // Nothing else changes the lifecycle signals.
@@ -3884,7 +3884,7 @@ extension AppModel: NotificationActionEnvironment {
             let client = try await NotificationActionConnection.client(
                 persistence: StreamPersistence(store: store, accountID: account, encryption: encryption),
                 resource: SharedSession.resource(accountID: account, defaults: sessionDefaults), profiles: serverProfiles.streams,
-                availability: awayAvailability)
+                sasl2: signInConfiguration(account, carbons: false), availability: awayAvailability)
             session.client = client
             // From here an abort closes this client; one that came before it was set is honoured here.
             guard !session.isOver else { throw CancellationError() }
@@ -3897,7 +3897,7 @@ extension AppModel: NotificationActionEnvironment {
                 }
             }
             try await client.connect(route: credentials.route, domain: credentials.domain, username: credentials.username,
-                                     password: credentials.password, requireSCRAM: credentials.requiresSCRAM)
+                                     password: credentials.password, pin: credentials.pin)
             let resumed = await client.sessionResumed
             Self.syncLog.notice("notification action online resumed=\(resumed, privacy: .public)")
             guard !session.isOver else { throw CancellationError() }

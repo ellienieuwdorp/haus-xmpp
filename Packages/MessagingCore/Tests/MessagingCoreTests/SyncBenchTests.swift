@@ -12,7 +12,7 @@ import XMPPProtocol
     private func run(_ snapshot: String?, account: (SyncBenchFixture) -> SyncBenchFixture.Account, rooms: Int,
                      _ body: (SyncBenchSession, SyncBenchEnvironment) async throws -> Void) async throws {
         let environment = try SyncBenchEnvironment()
-        let proxy = try await SyncBenchProxy.start(oneWayMilliseconds: environment.oneWayMilliseconds, target: 5223)
+        let proxy = try await SyncBenchProxy.start(oneWayMilliseconds: environment.oneWayMilliseconds, target: environment.port)
         defer { proxy.stop() }
         let bench = try snapshot.map { try SyncBenchStore.restore(environment.snapshot($0)) } ?? SyncBenchStore.open(environment.senderStore)
         let session = try SyncBenchSession(account: account(environment.fixture), bench: bench, proxy: proxy, environment: environment,
@@ -125,7 +125,8 @@ import XMPPProtocol
         let message = try await OutgoingEnqueue.text("syncbench share", account: sender.jid, chatID: peer, store: bench.store)
         let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: session.port, security: .directTLS)),
                                         domain: sender.domain, username: sender.localpart, password: sender.password,
-                                        labCertificateAuthority: environment.authority, resource: environment.fixture.resource,
+                                        sasl2: try environment.sasl2(sender, carbons: false), labCertificateAuthority: environment.authority,
+                                        resource: environment.fixture.resource,
                                         streamProfiles: profiles ? session.streamProfiles : nil)
         let share = ShareSession(store: bench.store, encryption: bench.encryption, files: AttachmentFiles(directory: bench.url, account: sender.jid),
                                  account: account, uploadService: nil)
@@ -147,7 +148,7 @@ import XMPPProtocol
     // the server dropped, so the extension binds fresh and rejoins.
     @Test func extensionWake() async throws {
         let environment = try SyncBenchEnvironment()
-        let proxy = try await SyncBenchProxy.start(oneWayMilliseconds: environment.oneWayMilliseconds, target: 5223)
+        let proxy = try await SyncBenchProxy.start(oneWayMilliseconds: environment.oneWayMilliseconds, target: environment.port)
         defer { proxy.stop() }
         let bench = try SyncBenchStore.open(environment.peerStore)
         let session = try SyncBenchSession(account: environment.fixture.peer, bench: bench, proxy: proxy, environment: environment,

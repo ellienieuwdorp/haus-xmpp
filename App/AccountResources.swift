@@ -7,8 +7,8 @@ import MessagingCore
 enum AccountResource: CaseIterable {
     case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, streamProfile, uploadService
     case uploadServiceCheckedAt
-    case blocklist, shareSuggestions, xmppResource
-    case accountRecord, pushRegistration, wrappingKey
+    case blocklist, shareSuggestions, xmppResource, xmppClientID
+    case accountRecord, fastToken, pushRegistration, wrappingKey
     case attachmentFolder, avatarFolder
     case deliveredNotifications, appBadge, donations
 
@@ -63,7 +63,14 @@ enum AccountResource: CaseIterable {
         case .xmppResource:
             Policy(location: .preference([.group], key: { "xmppResource." + $0 }),
                    signOut: .keep(reason: "a bind under it replaces the session the app or an extension left"), transfer: .omit(reason: "each install binds its own"))
+        case .xmppClientID:
+            Policy(location: .preference([.group], key: { "xmppClientID." + $0 }),
+                   signOut: .keep(reason: "a Bind 2 server derives the resource from it, as from xmppResource"),
+                   transfer: .omit(reason: "each install is its own client"))
         case .accountRecord: Policy(location: .keychain(service: NotificationAccount.service), signOut: .delete, transfer: .copy)
+        case .fastToken:
+            Policy(location: .keychain(service: FastTokenKeychain.service), signOut: .delete,
+                   transfer: .omit(reason: "issued to this install's client id; a moved account's tokens are deleted"))
         case .pushRegistration:
             Policy(location: .keychain(service: PushRegistrationState.service),
                    signOut: .keep(reason: "saved turned off, so the gateway revokes it and the server disables it"), transfer: .copy)
@@ -83,5 +90,15 @@ enum AccountResource: CaseIterable {
         BlockedAddresses.forget(accountID: account, defaults: group)
         ShareSuggestionSetting.forget(accountID: account, defaults: group)
         app.removeObject(forKey: "lastAccount")
+    }
+}
+
+extension AccountTransfer {
+    // Install- or device-specific keys stay behind; system keys (capitalised, e.g. `AppleLanguages`) stay too.
+    static let installOnlyPrefixes = ["xmppResource.", "xmppClientID.", "leftForeground", "attachmentKeyboard.", "carbonsStream."]
+
+    static func isTransferable(preference key: String) -> Bool {
+        guard let first = key.unicodeScalars.first, CharacterSet.lowercaseLetters.contains(first) else { return false }
+        return !installOnlyPrefixes.contains { key.hasPrefix($0) }
     }
 }

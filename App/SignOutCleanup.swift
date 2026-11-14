@@ -2,6 +2,7 @@ import Foundation
 import MessageStore
 import UserNotifications
 import os
+import XMPPProtocol
 
 // The rows sign-out deletes (`AccountTable`), owed from the moment it starts until a lease holder deleted them, so a
 // sign-out cut short by a background transition or a busy lease finishes at this process's next lease.
@@ -68,7 +69,7 @@ extension AppModel {
         return await cleanup.settle(store: store, connecting: connecting)
     }
 
-    // Re-entering credentials keeps an existing server subscription and the SCRAM pin (a server that drops SCRAM must
+    // Re-entering credentials keeps an existing server subscription and the sign-in pin (a server that drops SCRAM must
     // not get PLAIN by making the user retype the password); only signing out lifts them. Nothing crosses accounts.
     static func retainingSavedState(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
         guard let previous, previous.accountID == replacement.accountID, previous.domain == replacement.domain,
@@ -78,7 +79,7 @@ extension AppModel {
         return NotificationAccount(
             accountID: replacement.accountID, host: endpoint.host, port: endpoint.port, security: endpoint.security,
             discoversEndpoint: replacement.discoversEndpoint,
-            requiresSCRAM: previous.requiresSCRAM || replacement.requiresSCRAM,
+            pin: previous.pin.union(replacement.pin),
             domain: replacement.domain, username: replacement.username, password: replacement.password,
             push: replacement.push ?? previous.push)
     }

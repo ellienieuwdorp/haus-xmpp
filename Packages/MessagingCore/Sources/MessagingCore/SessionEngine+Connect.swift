@@ -12,15 +12,17 @@ extension SessionEngine {
         public var domain: String
         public var username: String
         public var password: String
-        public var requireSCRAM: Bool
+        public var pin: XMPPAuthenticationPin
+        /// SASL2, Bind 2 and FAST; nil signs in with RFC 6120 SASL.
+        public var sasl2: XMPPSASL2Configuration?
         public var resource: @MainActor @Sendable () -> String
         public var presence: @MainActor @Sendable () -> (availability: XMPPAvailability, clientActive: Bool)
 
-        public init(account: String, route: XMPPRoute, domain: String, username: String, password: String, requireSCRAM: Bool,
-                    resource: @escaping @MainActor @Sendable () -> String,
+        public init(account: String, route: XMPPRoute, domain: String, username: String, password: String, pin: XMPPAuthenticationPin,
+                    sasl2: XMPPSASL2Configuration? = nil, resource: @escaping @MainActor @Sendable () -> String,
                     presence: @escaping @MainActor @Sendable () -> (availability: XMPPAvailability, clientActive: Bool)) {
             self.account = account; self.route = route; self.domain = domain; self.username = username; self.password = password
-            self.requireSCRAM = requireSCRAM; self.resource = resource; self.presence = presence
+            self.pin = pin; self.sasl2 = sasl2; self.resource = resource; self.presence = presence
         }
     }
 
@@ -48,11 +50,12 @@ extension SessionEngine {
         try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
         try await connection.configureResource(login.resource())
         try await connection.configureStreamProfiles(profiles)
+        try await connection.configureSASL2(login.sasl2)
         let presence = login.presence()
         try await connection.setAvailability(presence.availability, clientActive: presence.clientActive)
         guard generation == token else { throw Superseded() }
         return try await connection.connect(route: login.route, domain: login.domain, username: login.username,
-                                            password: login.password, requireSCRAM: login.requireSCRAM)
+                                            password: login.password, pin: login.pin)
     }
 
     /// The live consumer: one event at a time under `token`.
@@ -116,7 +119,7 @@ extension SessionEngine {
         firstMessageLogged = false
         liveStoredLogged = false
         catchUpByArchive = [:]
-        let resumed = await client?.sessionResumed ?? false
+        let (resumed, carbonsInline) = await client?.onlineSession ?? (false, false)
         Self.syncLog.notice("online resumed=\(resumed, privacy: .public)\(self.connectPhases.summary(online: online), privacy: .public)")
         await delegate?.streamOnline(client: client, resumed: resumed)
         guard generation == token, let encryption, let client, let store else { return }
@@ -140,7 +143,7 @@ extension SessionEngine {
         // serialises the two per crypto operation.
         setupTask = Task { [weak self] in
             guard let self else { return }
-            await self.runSetup(connection, identityExists: identityExists, resumed: resumed)
+            await self.runSetup(connection, identityExists: identityExists, resumed: resumed, carbonsInline: carbonsInline)
             if self.generation == token { self.setupTask = nil }
         }
     }

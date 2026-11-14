@@ -34,7 +34,7 @@ import XMPPProtocol
                                 pushService: "haus.xmpp.transfer-test.\(id).push", snapshotService: "haus.xmpp.transfer-test.\(id).snapshot"),
                 accessGate: root.appending(path: "notification-access-disabled"), installation: "/install/\(id)")
             locations = AccountTransfer.Locations(install: install, encryptionService: "haus.xmpp.transfer-test.\(id).encryption", storageID: "primary",
-                                                  codeService: "haus.xmpp.transfer-test.\(id).code")
+                                                  codeService: "haus.xmpp.transfer-test.\(id).code", tokenService: "haus.xmpp.transfer-test.\(id).fast-token")
         }
 
         var transfer: AccountTransfer { AccountTransfer(locations: locations) }
@@ -123,7 +123,7 @@ import XMPPProtocol
         install.appDefaults.set(account, forKey: "lastAccount")
         install.appDefaults.set("mint", forKey: "accentTheme")
         install.appDefaults.set(301.0, forKey: "attachmentKeyboard.height.portrait")
-        install.groupDefaults.set("source-resource", forKey: "xmppResource.\(account)")
+        try seedInstallOnlySignIn(install)
         install.groupDefaults.set(["spam@example.org"], forKey: "blocklist.\(account)")
 
         let overview = try await service.overview(account: account, peer: peer)
@@ -187,7 +187,7 @@ import XMPPProtocol
         XCTAssertEqual(target.appDefaults.string(forKey: "lastAccount"), account)
         XCTAssertEqual(target.appDefaults.string(forKey: "accentTheme"), "mint")
         XCTAssertEqual(target.appDefaults.double(forKey: "attachmentKeyboard.height.portrait"), 280, "this device's measurement stays")
-        XCTAssertNil(target.groupDefaults.string(forKey: "xmppResource.\(account)"), "this install binds its own resource")
+        try assertNoInstallOnlySignIn(target)
         XCTAssertEqual(target.groupDefaults.stringArray(forKey: "blocklist.\(account)"), ["spam@example.org"])
 
         // One-time: the same file is refused here afterwards.
@@ -201,7 +201,7 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.locations.held.path))
         XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: source.keychain.accountService, account: "primary"))
         XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: source.locations.encryptionService, account: "primary"))
-        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: source.keychain.pushService), [])
+        try assertMovedCredentialsGone(source)
         XCTAssertNil(source.appDefaults.string(forKey: "lastAccount"))
         XCTAssertEqual(source.appDefaults.double(forKey: "attachmentKeyboard.height.portrait"), 301)
     }
@@ -448,5 +448,26 @@ import XMPPProtocol
         XCTAssertFalse(owned)
         owned = try await AppModel.ownsSavedAccount(record, lastAccount: "other@localhost", store: store)
         XCTAssertFalse(owned)
+    }
+}
+
+// What stays with an install: the resource, the client id and its FAST tokens.
+extension AccountTransferTests {
+    func seedInstallOnlySignIn(_ install: Install) throws {
+        install.groupDefaults.set("source-resource", forKey: "xmppResource.\(account)")
+        install.groupDefaults.set(UUID().uuidString, forKey: "xmppClientID.\(account)")
+        let token = XMPPFastToken(mechanism: "HT-SHA-256-EXPR", secret: "secret-token:fast-synthetic", expiry: .distantFuture)
+        try PreUpgradeSnapshot.keychainSet(service: install.locations.tokenService, account: account, data: JSONEncoder().encode(token))
+    }
+
+    func assertNoInstallOnlySignIn(_ target: Install) throws {
+        XCTAssertNil(target.groupDefaults.string(forKey: "xmppResource.\(account)"), "this install binds its own resource")
+        XCTAssertNil(target.groupDefaults.string(forKey: "xmppClientID.\(account)"), "this install is its own client")
+        XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: target.locations.tokenService, account: account), "tokens never travel")
+    }
+
+    func assertMovedCredentialsGone(_ source: Install) throws {
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: source.keychain.pushService), [])
+        XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: source.locations.tokenService, account: account), "the moved account's token goes")
     }
 }

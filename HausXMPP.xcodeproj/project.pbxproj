@@ -30,6 +30,7 @@
 		0884A61AD9ABCD8CA670771D /* BlockingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132E8AF2B3DAEEFB92B03C03 /* BlockingViews.swift */; };
 		08BE9F110EA7558C05048773 /* ReactionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54E2339C1602A48D70E197E /* ReactionUITests.swift */; };
 		09056D65DA03B72597428EAA /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BD52830F320F4C99E25EBF /* SharedStorage.swift */; };
+		0927E5E3C1343FB06AF0D8D4 /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		0B2BB73C2AC72A8B005DF9E0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2A5C546425283FA7DF4F92F8 /* PrivacyInfo.xcprivacy */; };
 		0B871DC125431EE84B2D4F53 /* ShareViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99685CE5EFACB75D12ED9168 /* ShareViews.swift */; };
 		0BF82DF7C145DAE33FEE73B9 /* TimelineCellSemanticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0177CE11C01DFEB2F32246D /* TimelineCellSemanticsTests.swift */; };
@@ -56,6 +57,7 @@
 		15DAC37ABB71184FE5D5A5A6 /* PlatformColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7759CE579417644D58F83DEA /* PlatformColors.swift */; };
 		168D51EB76C9739379CE3E18 /* DevelopmentEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF786E9F6E5DBCFDF1AD1942 /* DevelopmentEndpoint.swift */; };
 		169F8143AEA1D9C3AED35111 /* BlockedAddresses.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BD0CDB24630A5C7CD70BF3 /* BlockedAddresses.swift */; };
+		1759EAE1F9F74FFB49501CAF /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		179229871776D4F1408E3684 /* PushOnboardingLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */; };
 		17D2CDBD36A0653C0154A247 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 324EBC36D52CA84D50966602 /* XMPPProtocol */; };
 		1846F51DC8D23B6B56DC880B /* ThisDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A54D67178B7D4A0E4267AB /* ThisDevice.swift */; };
@@ -214,6 +216,7 @@
 		5E84CAB03DEF9F66B5F5E0B4 /* ContactsUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D4872DC53C47404DC785AB9 /* ContactsUI.framework */; };
 		5E8EAA5AEA857B8C59E6B1D2 /* KeychainQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA93764A4DF52154E7E4EE99 /* KeychainQuery.swift */; };
 		5EAAEF36975DF5835EBC5BA9 /* ChatTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B058DE375849093597D0988 /* ChatTrust.swift */; };
+		5EB9494817F4468F2AEB8A88 /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		5F780B4C5EC3E9380C74CF1A /* LinkPreviewFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACBF37A7C95EEC298914703E /* LinkPreviewFetcher.swift */; };
 		5FD69FBA803AE2C9C278541B /* ChatDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */; };
 		607853D0DAACB8AC1B32875D /* ShareViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99685CE5EFACB75D12ED9168 /* ShareViews.swift */; };
@@ -260,6 +263,7 @@
 		736B7D99E713AEC14704DA77 /* MacDeviceReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */; };
 		7395E545B3333E1738CC480D /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4702D6FBBC555110B4C0D753 /* MessagingCore */; };
 		73B095083678D2996D5D7F02 /* ConversationPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54188CA656DDDED16D876198 /* ConversationPresenter.swift */; };
+		74345DB3B3A6C9A30DF26AB9 /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		749C6A902482D4E168BBF217 /* KeychainQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA93764A4DF52154E7E4EE99 /* KeychainQuery.swift */; };
 		756464BFCE1F8C202DEF8D79 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = D593009330BED930403B0C1D /* XMPPProtocol */; };
 		75903C047102BA2ECDC5E97E /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65AE7349FD1FCD92862145CE /* SignInView.swift */; };
@@ -429,6 +433,7 @@
 		CA1473BDCD93F12D49215EAD /* ReceiptUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198B61EF24F8F532830EF75A /* ReceiptUITests.swift */; };
 		CA6A4BE7AC0F7581EE9CDA72 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = C1FD7887F5B6566A54B370AD /* MessageStore */; };
 		CB3EED2D176B82BB2C2B5014 /* ExtensionGiveWay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F9D39C2C7AF060665844BD /* ExtensionGiveWay.swift */; };
+		CB504CA11A061EB9EDC40F0E /* FastTokenKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E07FF36A04F9534010478583 /* FastTokenKeychainTests.swift */; };
 		CB69C4A37F73FB11A371FF00 /* Contacts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C13B39A5DD8BE5A08DF59B60 /* Contacts.framework */; };
 		CBF8D8280CC31BFE88E78C54 /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
 		CC0811553F25FBD96C75271D /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = B73817A40C13029F33A2A1FF /* LICENSE */; };
@@ -514,6 +519,7 @@
 		F4222CD2AECA7751B435B67B /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BD52830F320F4C99E25EBF /* SharedStorage.swift */; };
 		F4607661E7B355B618B91201 /* LastSeenLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 718556D6FAE3A23B682B97B6 /* LastSeenLabUITests.swift */; };
 		F521E4B769AFAB80401B9E66 /* AvatarNotificationImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6825CFD10709370F6BDF5F /* AvatarNotificationImageTests.swift */; };
+		F56992907A6361E3AF3C1AA8 /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		F58E408E256C78EBBCD1B294 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174D8D2CD8272853B0A9593D /* NotificationAccount.swift */; };
 		F5D40FD4DE6FFB67A31C2622 /* LICENSE.libomemo-c in Resources */ = {isa = PBXBuildFile; fileRef = DFAC8704EDE56A39688E356B /* LICENSE.libomemo-c */; };
 		F5DCB48C5178B7FCEBD1BBF7 /* DeliveredNotificationCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */; };
@@ -522,6 +528,7 @@
 		F8183D3D7DFC25A9569869FE /* NotificationAccessGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 697CE48AFD71A7D39DBA7C50 /* NotificationAccessGateTests.swift */; };
 		F84B8FFAA31CE714E66E7341 /* ExtensionGiveWay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F9D39C2C7AF060665844BD /* ExtensionGiveWay.swift */; };
 		F90CB4AC0427868B04E02AA3 /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
+		F95D4581A0D46C559BEBCE9E /* FastTokenKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48724E76E11D7323B64040AF /* FastTokenKeychain.swift */; };
 		FA57881C5C89A6D5DD907052 /* ExtensionGiveWayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E969F87E3446CD43A459962C /* ExtensionGiveWayTests.swift */; };
 		FA9445454400DECFAE5AAD27 /* TimelineScrollPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CBE10482F2CC6B1546794B /* TimelineScrollPolicyTests.swift */; };
 		FB3F5E80E6175891B84AF6BE /* EmojiCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696DE68458926F970F77D355 /* EmojiCatalogTests.swift */; };
@@ -708,6 +715,7 @@
 		4619659D22BDBCA952995241 /* LinkScan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkScan.swift; sourceTree = "<group>"; };
 		464421A26724B3E5A1ED4034 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
+		48724E76E11D7323B64040AF /* FastTokenKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastTokenKeychain.swift; sourceTree = "<group>"; };
 		488F162EE2057C5649335EEE /* MacTimelineCellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTimelineCellTests.swift; sourceTree = "<group>"; };
 		4ACC875416BD53381417321D /* ComposerLinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerLinkPreview.swift; sourceTree = "<group>"; };
 		4AE59BD38D134F3C88543871 /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
@@ -883,6 +891,7 @@
 		DED03AC2C8C20A692BFCF788 /* LinkPreviewPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewPolicy.swift; sourceTree = "<group>"; };
 		DF786E9F6E5DBCFDF1AD1942 /* DevelopmentEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEndpoint.swift; sourceTree = "<group>"; };
 		DFAC8704EDE56A39688E356B /* LICENSE.libomemo-c */ = {isa = PBXFileReference; path = "LICENSE.libomemo-c"; sourceTree = "<group>"; };
+		E07FF36A04F9534010478583 /* FastTokenKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastTokenKeychainTests.swift; sourceTree = "<group>"; };
 		E09AAB9CCD29D09D48DB3B8B /* ShareExtensionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionTests.swift; sourceTree = "<group>"; };
 		E160244791260F63C8CEF3B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E21852BEEEE6DCCFE723B0E3 /* NOTICE.libomemo-c */ = {isa = PBXFileReference; path = "NOTICE.libomemo-c"; sourceTree = "<group>"; };
@@ -1093,6 +1102,7 @@
 				0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */,
 				68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */,
 				A5F9D39C2C7AF060665844BD /* ExtensionGiveWay.swift */,
+				48724E76E11D7323B64040AF /* FastTokenKeychain.swift */,
 				9EF221C2ABB51FAA3FC260E0 /* GroupMailbox.swift */,
 				DA93764A4DF52154E7E4EE99 /* KeychainQuery.swift */,
 				67FBE70E902253A52534F4CA /* NotificationAccessGate.swift */,
@@ -1183,6 +1193,7 @@
 				696DE68458926F970F77D355 /* EmojiCatalogTests.swift */,
 				DDF1C555339229DDA6A615AA /* EncryptionLifecycleTests.swift */,
 				E969F87E3446CD43A459962C /* ExtensionGiveWayTests.swift */,
+				E07FF36A04F9534010478583 /* FastTokenKeychainTests.swift */,
 				563F6CF8F2D9BE1CAE1F4B50 /* FileReplyGateTests.swift */,
 				EBC631EB74C9ED026E987E17 /* KeyRecoveryTests.swift */,
 				F20D4BA69AE0D06AAEC3C382 /* LastMessageTargetsTests.swift */,
@@ -1912,6 +1923,7 @@
 				CE2672AA8DA27383A470033D /* EncryptionDetailsView.swift in Sources */,
 				61C0E7505FC9C539AE274A1B /* EncryptionKeychain.swift in Sources */,
 				F84B8FFAA31CE714E66E7341 /* ExtensionGiveWay.swift in Sources */,
+				0927E5E3C1343FB06AF0D8D4 /* FastTokenKeychain.swift in Sources */,
 				EB613D6722F9E7464DDE8CA5 /* GroupChatState.swift in Sources */,
 				CCD2F033F58B6FB03DCA72C9 /* GroupDetailsView.swift in Sources */,
 				346851E8F1AB356F12B683AF /* GroupJoinView.swift in Sources */,
@@ -1987,6 +1999,7 @@
 				B6F173D9E5123FBFE3AF19E4 /* DeliveredNotificationCleaner.swift in Sources */,
 				88A937AEFB9A9E660400EB7E /* EncryptionKeychain.swift in Sources */,
 				7AD28B17BF00CE58C0BB98F3 /* ExtensionGiveWay.swift in Sources */,
+				F56992907A6361E3AF3C1AA8 /* FastTokenKeychain.swift in Sources */,
 				39129A3B043165D197092B0E /* GroupMailbox.swift in Sources */,
 				A65C6DBF8190E1D374DD4CF5 /* KeychainQuery.swift in Sources */,
 				35A93984520362F59B1D4F63 /* MacExtensionProbe.swift in Sources */,
@@ -2021,6 +2034,7 @@
 				F5DCB48C5178B7FCEBD1BBF7 /* DeliveredNotificationCleaner.swift in Sources */,
 				BA825FEB34F06B7CC46C6842 /* EncryptionKeychain.swift in Sources */,
 				7AB69B02B68854F5D0928FDE /* ExtensionGiveWay.swift in Sources */,
+				74345DB3B3A6C9A30DF26AB9 /* FastTokenKeychain.swift in Sources */,
 				E5CA990AAFF5757955C6C711 /* GroupChatState.swift in Sources */,
 				2AF782F696BBA433CBF26AF4 /* GroupMailbox.swift in Sources */,
 				C8298B541D029F2D79E3CDE7 /* KeychainQuery.swift in Sources */,
@@ -2055,6 +2069,7 @@
 				46B3F57898EAFB33D54852D2 /* DeliveredNotificationCleaner.swift in Sources */,
 				0F55C869FC6866CDDBC5CB73 /* EncryptionKeychain.swift in Sources */,
 				A5F32C9C4614AC75F4200F46 /* ExtensionGiveWay.swift in Sources */,
+				1759EAE1F9F74FFB49501CAF /* FastTokenKeychain.swift in Sources */,
 				88A6C8A74B8BBC9BC3C6CDFC /* GroupMailbox.swift in Sources */,
 				5E8EAA5AEA857B8C59E6B1D2 /* KeychainQuery.swift in Sources */,
 				CE861B782FCC1E3CC1CAB316 /* NotificationAccessGate.swift in Sources */,
@@ -2118,6 +2133,7 @@
 				383E009D9BE267ABCBD26B9C /* DeliveredNotificationCleaner.swift in Sources */,
 				B79CBD135633BF0911518CF1 /* EncryptionKeychain.swift in Sources */,
 				85F52E9644512896B007F55E /* ExtensionGiveWay.swift in Sources */,
+				F95D4581A0D46C559BEBCE9E /* FastTokenKeychain.swift in Sources */,
 				C3DFD4CB99215DC2A81483BC /* GroupChatState.swift in Sources */,
 				969637B49DF7C9FEB56EBAB7 /* GroupMailbox.swift in Sources */,
 				749C6A902482D4E168BBF217 /* KeychainQuery.swift in Sources */,
@@ -2173,6 +2189,7 @@
 				FB3F5E80E6175891B84AF6BE /* EmojiCatalogTests.swift in Sources */,
 				4E9DE65BE2620EA9FC037F7D /* EncryptionLifecycleTests.swift in Sources */,
 				FA57881C5C89A6D5DD907052 /* ExtensionGiveWayTests.swift in Sources */,
+				CB504CA11A061EB9EDC40F0E /* FastTokenKeychainTests.swift in Sources */,
 				4CEFD71E172B55ECDE78E17B /* FileReplyGateTests.swift in Sources */,
 				7742354A7FFDF4C04C1C3679 /* KeyRecoveryTests.swift in Sources */,
 				2D45D1E1870BFB7E74AE59F7 /* LastMessageTargetsTests.swift in Sources */,
@@ -2270,6 +2287,7 @@
 				EC42EB95494BE287F9545003 /* EncryptionDetailsView.swift in Sources */,
 				7BD24F061B3CB53AB03E3BE5 /* EncryptionKeychain.swift in Sources */,
 				CB3EED2D176B82BB2C2B5014 /* ExtensionGiveWay.swift in Sources */,
+				5EB9494817F4468F2AEB8A88 /* FastTokenKeychain.swift in Sources */,
 				D60707BC83965888F2319ECD /* GroupChatState.swift in Sources */,
 				52BA13DE6547EE5CFB3E6617 /* GroupDetailsView.swift in Sources */,
 				D991A350386DB23489CEAF06 /* GroupJoinView.swift in Sources */,

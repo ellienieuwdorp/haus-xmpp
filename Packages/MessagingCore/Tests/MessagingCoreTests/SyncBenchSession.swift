@@ -60,8 +60,8 @@ import XMPPProtocol
         engine.startEvents(connection, token: token)
         let resource = environment.fixture.resource
         let login = SessionEngine.Login(account: account.jid, route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: proxy.port, security: .directTLS)),
-                                        domain: account.domain, username: account.localpart, password: account.password, requireSCRAM: false,
-                                        resource: { resource }, presence: { (.active, true) })
+                                        domain: account.domain, username: account.localpart, password: account.password, pin: .none,
+                                        sasl2: try environment.sasl2(account, carbons: true), resource: { resource }, presence: { (.active, true) })
         _ = try await engine.open(connection, token: token, login: login)
     }
 
