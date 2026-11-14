@@ -46,7 +46,10 @@ public struct ArchiveSynchronizer: Sendable {
                             ownArchiveWalked: (@Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void)? = nil) async throws -> ArchiveSyncOutcome {
         var operations = productionOperations(account: account, client: client, encryption: encryption, progress: progress)
         if let ownArchiveWalked { operations.ownArchiveWalked = ownArchiveWalked }
-        return try await synchronize(account: account, operations: operations)
+        let outcome = try await synchronize(account: account, operations: operations)
+        // Prekeys the walk consumed are published once, after it; a failure stays pending in the state.
+        try? await encryption.flushBundlePublications(account: account, transport: client)
+        return outcome
     }
 
     /// Pages backwards from the archive's backfill cursor, committing each page (messages, cursor, acknowledgement)
@@ -55,8 +58,11 @@ public struct ArchiveSynchronizer: Sendable {
     /// forward and never backfills.
     public func backfill(account: String, archive: String?, pageBudget: Int, client: XMPPClient, encryption: OMEMOService,
                          progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws -> BackfillOutcome {
-        try await backfill(account: account, archive: archive, pageBudget: pageBudget,
-                           operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
+        let outcome = try await backfill(account: account, archive: archive, pageBudget: pageBudget,
+                                         operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
+        // A publication that fails stays pending in the state for the next flush.
+        try? await encryption.flushBundlePublications(account: account, transport: client)
+        return outcome
     }
 
     /// Ask just before joining, so the first walk can tell existing history from what arrived after the join, in
@@ -96,6 +102,7 @@ public struct ArchiveSynchronizer: Sendable {
             newestEntry: { room in try await client.newestArchiveEntry(room: room) },
             prefetchesPages: true,
             process: { archived in try await self.process(account: account, archived: archived, encryption: encryption, transport: client) },
+            processPage: { entries in try await self.processPage(account: account, entries: entries, encryption: encryption, transport: client) },
             acknowledge: { tokens in
                 try await client.acknowledgeInbound(tokens)
                 // Lets the server count our journal so it trims the page, room and bundle IQs. A server without SM
@@ -106,6 +113,24 @@ public struct ArchiveSynchronizer: Sendable {
             progress: { await progress?($0) },
             isOnline: { await client.isOnline }
         )
+    }
+
+    // Consecutive encrypted direct messages go to OMEMO as one run, which commits them together; every other entry is
+    // processed on its own between runs, so writes stay in archive order.
+    func processPage(account: String, entries: [XMPPArchiveMessage], encryption: OMEMOService, transport: XMPPClient) async throws {
+        var run: [ArchivedEncryptedMessage] = []
+        for archived in entries {
+            try Task.checkCancellation()
+            if archived.messageError == nil, archived.rejectedContent == nil, archived.encryptedGroupMessage == nil,
+               let encrypted = archived.encryptedMessage {
+                run.append(ArchivedEncryptedMessage(message: encrypted, sentAt: archived.timestamp))
+                continue
+            }
+            if !run.isEmpty { try await encryption.receiveArchived(account: account, messages: run, transport: transport) }
+            run = []
+            try await process(account: account, archived: archived, encryption: encryption, transport: transport)
+        }
+        if !run.isEmpty { try await encryption.receiveArchived(account: account, messages: run, transport: transport) }
     }
 
     // Every path is durable before it returns; a throw means nothing durable exists for the entry and the page must
@@ -259,10 +284,7 @@ public struct ArchiveSynchronizer: Sendable {
                 }
                 let newestFirst = if case .before = bound { true } else { false }
                 source.prefetch(after: page, continuing: newestFirst || !page.complete)
-                for archived in page.messages {
-                    try Task.checkCancellation()
-                    try await operations.process(archived)
-                }
+                try await operations.processEntries(page.messages)
                 try Task.checkCancellation()
                 checkpoint = try await commitCursor(of: page, newestFirst: newestFirst, after: checkpoint, account: account, archive: archive)
                 if let cursor = page.lastID { bound = .after(cursor) }
@@ -366,10 +388,7 @@ public struct ArchiveSynchronizer: Sendable {
                 await operations.disconnect(); throw error
             }
             do {
-                for archived in page.messages {
-                    try Task.checkCancellation()
-                    try await operations.process(archived)
-                }
+                try await operations.processEntries(page.messages)
                 try Task.checkCancellation()
                 let oldest = page.firstID ?? cursor.oldestID
                 guard page.firstID == nil || oldest != cursor.oldestID else { throw XMPPIQError.malformedResponse }
@@ -400,6 +419,8 @@ struct ArchiveSyncOperations: Sendable {
     var newestEntry: (@Sendable (String) async throws -> XMPPArchiveNewest)? = nil
     var prefetchesPages = false
     let process: @Sendable (XMPPArchiveMessage) async throws -> Void
+    // A page's entries in order, durable when it returns; nil processes them one by one.
+    var processPage: (@Sendable ([XMPPArchiveMessage]) async throws -> Void)? = nil
     let acknowledge: @Sendable ([XMPPInboundToken]) async throws -> Void
     let disconnect: @Sendable () async -> Void
     let progress: @Sendable (ArchiveSyncProgress) async -> Void
@@ -442,8 +463,20 @@ final class ArchiveWalkTimings: Sendable {
 }
 
 extension ArchiveSyncOperations {
+    func processEntries(_ entries: [XMPPArchiveMessage]) async throws {
+        if let processPage { return try await processPage(entries) }
+        for archived in entries {
+            try Task.checkCancellation()
+            try await process(archived)
+        }
+    }
+
     func timed(by walk: ArchiveWalkTimings) -> ArchiveSyncOperations {
         let base = self
+        var processPage: (@Sendable ([XMPPArchiveMessage]) async throws -> Void)?
+        if let page = base.processPage {
+            processPage = { @Sendable entries in try await walk.measure(.process, "process page") { try await page(entries) } }
+        }
         return ArchiveSyncOperations(
             knownRooms: base.knownRooms, refreshRoom: base.refreshRoom,
             fetchPage: { bound, room in
@@ -453,6 +486,7 @@ extension ArchiveSyncOperations {
             },
             prefetchesPages: base.prefetchesPages,
             process: { archived in try await walk.measure(.process, "process entry") { try await base.process(archived) } },
+            processPage: processPage,
             acknowledge: { tokens in try await walk.measure(.acknowledge, "acknowledge") { try await base.acknowledge(tokens) } },
             disconnect: base.disconnect,
             progress: { progress in await walk.measure(.progress, "progress") { await base.progress(progress) } },
