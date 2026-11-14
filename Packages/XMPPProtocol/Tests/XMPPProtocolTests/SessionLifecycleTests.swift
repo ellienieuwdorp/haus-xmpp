@@ -176,6 +176,31 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
+    // Out of time, the owner cannot wait on a silent server: the hard close ends the farewell and every pending request
+    // at once, writes nothing more and leaves the session saved, so the next connect resumes it.
+    @Test func hardCloseEndsAStuckFarewellAndKeepsTheSessionResumable() async throws {
+        let server = try await LoopbackServer.start()
+        let persistence = Persistence(nil)
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        let pending = Task { try await client.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: .seconds(60)) }
+        #expect(try await server.next().name == "iq")
+        let closing = Task { await client.disconnectAndWait() }
+        #expect(try await server.next().name == "r")
+        #expect(try await server.next().name == "iq")
+        let mark = await server.mark()
+        await client.disconnect()
+        await closing.value
+        // Its own limit is a minute away: only the closed socket ends it now.
+        await #expect(throws: XMPPClientError.connectionClosed) { try await pending.value }
+        #expect(try await server.remainder().isEmpty)
+        #expect(await !server.written(since: mark).contains("</stream:stream>"))
+        #expect(await persistence.value?.streamID == "s2")
+        #expect(await !client.isOnline)
+        await server.stop()
+    }
+
     // A probe on demand (the app was told the server pushed for this session): an answer keeps the stream, silence
     // ends it so the owner reconnects.
     @Test func livenessProbeKeepsAnAnsweringStreamAndEndsASilentOne() async throws {
