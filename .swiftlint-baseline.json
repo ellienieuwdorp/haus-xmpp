@@ -6652,10 +6652,6 @@
     0
    ],
    [
-    "func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString, timeout: Duration = XMPPClient.iqTimeout) async throws -> XMLNode {",
-    0
-   ],
-   [
     "guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }",
     0
    ],
@@ -7267,10 +7263,6 @@
   "line_length": [
    [
     "let form = limit.map { \"<x xmlns='jabber:x:data' type='result'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:http:upload:0</value></field><field var='max-file-size'><value>\\($0)</value></field></x>\" } ?? \"\"",
-    0
-   ],
-   [
-    "try await server.send(\"<iq type='result' id='\\(bind.attributes[\"id\"] ?? \"\")'><bind xmlns='\\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>\")",
     0
    ],
    [
