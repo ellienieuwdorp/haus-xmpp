@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import MessagingCore
 import XMPPProtocol
 @testable import HausXMPP
 
