@@ -22,6 +22,9 @@ final class SyncBenchProxy: Sendable {
         var counts = Counts()
         var last: Direction?
         var flightStarted: ContinuousClock.Instant?
+        // When each round trip completed and each connection came, for points known only by their time.
+        var roundTripTimes: [ContinuousClock.Instant] = []
+        var connectionTimes: [ContinuousClock.Instant] = []
     }
 
     private let tally = OSAllocatedUnfairLock(initialState: Tally())
@@ -65,9 +68,20 @@ final class SyncBenchProxy: Sendable {
 
     var counts: Counts { tally.withLock { $0.counts } }
 
+    func firstConnection(after instant: ContinuousClock.Instant) -> ContinuousClock.Instant? {
+        tally.withLock { state in state.connectionTimes.first { $0 >= instant } }
+    }
+
+    // Counted from the relay's start.
+    func roundTrips(through instant: ContinuousClock.Instant) -> Int {
+        tally.withLock { state in state.roundTripTimes.reduce(0) { $0 + ($1 <= instant ? 1 : 0) } }
+    }
+
     func stop() { listener.cancel() }
 
     private func relay(_ inbound: NWConnection) {
+        let now = SyncBenchClock.now()
+        tally.withLock { $0.connectionTimes.append(now) }
         let outbound = NWConnection(host: "127.0.0.1", port: target, using: .tcp)
         let queue = DispatchQueue(label: "syncbench.connection")
         let toServer = DispatchQueue(label: "syncbench.to-server"), toClient = DispatchQueue(label: "syncbench.to-client")
@@ -103,7 +117,10 @@ final class SyncBenchProxy: Sendable {
                 case .fromClient: state.counts.clientFlights += 1
                 case .fromServer:
                     state.counts.serverFlights += 1
-                    if state.last == .fromClient { state.counts.roundTrips += 1 }
+                    if state.last == .fromClient {
+                        state.counts.roundTrips += 1
+                        state.roundTripTimes.append(now)
+                    }
                 }
                 state.last = direction
                 state.flightStarted = now

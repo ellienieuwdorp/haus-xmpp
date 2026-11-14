@@ -209,13 +209,8 @@ public actor ShareSession {
     private func connect(rooms: Set<String>, deadline: ContinuousClock.Instant) async throws {
         let accountID = account.accountID
         try await store.recoverInterruptedSubmissions(accountID: accountID)
-        let client = XMPPClient(labCertificateAuthority: account.labCertificateAuthority)
-        try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
-        if let resource = account.resource { try await client.configureResource(resource) }
-        let preferences = try await store.accountPreferences(accountID: accountID)
         // The user is in another app, so this session must not make them look online.
-        try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: account.leftForeground),
-                                         clientActive: false)
+        let client = try await account.client(store: store, encryption: encryption)
         self.client = client
         // The processor refuses the next acknowledgement after a stanza it could not store and closes the stream, so no
         // unhandled gap is ever acknowledged.

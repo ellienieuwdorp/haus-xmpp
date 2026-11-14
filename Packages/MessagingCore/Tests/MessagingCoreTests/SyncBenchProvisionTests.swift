@@ -5,8 +5,8 @@ import Testing
 import XMPPProtocol
 @testable import MessagingCore
 
-// Once, on existing accounts and rooms: identities, trust, the sender's store and the measured account's snapshots
-// (before the seeded messages, caught up, and caught up with five rooms). Plain clients without stream management, so
+// Once, on existing accounts and rooms: identities, trust, the sender's and the peer's stores (the peer knows two rooms)
+// and the measured account's snapshots (before the seeded messages, caught up, and caught up with five rooms). Plain clients without stream management, so
 // no snapshot holds a session to resume.
 @Suite(.serialized, .enabled(if: SyncBenchEnvironment.provisioning))
 struct SyncBenchProvisionTests {
@@ -74,9 +74,10 @@ struct SyncBenchProvisionTests {
         let work = environment.directory.appending(path: "provision", directoryHint: .isDirectory)
         // A missing directory is the first provisioning.
         try? FileManager.default.removeItem(at: work)
-        let appDirectory = work.appending(path: "app"), peerDirectory = work.appending(path: "peer")
+        try? FileManager.default.removeItem(at: environment.peerStore)
+        let appDirectory = work.appending(path: "app"), peerDirectory = environment.peerStore
 
-        // Identities and trust: the app and the sender trust the peer, the peer trusts the app.
+        // Identities and trust: the app and the sender trust the peer, the peer trusts both.
         var app = try await Party.open(fixture.app, at: appDirectory, authority: authority)
         let peer = try await Party.open(fixture.peer, at: peerDirectory, authority: authority)
         let sender = try await Party.open(fixture.sender, at: environment.senderStore, authority: authority)
@@ -84,8 +85,10 @@ struct SyncBenchProvisionTests {
         try await app.trust(fixture.peer)
         try await sender.trust(fixture.peer)
         try await peer.trust(fixture.app)
+        try await peer.trust(fixture.sender)
         for room in fixture.rooms.prefix(2) {
             _ = try await app.bench.encryption.refreshGroupDevices(account: fixture.app.jid, room: room, transport: app.client)
+            _ = try await peer.bench.encryption.refreshGroupDevices(account: fixture.peer.jid, room: room, transport: peer.client)
         }
         // One message first, so the walk below has a checkpoint and the seeded ones arrive as new.
         try await peer.send(1, to: fixture.app)

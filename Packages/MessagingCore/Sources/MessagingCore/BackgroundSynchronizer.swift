@@ -20,15 +20,18 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let push: XMPPPushConfiguration?
     /// Announced as XEP-0319 idle when the account shares last seen.
     public let leftForeground: Date?
+    /// The app's shared `StreamProfileMemory`: the connection sends ahead with what the server last offered, and
+    /// learns or refuses for every process. Nil connects in the plain order.
+    public let streamProfiles: (any XMPPStreamProfileStore)?
     public var accountID: String { username + "@" + domain }
 
     public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
                 labCertificateAuthority: Data? = nil, resource: String? = nil,
-                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil) {
+                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil, streamProfiles: (any XMPPStreamProfileStore)? = nil) {
         self.route = route; self.domain = domain
         self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
         self.labCertificateAuthority = labCertificateAuthority
-        self.resource = resource; self.push = push; self.leftForeground = leftForeground
+        self.resource = resource; self.push = push; self.leftForeground = leftForeground; self.streamProfiles = streamProfiles
     }
     public var description: String { "BackgroundAccount(<redacted>)" }
     public var debugDescription: String { description }
@@ -58,8 +61,7 @@ public struct BackgroundSynchronizer: Sendable {
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
     /// `leaseWait` is spent inside `timeBudget`. With `liveness`, a busy lease first asks a running app; an answer in
-    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed and rooms follow, and
-    /// once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
+    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed, and once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
     /// store and throws `handedOff` once the app confirms its takeover, `takeoverUnconfirmed` otherwise. Cancelling the
     /// run closes its socket at once; it returns once the store is closed.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
@@ -92,14 +94,7 @@ public struct BackgroundSynchronizer: Sendable {
                 throw BackgroundSynchronizationError.identityUnavailable
             }
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
-            let client = XMPPClient(labCertificateAuthority: account.labCertificateAuthority)
-            try await client.configureStreamManagement(persistence: StreamPersistence(
-                store: store, accountID: account.accountID, encryption: encryption))
-            if let resource = account.resource { try await client.configureResource(resource) }
-            let preferences = try await store.accountPreferences(accountID: account.accountID)
-            try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen,
-                                                                            leftForeground: account.leftForeground),
-                                             clientActive: false)
+            let client = try await account.client(store: store, encryption: encryption)
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
@@ -107,6 +102,7 @@ public struct BackgroundSynchronizer: Sendable {
                 connect: {
                     try await client.connect(route: account.route, domain: account.domain, username: account.username,
                                              password: account.password, requireSCRAM: account.requiresSCRAM)
+                    progress?.noteOnline(resumed: await client.sessionResumed)
                 },
                 sessionDuties: { ownArchiveWalked in
                     // A fresh bind replaced the session the server pushed for, so re-enable push and rejoin rooms.
@@ -131,7 +127,10 @@ public struct BackgroundSynchronizer: Sendable {
                                                                             progress: walkProgress, ownArchiveWalked: ownArchiveWalked)
                 },
                 pull: { timeout in
-                    try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
+                    let apply = try await ReadSync(store: store).fetched(account: account.accountID, encryption: encryption) {
+                        try await client.fetchDisplayedSync(timeout: timeout)
+                    }
+                    return { _ = try await apply() }
                 },
                 consume: {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
@@ -164,7 +163,8 @@ struct BackgroundCatchUp: Sendable {
     let sessionDuties: @Sendable (_ ownArchiveWalked: CatchUpMark) async -> Void
     let walk: @Sendable (_ progress: @escaping @Sendable (ArchiveSyncProgress) async -> Void,
                          _ ownArchiveWalked: @escaping @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void) async throws -> Void
-    let pull: @Sendable (Duration) async throws -> Void
+    // Fetches the read state within the timeout; what it returns applies it.
+    let pull: @Sendable (Duration) async throws -> ReadStatePrefetch.Apply
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
     var roomsAfterPost: Duration = .seconds(5)
@@ -173,21 +173,24 @@ struct BackgroundCatchUp: Sendable {
     // The budget's timer ends at `deadline`.
     func run<C: Clock<Duration>>(store: MessageStore, deadline: C.Instant, clock: C, progress: NotificationRunProgress?,
                                  presentation: BackgroundSynchronizer.Presentation?) async throws {
-        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
-        // A slow or lost server leaves the run a success.
+        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger(), early = ReadStatePrefetch()
+        // A slow or lost server leaves the run a success. The first pull takes the fetch made beside the own archive's
+        // walk; a later one fetches again.
         @Sendable func pullReadState() async throws {
-            if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout) }
+            if let apply = try await early.take() { try await apply() }
+            else if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout)() }
             await ledger.notePull()
         }
         let giveWay = giveWay
         @Sendable func walkArchives() async throws {
-            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
+            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, _ in
                 await ownArchiveWalked.reach()
                 // The own archive holds the direct messages a push is about; without it the run shows the fallback.
                 guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
+                progress?.noteOwnArchiveCommitted()
                 await caughtUp.reach()
-                guard rooms > 0 else { return }
-                // Before the claim, so chats read on another device lose their candidates.
+                // Before the claim, so chats read on another device lose their candidates. Also without rooms: the
+                // final presentation waits for the farewell's round trip.
                 try await pullReadState()
                 guard let presentation else { return }
                 // A stop waits for a presentation that is posting, so nothing is posted twice.
@@ -202,6 +205,11 @@ struct BackgroundCatchUp: Sendable {
         try await runBackgroundWork(timeBudget: clock.now.duration(to: deadline), clock: clock, caughtUp: caughtUp, giveWay: giveWay, operation: {
             try await connect()
             try Task.checkCancellation()
+            await early.start()
+            async let prefetched: Void = early.fetch {
+                guard let timeout = readSyncTimeout(until: deadline, now: clock.now) else { return nil }
+                return try await pull(timeout)
+            }
             async let duties: Void = sessionDuties(ownArchiveWalked)
             do {
                 try await withThrowingTaskGroup(of: Void.self) { group in
@@ -222,6 +230,7 @@ struct BackgroundCatchUp: Sendable {
                 await ledger.noteRoomWalkFailed(error)
             }
             if await ledger.needsPull { try await pullReadState() }
+            await prefetched
             await duties
         }, consume: {
             try await consumeUntilDisconnect(after: caughtUp) { try await consume() }
@@ -273,6 +282,29 @@ actor CatchUpLedger {
         }
         return PresentationStage(isFinal: true, unfinished: roomError)
     }
+}
+
+extension BackgroundAccount {
+    // Stream management on the account's store, the app's resource and stream profile; away, so the session never
+    // makes the user look online.
+    func client(store: MessageStore, encryption: OMEMOService) async throws -> XMPPClient {
+        let client = XMPPClient(labCertificateAuthority: labCertificateAuthority)
+        try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
+        if let resource { try await client.configureResource(resource) }
+        if let streamProfiles { try await client.configureStreamProfiles(streamProfiles) }
+        let preferences = try await store.accountPreferences(accountID: accountID)
+        try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: leftForeground),
+                                         clientActive: false)
+        return client
+    }
+}
+
+extension NotificationRunProgress {
+    func noteOnline(resumed: Bool) {
+        update { $0.onlineMilliseconds = Int(Date().timeIntervalSince(started) * 1000); $0.resumed = resumed }
+    }
+
+    func noteOwnArchiveCommitted() { update { $0.ownArchiveMilliseconds = Int(Date().timeIntervalSince(started) * 1000) } }
 }
 
 /// A fresh bind away from the foreground replaced the app's session, which had push enabled and sat in the rooms.

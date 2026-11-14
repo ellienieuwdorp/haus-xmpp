@@ -50,6 +50,11 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public var badge: Int?
     /// Nil when nothing was posted.
     public var firstPostMilliseconds: Int?
+    /// From the run's start to the stream online, and to the own archive committed; nil when not reached.
+    public var onlineMilliseconds: Int?
+    public var ownArchiveMilliseconds: Int?
+    /// Whether the stream resumed the session the app or an earlier run left; nil before the stream was online.
+    public var resumed: Bool?
     public init() {}
 }
 

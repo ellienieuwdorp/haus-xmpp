@@ -55,7 +55,7 @@ enum AccountResource: CaseIterable {
         case .serverFeatures: Policy(location: .preference([.app], key: { "serverFeatures." + $0 }), signOut: .delete, transfer: .copy)
         case .carbonsStream:
             Policy(location: .preference([.app], key: { "carbonsStream." + $0 }), signOut: .delete, transfer: .omit(reason: "names a stream of this install"))
-        case .streamProfile: Policy(location: .preference([.app], key: { "streamProfile." + $0 }), signOut: .delete, transfer: .copy)
+        case .streamProfile: Policy(location: .preference([.group], key: { "streamProfile." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadService: Policy(location: .preference([.app, .group], key: { "uploadService." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadServiceCheckedAt: Policy(location: .preference([.app], key: { "uploadServiceCheckedAt." + $0 }), signOut: .delete, transfer: .copy)
         case .blocklist: Policy(location: .preference([.group], key: { "blocklist." + $0 }), signOut: .delete, transfer: .copy)
@@ -79,7 +79,7 @@ enum AccountResource: CaseIterable {
     // Sign-out's share of the preferences, after the account was deselected.
     static func forgetPreferencesAtSignOut(of account: String, app: UserDefaults, group: UserDefaults?) {
         UploadServiceMemory(defaults: app, mirror: group).forget(account: account)
-        ServerProfileMemory(defaults: app).forget(account: account)
+        ServerProfileMemory(defaults: app, streamProfiles: group).forget(account: account)
         BlockedAddresses.forget(accountID: account, defaults: group)
         ShareSuggestionSetting.forget(accountID: account, defaults: group)
         app.removeObject(forKey: "lastAccount")

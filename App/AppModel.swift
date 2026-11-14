@@ -255,7 +255,7 @@ final class AppModel {
         UploadServiceMemory(defaults: preferences, mirror: testSessionID == nil ? SharedSession.groupDefaults : nil)
     }
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
-    private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
+    private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences, streamProfiles: sessionDefaults) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     let linkPreviewCenter = LinkPreviewCenter()
     let contactLinks = ContactLinkCenter()
@@ -3881,11 +3881,10 @@ extension AppModel: NotificationActionEnvironment {
         guard !session.isOver else { return true }
         do {
             try await store.recoverInterruptedSubmissions(accountID: account)
-            let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
-            try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
-            try await client.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
-            // The user is not in front: the action's session must not make them look online.
-            try await client.setAvailability(awayAvailability, clientActive: false)
+            let client = try await NotificationActionConnection.client(
+                persistence: StreamPersistence(store: store, accountID: account, encryption: encryption),
+                resource: SharedSession.resource(accountID: account, defaults: sessionDefaults), profiles: serverProfiles.streams,
+                availability: awayAvailability)
             session.client = client
             // From here an abort closes this client; one that came before it was set is honoured here.
             guard !session.isOver else { throw CancellationError() }
