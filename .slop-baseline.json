@@ -417,12 +417,6 @@
       "try? url.setResourceValues(values)"
     ]
   },
-  "Packages/MessagingCore/Sources/MessagingCore/OutboxDrain.swift" : {
-    "unsafe.discarded-try" : [
-      "try? await client.requestAcknowledgement()",
-      "try? await client.requestAcknowledgement()"
-    ]
-  },
   "Packages/MessagingCore/Sources/MessagingCore/OutgoingEnqueue.swift" : {
     "unsafe.discarded-try" : [
       "try? FileManager.default.createDirectory(at: root.appending(path: sub), withIntermediateDirectories: true,"
@@ -433,8 +427,7 @@
       "_ = try? await processor.process(event)",
       "try? FileManager.default.removeItem(at: staged)",
       "try? await Task.sleep(for: .milliseconds(200))",
-      "try? await Task.sleep(until: deadline, clock: .continuous)",
-      "try? await client.requestAcknowledgement()"
+      "try? await Task.sleep(until: deadline, clock: .continuous)"
     ]
   },
   "Packages/MessagingCore/Sources/MessagingCore/TransferArchive.swift" : {

@@ -5327,7 +5327,7 @@
   "file_length": [
    [
     "",
-    1129
+    1111
    ]
   ],
   "function_body_length": [
@@ -5349,10 +5349,6 @@
    ],
    [
     "_ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance,",
-    0
-   ],
-   [
-    "_ = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)",
     0
    ],
    [
@@ -5400,10 +5396,6 @@
     0
    ],
    [
-    "if owner == account, try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed]).contains(deviceID) { return }",
-    0
-   ],
-   [
     "let candidates = state.devices.filter { $0.profile == saved.envelope.profile && $0.active && ($0.jid == message.chatID || $0.jid == account) }",
     0
    ],
@@ -5435,7 +5427,7 @@
   "type_body_length": [
    [
     "public actor OMEMOService {",
-    1084
+    1062
    ]
   ]
  },
@@ -6623,7 +6615,7 @@
   "file_length": [
    [
     "",
-    1210
+    1203
    ]
   ],
   "force_unwrapping": [
@@ -6699,7 +6691,7 @@
   "type_body_length": [
    [
     "public actor XMPPClient {",
-    1090
+    1083
    ]
   ]
  },

@@ -203,7 +203,8 @@ public actor XMPPClient {
     private var availability = XMPPAvailability.active
     // XEP-0352: `<active/>` is a new stream's default, so binding sends nothing for it. Restated on every
     // announcement and resume.
-    private var clientActive = true
+    var clientActive = true
+    var deviceLists = DeviceListObservation()
     // nil until initial presence; on a resume, what the snapshot recorded.
     private var announced: XMPPAvailability?
     private var announcedClientActive = true
@@ -954,6 +955,7 @@ public actor XMPPClient {
 
     // `serverStamp` is our own server's delay on the stanza (`ServerStamp`).
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance, serverStamp: Date? = nil) throws {
+        deviceLists.see(node, provenance: provenance, session: generation)
         if node.attributes["type"] == "error" {
             // A bounce echoes what we sent, ciphertext included: never parsed as content or handed to OMEMO. Carbons
             // never unwrap one.
@@ -992,7 +994,7 @@ public actor XMPPClient {
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
         } else if provenance == .direct, let account = OMEMOWire.bareJID(boundJID), let items = DisplayedSync.event(node, accountBareJID: account) {
             if !items.isEmpty { try emit(.displayedSync(items)) }
-        } else if provenance == .direct, let update = Self.deviceUpdate(node) {
+        } else if provenance == .direct, let update = DeviceListObservation.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
         } else if let retraction = Self.parsedRetraction(node, provenance: provenance) {
             try emit(.retraction(retraction))
@@ -1025,6 +1027,7 @@ public actor XMPPClient {
     /// binds with it; online it is written now. A server without CSI throws `clientStateUnavailable`.
     public func setClientActive(_ active: Bool) async throws {
         clientActive = active
+        if !active { deviceLists.changed() }
         guard phase == .online else { return }
         guard csiOffered else { throw XMPPNotificationError.clientStateUnavailable }
         try await withFarewellDeadline { try await self.write(PushNotifications.clientStateXML(active: active)) }
@@ -1247,18 +1250,6 @@ public actor XMPPClient {
         return items
     }
 
-    private static func deviceUpdate(_ message: XMLNode) -> (owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])? {
-        guard message.name == "message", message.namespace == "jabber:client", let owner = message.attributes["from"],
-              OMEMOWire.bareJID(owner) == owner,
-              let event = try? OMEMOWire.singleton(message, "event", OMEMOWire.eventNamespace),
-              let items = try? OMEMOWire.singleton(event, "items", OMEMOWire.eventNamespace),
-              let profile = XMPPOMEMOProfile.allCases.first(where: { $0.devicesNode == items.attributes["node"] }),
-              items.children.count == 1, let item = try? OMEMOWire.singleton(items, "item", OMEMOWire.eventNamespace),
-              item.attributes["id"] == "current", item.children.count == 1,
-              let devices = try? OMEMOWire.parseDevices(item.children[0], profile: profile) else { return nil }
-        return (owner, profile, devices)
-    }
-
     /// XEP-0084 metadata; nil when the contact publishes none. `item-not-found` and a server without PEP throw, so the
     /// caller can fall back to the vCard photo.
     public func fetchAvatarMetadata(for jid: String) async throws -> XMPPAvatarMetadata? {
@@ -1367,6 +1358,7 @@ public actor XMPPClient {
     func streamOpening() -> String { "<stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>" }
     func emit(_ event: XMPPEvent) throws {
         emittedEvents &+= 1
+        deviceLists.see(event)
         switch continuation.yield(event) {
         case .enqueued: break
         case .dropped: throw XMPPClientError.eventConsumerTooSlow
