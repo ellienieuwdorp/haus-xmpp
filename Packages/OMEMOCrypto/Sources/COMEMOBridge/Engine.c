@@ -9,12 +9,20 @@ struct record {
   signal_buffer *value;
   struct record *next;
 };
+// A record's value before the first write since om_change_begin; NULL value means it did not exist.
+struct undo {
+  char *name;
+  signal_buffer *value;
+  struct undo *next;
+};
 struct om_engine {
   signal_context *context;
   signal_protocol_store_context *store;
   struct record *records;
   int version;
   uint32_t device;
+  int journaling;
+  struct undo *undo;
 };
 extern int om_install_provider(signal_context *context);
 static struct record *find(om_engine *e, const char *key) {
@@ -23,7 +31,43 @@ static struct record *find(om_engine *e, const char *key) {
       return r;
   return NULL;
 }
+static int remember(om_engine *e, const char *k) {
+  if (!e->journaling)
+    return 0;
+  for (struct undo *u = e->undo; u; u = u->next)
+    if (strcmp(u->name, k) == 0)
+      return 0;
+  struct undo *u = calloc(1, sizeof(*u));
+  if (!u)
+    return SG_ERR_NOMEM;
+  u->name = strdup(k);
+  struct record *r = find(e, k);
+  if (r)
+    u->value = signal_buffer_copy(r->value);
+  if (!u->name || (r && !u->value)) {
+    signal_buffer_bzero_free(u->value);
+    free(u->name);
+    free(u);
+    return SG_ERR_NOMEM;
+  }
+  u->next = e->undo;
+  e->undo = u;
+  return 0;
+}
+static void forget_undo(om_engine *e) {
+  while (e->undo) {
+    struct undo *u = e->undo;
+    e->undo = u->next;
+    signal_buffer_bzero_free(u->value);
+    free(u->name);
+    free(u);
+  }
+  e->journaling = 0;
+}
 static int put(om_engine *e, const char *k, const uint8_t *b, size_t n) {
+  int journaled = remember(e, k);
+  if (journaled < 0)
+    return journaled;
   signal_buffer *v = signal_buffer_create(b, n);
   if (!v)
     return SG_ERR_NOMEM;
@@ -52,6 +96,8 @@ static int remove_record(om_engine *e, const char *k) {
   while (*p) {
     struct record *r = *p;
     if (strcmp(r->name, k) == 0) {
+      if (remember(e, k) < 0)
+        return SG_ERR_NOMEM;
       *p = r->next;
       signal_buffer_bzero_free(r->value);
       free(r->name);
@@ -140,7 +186,10 @@ static int session_delete_all(const char *n, size_t len, void *d) {
   while (r) {
     struct record *next = r->next;
     if (matching_name(r->name, n, len)) {
-      count += remove_record(e, r->name);
+      int removed = remove_record(e, r->name);
+      if (removed < 0)
+        return removed;
+      count += removed;
     }
     r = next;
   }
@@ -166,8 +215,8 @@ static int session_delete_all(const char *n, size_t len, void *d) {
   static int prefix##_remove(uint32_t id, void *d) {                           \
     char k[32];                                                                \
     snprintf(k, sizeof(k), kind ":%u", id);                                    \
-    remove_record(d, k);                                                       \
-    return 0;                                                                  \
+    int x = remove_record(d, k);                                               \
+    return x < 0 ? x : 0;                                                      \
   }
 KEY_CALLBACKS(pre, "p")
 KEY_CALLBACKS(signedpre, "k")
@@ -258,6 +307,7 @@ void om_engine_free(om_engine *e) {
     signal_protocol_store_context_destroy(e->store);
   if (e->context)
     signal_context_destroy(e->context);
+  forget_undo(e);
   while (e->records)
     remove_record(e, e->records->name);
   free(e);
@@ -294,6 +344,43 @@ const char *om_record_name(om_engine *e, size_t index) {
     r = r->next;
   }
   return r ? r->name : NULL;
+}
+size_t om_record_list(om_engine *e, const char **names, const uint8_t **values,
+                      size_t *lengths, size_t capacity) {
+  size_t n = 0;
+  for (struct record *r = e->records; r && n < capacity; r = r->next, n++) {
+    names[n] = r->name;
+    values[n] = signal_buffer_data(r->value);
+    lengths[n] = signal_buffer_len(r->value);
+  }
+  return n;
+}
+size_t om_prekey_count(om_engine *e) {
+  size_t n = 0;
+  for (struct record *r = e->records; r; r = r->next)
+    if (r->name[0] == 'p' && r->name[1] == ':')
+      n++;
+  return n;
+}
+int om_change_begin(om_engine *e) {
+  if (e->journaling)
+    return SG_ERR_INVAL;
+  e->journaling = 1;
+  return 0;
+}
+void om_change_keep(om_engine *e) { forget_undo(e); }
+int om_change_revert(om_engine *e) {
+  e->journaling = 0;
+  int result = 0;
+  for (struct undo *u = e->undo; u; u = u->next) {
+    int r = u->value ? put(e, u->name, signal_buffer_data(u->value),
+                           signal_buffer_len(u->value))
+                     : (remove_record(e, u->name), 0);
+    if (r < 0)
+      result = r;
+  }
+  forget_undo(e);
+  return result;
 }
 int om_record_read(om_engine *e, const char *k, om_bytes *out) {
   struct record *r = find(e, k);

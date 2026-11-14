@@ -2,9 +2,9 @@ import COMEMOBridge
 import Foundation
 import Security
 
-/// Synchronous, deliberately non-Sendable, single-owner ratchet. Construct inside a durable
-/// transaction, persist `snapshot()` with its resulting ciphertext/plaintext, then discard.
-/// If any operation or transaction fails, discard this instance; never persist partial state.
+/// Synchronous, deliberately non-Sendable, single-owner ratchet. Persist `snapshot()` with its
+/// resulting ciphertext/plaintext in one transaction. If any operation or transaction fails,
+/// discard this instance, or revert the change that wrapped it; never persist partial state.
 public final class OMEMOEngine {
   public let profile: CryptoProfile
   public let deviceID: UInt32
@@ -134,10 +134,7 @@ public final class OMEMOEngine {
   public var identityKey: Data { get throws { try publicKey(kind: 0, id: 0) } }
   public func snapshot() throws -> Data {
     var records: [String: Data] = [:]
-    for i in 0..<om_record_count(engine) {
-      guard let name = om_record_name(engine, i) else { throw OMEMOCryptoError.invalidSnapshot }
-      records[String(cString: name)] = try output { om_record_read(engine, name, $0) }
-    }
+    try forEachRecord { name, value in records[name] = value }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     return try encoder.encode(
@@ -148,7 +145,7 @@ public final class OMEMOEngine {
   }
   public func bundle() throws -> DeviceBundle {
     var prekeys: [UInt32: Data] = [:]
-    for id in preKeyIDs() { prekeys[id] = try publicKey(kind: 3, id: id) }
+    for id in try preKeyIDs() { prekeys[id] = try publicKey(kind: 3, id: id) }
     return try DeviceBundle(
       deviceID: deviceID, identityKey: identityKey, signedPreKeyID: signedPreKeyID,
       signedPreKey: publicKey(kind: 1, id: signedPreKeyID),
@@ -182,12 +179,35 @@ public final class OMEMOEngine {
   }
   public func replenishPreKeys(targetCount: UInt32 = 100) throws {
     guard targetCount > 0, targetCount <= 1000 else { throw OMEMOCryptoError.invalidInput }
-    let current = UInt32(preKeyIDs().count)
+    let current = UInt32(clamping: om_prekey_count(engine))
     guard current < targetCount else { return }
     let count = targetCount - current
     guard nextPreKeyID < 0xFFFFFF - count else { throw OMEMOCryptoError.invalidInput }
     try checked(om_replenish(engine, nextPreKeyID, count))
     nextPreKeyID += count
+  }
+  private var pendingChange:
+    (nextPreKeyID: UInt32, signedPreKeyID: UInt32, signedPreKeyCreatedAt: Date, retired: [UInt32: Date])?
+  /// Starts one change: `revertChange()` restores the engine exactly as it is now, `keepChange()` accepts every
+  /// write since. A kept-alive engine wraps each message in a change, so a failure never leaves partial state.
+  public func beginChange() throws {
+    guard pendingChange == nil else { throw OMEMOCryptoError.invalidInput }
+    try checked(om_change_begin(engine))
+    pendingChange = (nextPreKeyID, signedPreKeyID, signedPreKeyCreatedAt, retiredSignedPreKeys)
+  }
+  public func keepChange() {
+    om_change_keep(engine)
+    pendingChange = nil
+  }
+  /// Throws when the engine could not be restored; it must then be discarded.
+  public func revertChange() throws {
+    guard let saved = pendingChange else { return }
+    pendingChange = nil
+    nextPreKeyID = saved.nextPreKeyID
+    signedPreKeyID = saved.signedPreKeyID
+    signedPreKeyCreatedAt = saved.signedPreKeyCreatedAt
+    retiredSignedPreKeys = saved.retired
+    try checked(om_change_revert(engine))
   }
   public func hasSession(with address: DeviceAddress) -> Bool {
     guard valid(address) else { return false }
@@ -259,12 +279,27 @@ public final class OMEMOEngine {
   private func publicKey(kind: Int32, id: UInt32) throws -> Data {
     try output { om_public(engine, kind, id, $0) }
   }
-  private func preKeyIDs() -> [UInt32] {
-    (0..<om_record_count(engine)).compactMap { i in
-      guard let key = om_record_name(engine, i) else { return nil }
-      let value = String(cString: key)
-      return value.hasPrefix("p:") ? UInt32(value.dropFirst(2)) : nil
-    }.sorted()
+  private func preKeyIDs() throws -> [UInt32] {
+    var ids: [UInt32] = []
+    try forEachRecord { name, _ in
+      if name.hasPrefix("p:"), let id = UInt32(name.dropFirst(2)) { ids.append(id) }
+    }
+    return ids.sorted()
+  }
+  private func forEachRecord(_ body: (String, Data) throws -> Void) throws {
+    let count = om_record_count(engine)
+    var names = [UnsafePointer<CChar>?](repeating: nil, count: count)
+    var values = [UnsafePointer<UInt8>?](repeating: nil, count: count)
+    var lengths = [Int](repeating: 0, count: count)
+    guard om_record_list(engine, &names, &values, &lengths, count) == count else {
+      throw OMEMOCryptoError.invalidSnapshot
+    }
+    for index in 0..<count {
+      guard let name = names[index], let value = values[index] else {
+        throw OMEMOCryptoError.invalidSnapshot
+      }
+      try body(String(cString: name), Data(bytes: value, count: lengths[index]))
+    }
   }
   private func valid(_ address: DeviceAddress) -> Bool {
     !address.jid.isEmpty && !address.jid.contains("\0") && address.jid.utf8.count <= 3071
