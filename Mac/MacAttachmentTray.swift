@@ -13,25 +13,33 @@ struct MacTrayItem: Identifiable {
 }
 
 // Each file holds its place in the tray from the start and is reduced in the order it came, so a slow video cannot
-// let a later photo jump ahead; one too large or unreadable shows why and the rest still land.
+// let a later photo jump ahead; one too large or unreadable shows why and the rest still land. A video too long to
+// send whole keeps its place while the dialog offers its start, which its own job then prepares.
 @MainActor enum MacAttachmentIntake {
     struct Job {
         let label: String
-        let prepare: () async throws -> PreparedAttachment
+        let prepare: (_ keepingFirst: Int?) async throws -> PreparedAttachment
+    }
+
+    struct Offer {
+        let item: UUID
+        let shortening: AttachmentPreparer.Shortening
+        let job: Job
     }
 
     static func jobs(for attachments: MacComposerAttachments, limit: Int) -> [Job] {
         switch attachments {
         case .files(let urls):
             urls.map { url in
-                Job(label: url.lastPathComponent) {
-                    try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit)
+                Job(label: url.lastPathComponent) { first in
+                    try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension),
+                                                         limit: limit, keepingFirst: first)
                 }
             }
         case .image(let data, _):
-            [Job(label: "Photo") { try AttachmentPreparer.prepareImage(data, name: "photo", limit: limit) }]
+            [Job(label: "Photo") { _ in try AttachmentPreparer.prepareImage(data, name: "photo", limit: limit) }]
         case .pdf(let data):
-            [Job(label: "Document") {
+            [Job(label: "Document") { _ in
                 guard data.count <= limit else { throw AttachmentPreparer.Failure.tooLarge(limit: limit) }
                 return PreparedAttachment(data: data, name: "Scan.pdf", mediaType: "application/pdf", width: nil, height: nil)
             }]
@@ -40,8 +48,8 @@ struct MacTrayItem: Identifiable {
 
     static func jobs(forPhotos items: [PhotosPickerItem], limit: Int) -> [Job] {
         items.map { item in
-            Job(label: item.supportedContentTypes.contains { $0.conforms(to: .movie) } ? "Video" : "Photo") {
-                try await AttachmentPreparer.prepare(photo: item, limit: limit)
+            Job(label: item.supportedContentTypes.contains { $0.conforms(to: .movie) } ? "Video" : "Photo") { first in
+                try await AttachmentPreparer.prepare(photo: item, limit: limit, keepingFirst: first)
             }
         }
     }
@@ -54,26 +62,43 @@ struct MacTrayItem: Identifiable {
         guard !accepted.isEmpty else { return }
         let items = accepted.map { MacTrayItem(label: $0.label) }
         state.tray.append(contentsOf: items)
-        let previous = state.preparation
-        let account = model.accountID
-        state.preparation = Task {
-            await previous?.value
-            for (item, job) in zip(items, accepted) {
-                // Removed from the tray while it waited its turn.
-                guard state.tray.contains(where: { $0.id == item.id }) else { continue }
-                do {
-                    let prepared = try await job.prepare()
-                    let preview = await AttachmentThumbnails.preview(of: prepared)
-                    guard let index = state.tray.firstIndex(where: { $0.id == item.id }) else { continue }
-                    state.tray[index].prepared = prepared
-                    state.tray[index].preview = preview
-                } catch {
-                    state.tray.removeAll { $0.id == item.id }
-                    guard model.accountID == account else { continue }
-                    model.error = (error as? any LocalizedError)?.errorDescription ?? "\(item.label) could not be attached."
-                }
-            }
+        for (item, job) in zip(items, accepted) { prepare(item.id, job, keepingFirst: nil, in: state, model: model) }
+    }
+
+    static func remove(_ id: UUID, from state: MacComposerState) {
+        state.preparation.cancel(id)
+        state.tray.removeAll { $0.id == id }
+        state.offers.removeAll { $0.item == id }
+    }
+
+    static func answer(_ shortening: AttachmentPreparer.Shortening, accepted: Bool, state: MacComposerState, model: AppModel) {
+        guard let index = state.offers.firstIndex(where: { $0.shortening.id == shortening.id }) else { return }
+        let offer = state.offers.remove(at: index)
+        if accepted {
+            prepare(offer.item, offer.job, keepingFirst: shortening.seconds, in: state, model: model)
+        } else {
+            remove(offer.item, from: state)
         }
+    }
+
+    private static func prepare(_ item: UUID, _ job: Job, keepingFirst first: Int?, in state: MacComposerState, model: AppModel) {
+        let account = model.accountID
+        state.preparation.enqueue(item, { try await job.prepare(first) }, done: { result in
+            guard state.tray.contains(where: { $0.id == item }) else { return }
+            switch result {
+            case .success(let prepared):
+                let preview = await AttachmentThumbnails.preview(of: prepared)
+                guard let index = state.tray.firstIndex(where: { $0.id == item }) else { return }
+                state.tray[index].prepared = prepared
+                state.tray[index].preview = preview
+            case .failure(AttachmentPreparer.Failure.tooLong(let seconds)) where model.accountID == account:
+                state.offers.append(Offer(item: item, shortening: .init(seconds: seconds), job: job))
+            case .failure(let error):
+                state.tray.removeAll { $0.id == item }
+                guard model.accountID == account else { return }
+                model.error = (error as? any LocalizedError)?.errorDescription ?? "\(job.label) could not be attached."
+            }
+        })
     }
 
     // Each job holds its tray place as soon as it is dropped, so Send waits for it, and its bytes are read only in its
@@ -81,14 +106,15 @@ struct MacTrayItem: Identifiable {
     static func jobs(for providers: [NSItemProvider], limit: Int) -> [Job] {
         providers.compactMap { provider in
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                return Job(label: provider.suggestedName ?? "File") {
+                return Job(label: provider.suggestedName ?? "File") { first in
                     guard let url = await fileURL(from: provider) else { throw AttachmentPreparer.Failure.unreadable }
-                    return try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit)
+                    return try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension),
+                                                                limit: limit, keepingFirst: first)
                 }
             }
             guard let type = [UTType.image, .pdf].first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) else { return nil }
             let name = provider.suggestedName ?? (type == .pdf ? "Document" : "photo")
-            return Job(label: provider.suggestedName ?? (type == .pdf ? "Document" : "Photo")) {
+            return Job(label: provider.suggestedName ?? (type == .pdf ? "Document" : "Photo")) { _ in
                 let copy = try await fileCopy(from: provider, type: type)
                 defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
                 let named = (name as NSString).pathExtension.isEmpty && type == .pdf ? name + ".pdf" : name
@@ -325,7 +351,7 @@ struct MacAttachmentDropHighlight: View {
             MacDebugHooks.log("tour save-over: unreadable source \((try? missing.get()) == nil ? "failed" : "saved"), existing kept \(kept); photo \(replaced.map { (try? $0.get()) == nil ? "failed" : "saved" } ?? "none"), replaced \(matches)")
             try? FileManager.default.removeItem(at: folder)
         case "remove-attachment":
-            if let index = Int(argument), state.tray.indices.contains(index) { state.tray.remove(at: index) }
+            if let index = Int(argument), state.tray.indices.contains(index) { MacAttachmentIntake.remove(state.tray[index].id, from: state) }
         case "copy-image":
             let message = argument == "newest" ? model.messages.last { $0.attachment?.mediaType.hasPrefix("image/") == true } : model.messages.first { $0.id == argument }
             guard let message, let url = model.attachmentFiles[message.id] else { MacDebugHooks.log("tour copy-image \(argument): no photo on disk"); return }

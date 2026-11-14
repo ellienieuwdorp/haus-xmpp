@@ -14,18 +14,18 @@ import UniformTypeIdentifiers
 import XMPPProtocol
 
 extension AttachmentPreparer {
-    static func prepare(photo item: PhotosPickerItem, limit: Int) async throws -> PreparedAttachment {
+    static func prepare(photo item: PhotosPickerItem, limit: Int, keepingFirst first: Int? = nil) async throws -> PreparedAttachment {
         if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
             guard let movie = try await item.loadTransferable(type: PickedMovie.self) else { throw Failure.unreadable }
             defer { try? FileManager.default.removeItem(at: movie.url) }
-            return try await prepareVideo(movie.url, name: "video", limit: limit)
+            return try await prepareVideo(movie.url, name: "video", limit: limit, keepingFirst: first)
         }
         guard let data = try await item.loadTransferable(type: Data.self) else { throw Failure.unreadable }
         return try prepareImage(data, name: "photo", limit: limit)
     }
 
     // Originals kept only in iCloud download on demand.
-    static func prepare(asset: PHAsset, limit: Int) async throws -> PreparedAttachment {
+    static func prepare(asset: PHAsset, limit: Int, keepingFirst first: Int? = nil) async throws -> PreparedAttachment {
         if asset.mediaType == .video {
             let options = PHVideoRequestOptions()
             options.isNetworkAccessAllowed = true
@@ -36,7 +36,7 @@ extension AttachmentPreparer {
                     if let video { continuation.resume(returning: LibraryVideo(asset: video)) } else { continuation.resume(throwing: Failure.unreadable) }
                 }
             }
-            return try await prepareVideo(video.asset, name: "video", limit: limit)
+            return try await prepareVideo(video.asset, name: "video", limit: limit, keepingFirst: first)
         }
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = true
@@ -49,20 +49,26 @@ extension AttachmentPreparer {
         }
         return try prepareImage(data, name: "photo", limit: limit)
     }
-
-    #if os(iOS)
-    static func prepare(capture: CameraCapture, limit: Int) async throws -> PreparedAttachment {
-        switch capture {
-        case .image(let data): return try prepareImage(data, name: "photo", limit: limit)
-        case .movie(let url):
-            defer { try? FileManager.default.removeItem(at: url) }
-            return try await prepareVideo(url, name: "video", limit: limit)
-        }
-    }
-    #endif
 }
 
-// Photos hands the asset over on its own queue; nothing mutates it, and the export only reads it.
+#if os(iOS)
+// Owns the camera's movie until nothing can prepare it again, so a clip too long to send whole keeps it for its start.
+final class CameraJob: Sendable {
+    let capture: CameraCapture
+    init(_ capture: CameraCapture) { self.capture = capture }
+    // The movie is in our temporary folder, which the system empties anyway; a failed delete loses nothing.
+    deinit { if case .movie(let url) = capture { try? FileManager.default.removeItem(at: url) } }
+
+    func prepare(limit: Int, keepingFirst first: Int?) async throws -> PreparedAttachment {
+        switch capture {
+        case .image(let data): try AttachmentPreparer.prepareImage(data, name: "photo", limit: limit)
+        case .movie(let url): try await AttachmentPreparer.prepareVideo(url, name: "video", limit: limit, keepingFirst: first)
+        }
+    }
+}
+#endif
+
+// Photos hands the asset over on its own queue; nothing mutates it, and the transcoder only reads it.
 private struct LibraryVideo: @unchecked Sendable { let asset: AVAsset }
 
 // A file, so a large clip never sits in memory twice.

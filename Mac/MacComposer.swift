@@ -12,8 +12,8 @@ import XMPPProtocol
     // From Send until the files and the text are queued; the tray is frozen meanwhile.
     var sending = false
     var tray: [MacTrayItem] = []
-    // One file after another, so they land in order.
-    @ObservationIgnored var preparation: Task<Void, Never>?
+    @ObservationIgnored let preparation = AttachmentQueue()
+    var offers: [MacAttachmentIntake.Offer] = []
     @ObservationIgnored weak var textView: MacComposerTextView?
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
     // Its draft was already cleared, so anything typed since stays.
@@ -158,7 +158,7 @@ struct MacComposer: View {
                             MacComposerLinkPreviewCard(state: state.linkPreview.state, focus: $control) { state.linkPreview.remove() }
                         }
                         if showsTray {
-                            MacAttachmentTray(items: state.tray, frozen: state.sending, focus: $control) { id in state.tray.removeAll { $0.id == id } }
+                            MacAttachmentTray(items: state.tray, frozen: state.sending, focus: $control) { MacAttachmentIntake.remove($0, from: state) }
                         }
                         HStack(alignment: .bottom, spacing: 4) {
                             field
@@ -172,6 +172,7 @@ struct MacComposer: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
+        .shorteningDialog(state.offers.first?.shortening) { MacAttachmentIntake.answer($0, accepted: $1, state: state, model: model) }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .photosPicker(isPresented: $choosingPhotos, selection: $photoItems, maxSelectionCount: max(1, ComposerPlan.trayLimit - state.tray.count),
                       selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))

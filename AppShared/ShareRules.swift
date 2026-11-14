@@ -76,6 +76,27 @@ enum ShareRules {
             && text.utf8.count <= OutgoingEnqueue.maximumTextBytes
     }
 
+    // A file's state on the review card. A video too long to send whole waits for the user to take its start or not.
+    enum Preparation: Equatable, Sendable {
+        case preparing
+        case ready(size: Int)
+        case failed(String)
+        case tooLong(AttachmentPreparer.Shortening)
+
+        static let declined = "Too long to send"
+
+        init(_ result: Result<PreparedAttachment, any Error>) {
+            self = switch result {
+            case .success(let ready): .ready(size: ready.data.count)
+            case .failure(AttachmentPreparer.Failure.tooLong(let seconds)): .tooLong(.init(seconds: seconds))
+            case .failure(AttachmentPreparer.Failure.tooLarge): .failed("Too large to send")
+            case .failure: .failed("Can't be read")
+            }
+        }
+
+        var offer: AttachmentPreparer.Shortening? { if case .tooLong(let offer) = self { offer } else { nil } }
+    }
+
     enum Delivery: Equatable, Sendable { case queued, sending, sent, failed, incomplete }
 
     // Sent only once the server acknowledged every message; otherwise it stays queued for the app's next connection.

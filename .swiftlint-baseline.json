@@ -775,7 +775,7 @@
   "file_length": [
    [
     "",
-    780
+    745
    ]
   ],
   "line_length": [
@@ -792,10 +792,6 @@
     0
    ],
    [
-    "addToTray(urls.map { url in { try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit) } })",
-    0
-   ],
-   [
     "if !model.isDemo { NavigationLink(value: encryptionRoute) { Label(isGroup ? \"Group details\" : \"Encryption\", systemImage: isGroup ? \"person.2\" : \"lock.shield\") } }",
     0
    ],
@@ -806,12 +802,6 @@
    [
     "loadingEarlier: presenter.loadingEarlier, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in",
     0
-   ]
-  ],
-  "type_body_length": [
-   [
-    "struct ConversationView: View {",
-    382
    ]
   ]
  },
@@ -2356,10 +2346,6 @@
  "AppShared/AttachmentPreparation.swift": {
   "line_length": [
    [
-    "case .tooLarge(let limit): \"This file is larger than the \\(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)) this server accepts.\"",
-    0
-   ],
-   [
     "guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { throw Failure.unreadable }",
     0
    ]
@@ -2781,14 +2767,6 @@
    ],
    [
     "let name = message.attachment.map { MacAttachmentActions.fileName(for: TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height), at: url) } ?? \"-\"",
-    0
-   ],
-   [
-    "return try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit)",
-    0
-   ],
-   [
-    "try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit)",
     0
    ]
   ]

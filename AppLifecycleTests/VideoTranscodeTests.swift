@@ -116,6 +116,15 @@ import XCTest
         XCTAssertEqual(try leftovers(), before)
     }
 
+    func testShareCardStatesFollowTheFailure() {
+        XCTAssertEqual(ShareRules.Preparation(.failure(AttachmentPreparer.Failure.tooLong(seconds: 75))).offer?.length, "1:15")
+        XCTAssertEqual(ShareRules.Preparation(.failure(AttachmentPreparer.Failure.tooLarge(limit: 10))), .failed("Too large to send"))
+        XCTAssertEqual(ShareRules.Preparation(.failure(AttachmentPreparer.Failure.unreadable)), .failed("Can't be read"))
+        let ready = PreparedAttachment(data: Data(count: 12), name: "a.jpg", mediaType: "image/jpeg", width: 1, height: 1)
+        XCTAssertEqual(ShareRules.Preparation(.success(ready)), .ready(size: 12))
+        XCTAssertFalse(AttachmentPreparer.Failure.tooLarge(limit: 10 << 20).localizedDescription.contains("server"))
+    }
+
     // MARK: Helpers
 
     private struct Output {
