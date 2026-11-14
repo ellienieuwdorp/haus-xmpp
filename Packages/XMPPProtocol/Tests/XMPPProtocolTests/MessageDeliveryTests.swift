@@ -173,14 +173,18 @@ struct MessageDeliveryTests {
         var events = iterator
         let room = "room@rooms.localhost"
         async let joining = client.joinGroupRoom(room, nickname: "alice")
-        // Discovery and the affiliation lists, read twice (nothing is cached yet), then the join presence.
-        for _ in 0..<2 {
-            let disco = try await server.next()
-            try await server.send("<iq type='result' from='\(room)' id='\(disco.attributes["id"] ?? "")'><query xmlns='\(GroupChatWire.disco)'><feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/></query></iq>")
-            for affiliation in ["member", "admin", "owner"] {
-                let query = try await server.next()
+        // Discovery and the affiliation lists, read twice (nothing is cached yet), then the join presence. A read's
+        // four queries are in flight together, in no fixed order.
+        for _ in 0..<4 * 2 {
+            let query = try await server.next()
+            let id = query.attributes["id"] ?? ""
+            if query.child("query", namespace: GroupChatWire.disco) != nil {
+                let features = "<feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/>"
+                try await server.send("<iq type='result' from='\(room)' id='\(id)'><query xmlns='\(GroupChatWire.disco)'>\(features)</query></iq>")
+            } else {
+                let affiliation = query.child("query", namespace: GroupChatWire.admin)?.child("item", namespace: GroupChatWire.admin)?.attributes["affiliation"]
                 let item = affiliation == "owner" ? "<item affiliation='owner' jid='alice@localhost'/>" : ""
-                try await server.send("<iq type='result' from='\(room)' id='\(query.attributes["id"] ?? "")'><query xmlns='\(GroupChatWire.admin)'>\(item)</query></iq>")
+                try await server.send("<iq type='result' from='\(room)' id='\(id)'><query xmlns='\(GroupChatWire.admin)'>\(item)</query></iq>")
             }
         }
         #expect(try await server.next().name == "presence")

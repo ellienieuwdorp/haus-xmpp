@@ -7112,14 +7112,6 @@
     0
    ],
    [
-    "try await server.send(\"<iq type='result' from='\\(room)' id='\\(disco.attributes[\"id\"] ?? \"\")'><query xmlns='\\(GroupChatWire.disco)'><feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/></query></iq>\")",
-    0
-   ],
-   [
-    "try await server.send(\"<iq type='result' from='\\(room)' id='\\(query.attributes[\"id\"] ?? \"\")'><query xmlns='\\(GroupChatWire.admin)'>\\(item)</query></iq>\")",
-    0
-   ],
-   [
     "try await server.send(\"<iq type='result' id='\\(bind.attributes[\"id\"] ?? \"\")'><bind xmlns='\\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>\")",
     0
    ],
