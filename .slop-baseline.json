@@ -64,7 +64,6 @@
       "try? FileManager.default.removeItem(at: AttachmentFiles.root(directory: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.directory(root: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))",
-      "try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))",
       "try? NotificationAccessGate.disable(at: NotificationAccessGate.location())",
       "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
       "try? await Task.sleep(for: .seconds(2))",
@@ -83,13 +82,10 @@
       "try? await store.close()",
       "try? await store.close()",
       "try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)",
-      "try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)",
       "try? await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: UUID().uuidString, chatID: message.chatID, actorID: account,",
       "try? await store.recordReceipt(accountID: accountID, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: message.chatID,",
       "try? await store.releaseTransportOwnership()",
-      "try? await store.releaseTransportOwnership()",
-      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
-      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)"
+      "try? await store.releaseTransportOwnership()"
     ]
   },
   "App/Attachments.swift" : {
