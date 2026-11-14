@@ -1837,6 +1837,8 @@ final class AppModel {
         }
         for message in settled.failed { await uploadFailed(message, account: account) }
         if !settled.uploaded.isEmpty, accountID == account { await refresh(); startOutbox() }
+        // A grace held for uploads ends once none is left.
+        await graceUploadsChanged()
         guard stranding, accountID == account else { return }
         let stranded = ((try? await store.attachmentsAwaitingUpload(accountID: account)) ?? []).filter { $0.attachment?.uploadTaskID == nil }
         guard accountID == account else { return }
