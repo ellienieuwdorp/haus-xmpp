@@ -48,17 +48,25 @@ import XMPPProtocol
     private static var account = ""
     private static var states: [String: MacComposerState] = [:]
 
+    // A dropped state's files still preparing are stopped, which deletes what they wrote.
     static func state(account: String, chat: String) -> MacComposerState {
         if account != self.account {
             self.account = account
-            states = [:]
+            drop { _ in true }
         }
         if let state = states[chat] { return state }
         // Chats left empty, with nothing on its way, have nothing to come back to.
-        states = states.filter { !$0.value.draft.isEmpty || !$0.value.tray.isEmpty || $0.value.sending }
+        drop { $0.draft.isEmpty && $0.tray.isEmpty && !$0.sending }
         let state = MacComposerState()
         states[chat] = state
         return state
+    }
+
+    private static func drop(where dropped: (MacComposerState) -> Bool) {
+        for (chat, state) in states where dropped(state) {
+            state.preparation.cancelAll()
+            states[chat] = nil
+        }
     }
 }
 

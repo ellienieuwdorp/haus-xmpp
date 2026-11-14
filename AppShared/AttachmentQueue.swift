@@ -12,7 +12,7 @@ import MessagingCore
     private var cancelled: Set<UUID> = []
     private var stopped = false
 
-    // `done` is not called for an item cancelled before its work finished.
+    // `done` is not called for an item cancelled, alone or by `cancelAll`, before its work finished.
     func enqueue(_ id: UUID, _ work: @escaping Work, done: @escaping Done) {
         cancelled.remove(id)
         let previous = tail
@@ -23,7 +23,7 @@ import MessagingCore
             running = (id, task)
             let result = await task.result
             running = nil
-            guard !cancelled.contains(id) else { return }
+            guard !stopped, !cancelled.contains(id) else { return }
             await done(result)
         }
     }
@@ -37,4 +37,7 @@ import MessagingCore
         stopped = true
         running?.task.cancel()
     }
+
+    // Returns once every item enqueued so far has finished, its `done` included, or was dropped.
+    func drained() async { await tail?.value }
 }

@@ -88,7 +88,7 @@ struct MacTrayItem: Identifiable {
             switch result {
             case .success(let prepared):
                 let preview = await AttachmentThumbnails.preview(of: prepared)
-                guard let index = state.tray.firstIndex(where: { $0.id == item }) else { return }
+                guard model.accountID == account, let index = state.tray.firstIndex(where: { $0.id == item }) else { return }
                 state.tray[index].prepared = prepared
                 state.tray[index].preview = preview
             case .failure(AttachmentPreparer.Failure.tooLong(let seconds)) where model.accountID == account:
