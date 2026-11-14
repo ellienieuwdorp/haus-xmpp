@@ -62,4 +62,16 @@ import MessagingCore
         try Data("not json".utf8).write(to: files.directory.appending(path: "request.json"))
         XCTAssertNil(files.request())
     }
+
+    // The iPhone's extension asks only while a grace is marked, and only until the mark's own end.
+    func testTheGraceOfferLastsUntilItsEndOrItsRemoval() {
+        let files = files()
+        let now = Date()
+        XCTAssertFalse(files.offered(now: now))
+        files.saveOffer(until: now.addingTimeInterval(10))
+        XCTAssertTrue(files.offered(now: now))
+        XCTAssertFalse(files.offered(now: now.addingTimeInterval(10)))
+        files.removeOffer()
+        XCTAssertFalse(files.offered(now: now))
+    }
 }

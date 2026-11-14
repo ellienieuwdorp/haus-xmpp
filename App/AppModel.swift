@@ -2055,7 +2055,7 @@ final class AppModel {
     // Once per session: XEP-0084 metadata, bytes only when the hash changed, vCard when PEP has nothing. Bytes are
     // hash-verified and decoded within a pixel budget before anything shows.
     func loadAvatar(for chatID: String) async {
-        guard !isDemo, !isGroup(chatID), session.isReady, let client, let store, let storageRoot,
+        guard !isDemo, !isGroup(chatID), session.isReady, transportWanted, let client, let store, let storageRoot,
               !avatarChecked.contains(chatID) else { return }
         let account = accountID
         let token = generation

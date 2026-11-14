@@ -137,7 +137,8 @@ extension AppModel {
         if testSessionID == nil, let container = try? SharedStorage.groupContainer() { AppLiveness.Files(groupRoot: container).removeOffer() }
         grace.uploads = false
         await refresh()
-        if grace.livenessPromiseBroken || grace.livenessPromises > 0 { postNotificationFallback() }
+        // Back in front the app shows what arrives itself.
+        if end != .foreground, grace.livenessPromiseBroken || grace.livenessPromises > 0 { postNotificationFallback() }
         grace.livenessPromiseBroken = false
     }
 
