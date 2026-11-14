@@ -5353,7 +5353,7 @@
   "file_length": [
    [
     "",
-    1243
+    1192
    ]
   ],
   "function_body_length": [
@@ -5419,10 +5419,6 @@
    ],
    [
     "guard selected.profiles[update.chatID] == profile else { throw update.kind == .retraction || update.kind == .correction ? OMEMOError.unsupportedMessageUpdate : .unsupportedEncryptedReactions }",
-    0
-   ],
-   [
-    "guard try OMEMOEngine.fingerprintBytes(for: legacyIdentity.identityKey, profile: .legacy) == OMEMOEngine.fingerprintBytes(for: modernIdentity.identityKey, profile: .modern), legacyIdentity.deviceID == modernIdentity.deviceID else {",
     0
    ],
    [
@@ -5501,7 +5497,7 @@
   "type_body_length": [
    [
     "public actor OMEMOService {",
-    1198
+    1147
    ]
   ]
  },
@@ -5891,7 +5887,7 @@
   "file_length": [
    [
     "",
-    1496
+    1495
    ]
   ],
   "force_unwrapping": [
@@ -6083,7 +6079,7 @@
   "type_body_length": [
    [
     "final class ServiceTests: XCTestCase {",
-    1268
+    1267
    ]
   ],
   "unneeded_throws_rethrows": [
