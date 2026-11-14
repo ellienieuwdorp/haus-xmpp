@@ -82,6 +82,39 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
     #expect(throws: (any Error).self) { try XMPPUploadSlot.decode(insecure) }
 }
 
+// XEP-0363 §4's refusals keep their reason; any other error stays the plain stanza condition.
+@Test func slotRefusalsDecodeTheirXEP0363Reason() throws {
+    func refusal(_ error: String) throws -> any Error {
+        let reply = try XMPPProtocol.XMLNode.parse(standalone: Data("<iq xmlns='jabber:client' type='error' id='1'><error \(error)</error></iq>".utf8))
+        do { _ = try XMPPUploadSlot.decode(reply); Issue.record("decoded a slot from an error"); return XMPPIQError.malformedResponse } catch { return error }
+    }
+    let stanzas = "xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'", upload = "xmlns='urn:xmpp:http:upload:0'"
+    let limit = "<file-too-large \(upload)><max-file-size> 20000 </max-file-size></file-too-large>"
+    let stated = try refusal("type='modify'><not-acceptable \(stanzas)/><text \(stanzas)>File too large</text>\(limit)")
+    #expect(stated as? XMPPUploadError == .fileTooLarge(maximumFileSize: 20_000))
+    let unstated = try refusal("type='modify'><not-acceptable \(stanzas)/><file-too-large \(upload)/>")
+    #expect(unstated as? XMPPUploadError == .fileTooLarge(maximumFileSize: nil))
+    let unreadable = try refusal("type='modify'><not-acceptable \(stanzas)/><file-too-large \(upload)><max-file-size>-1</max-file-size></file-too-large>")
+    #expect(unreadable as? XMPPUploadError == .fileTooLarge(maximumFileSize: nil))
+    let foreign = try refusal("type='modify'><not-acceptable \(stanzas)/><file-too-large xmlns='urn:example'/>")
+    #expect(foreign as? XMPPIQError == .stanza(condition: "not-acceptable"), "Only the XEP-0363 namespace names the reason")
+
+    let notAllowed = try refusal("type='cancel'><not-allowed \(stanzas)/><text \(stanzas)>Only premium members are allowed to upload files</text>")
+    #expect(notAllowed as? XMPPUploadError == .notAllowed)
+
+    let wait = try refusal("type='wait'><resource-constraint \(stanzas)/><retry \(upload) stamp='2017-12-03T23:42:05Z'/>")
+    #expect(wait as? XMPPUploadError == .retry(after: Date(timeIntervalSince1970: 1_512_344_525)))
+    let noStamp = try refusal("type='wait'><resource-constraint \(stanzas)/>")
+    #expect(noStamp as? XMPPIQError == .stanza(condition: "resource-constraint"))
+    let badStamp = try refusal("type='wait'><resource-constraint \(stanzas)/><retry \(upload) stamp='soon'/>")
+    #expect(badStamp as? XMPPIQError == .stanza(condition: "resource-constraint"))
+
+    let generic = try refusal("type='cancel'><service-unavailable \(stanzas)/>")
+    #expect(generic as? XMPPIQError == .stanza(condition: "service-unavailable"))
+    let malformed = try refusal("type='cancel'><text \(stanzas)>no condition</text>")
+    #expect(malformed as? XMPPIQError == .malformedResponse)
+}
+
 @Test func replyOnAFileIsTheReferenceAloneAndLeavesTheLinkAsTheWholeBody() throws {
     let content = MessageContent(body: "", reply: .init(id: "wire-photo", to: "bob@localhost", quote: ""), originID: "m2", fileSharing: sharing())
     let node = try parse(try content.xml())
