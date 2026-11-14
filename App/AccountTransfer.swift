@@ -12,6 +12,8 @@ struct AccountTransfer: Sendable {
         let encryptionService: String
         let storageID: String
         let codeService: String
+        // FAST tokens are this install's, issued to its client id: they never travel, and a moved account's go.
+        var tokenService = FastTokenKeychain.service
 
         var directory: URL { TransferHold.directory(groupRoot: install.groupRoot) }
         var marker: URL { directory.appending(path: TransferHold.markerName) }
@@ -44,7 +46,7 @@ struct AccountTransfer: Sendable {
                                 pushService: "haus.xmpp.uitest.\(id).push", snapshotService: "haus.xmpp.uitest.\(id).snapshot"),
                 accessGate: root.appending(path: "notification-access-disabled"), installation: "uitest")
             return Locations(install: install, encryptionService: EncryptionKeychain.service, storageID: id,
-                             codeService: "haus.xmpp.uitest.\(id).transfer-code")
+                             codeService: "haus.xmpp.uitest.\(id).transfer-code", tokenService: "haus.xmpp.uitest.\(id).fast-token")
         }
     }
 
@@ -110,14 +112,6 @@ struct AccountTransfer: Sendable {
         static let appPreferences = "preferences/app.plist"
         static let groupPreferences = "preferences/group.plist"
         static let messagingPrefix = "messaging/"
-    }
-
-    // Install- or device-specific keys stay behind; system keys (capitalised, e.g. `AppleLanguages`) stay too.
-    static let installOnlyPrefixes = ["xmppResource.", "leftForeground", "attachmentKeyboard.", "carbonsStream."]
-
-    static func isTransferable(preference key: String) -> Bool {
-        guard let first = key.unicodeScalars.first, CharacterSet.lowercaseLetters.contains(first) else { return false }
-        return !installOnlyPrefixes.contains { key.hasPrefix($0) }
     }
 
     // Undoes an export that never completed and rolls back a restore that never reached its commit point.
@@ -318,7 +312,7 @@ struct AccountTransfer: Sendable {
     // The previous-version backup goes too (it holds the same identity). The marker goes last, so an interrupted
     // deletion is offered again on the next launch.
     func deleteMovedData() throws {
-        guard marker()?.stage == .moved else { throw Failure.heldDataMissing }
+        guard let moved = marker(), moved.stage == .moved else { throw Failure.heldDataMissing }
         try PreUpgradeSnapshot.removeIfPresent(locations.held)
         try PreUpgradeSnapshot.removeIfPresent(locations.outgoing)
         try PreUpgradeSnapshot(locations: locations.install).delete()
@@ -327,6 +321,7 @@ struct AccountTransfer: Sendable {
             try secrets.delete(keychain.accountService, keychain.accountKey)
             try secrets.delete(locations.encryptionService, locations.storageID)
             for owner in try secrets.accounts(keychain.pushService) { try secrets.delete(keychain.pushService, owner) }
+            try secrets.delete(locations.tokenService, moved.accountID)
             try deleteCodes()
         } catch { throw Failure.keychain }
         for domain in [locations.install.appDefaults, locations.install.groupDefaults] {

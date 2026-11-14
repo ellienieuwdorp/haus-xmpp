@@ -17,6 +17,19 @@ enum SharedSession {
         return created
     }
 
+    static func clientID(accountID: String, defaults: UserDefaults? = groupDefaults) -> UUID {
+        let key = "xmppClientID." + accountID
+        if let saved = defaults?.string(forKey: key).flatMap(UUID.init(uuidString:)) { return saved }
+        let created = UUID()
+        defaults?.set(created.uuidString, forKey: key)
+        return created
+    }
+
+    static func sasl2(accountID: String, carbons: Bool, tokens: (any XMPPFastTokenStore)? = FastTokenKeychain(),
+                      defaults: UserDefaults? = groupDefaults) -> XMPPSASL2Configuration {
+        XMPPSASL2Configuration(clientID: clientID(accountID: accountID, defaults: defaults), enablesCarbons: carbons, tokens: tokens)
+    }
+
     // Background sessions announce this as their XEP-0319 idle time.
     static func recordLeftForeground(_ date: Date = Date(), defaults: UserDefaults? = groupDefaults) {
         defaults?.set(date.timeIntervalSince1970, forKey: "leftForeground")

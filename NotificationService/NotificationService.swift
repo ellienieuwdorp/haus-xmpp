@@ -161,7 +161,8 @@ private enum ExtensionRun {
             let listening = listener.start()
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
                 account: BackgroundAccount(route: account.route, domain: account.domain, username: account.username,
-                                           password: account.password, requiresSCRAM: account.requiresSCRAM,
+                                           password: account.password, pin: account.pin,
+                                           sasl2: account.backgroundSASL2,
                                            resource: SharedSession.resource(accountID: accountID),
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),

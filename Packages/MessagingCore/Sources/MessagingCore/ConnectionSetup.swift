@@ -91,15 +91,17 @@ public struct ConnectionSetup: Sendable {
     let identityExists: Bool
     public var resumed = false
     public var memory = Memory()
+    // XEP-0386: the Bind 2 request already enabled carbons on this stream.
+    public var carbonsInline = false
 
-    public init(identityExists: Bool, resumed: Bool = false, memory: Memory = Memory()) {
-        self.identityExists = identityExists; self.resumed = resumed; self.memory = memory
+    public init(identityExists: Bool, resumed: Bool = false, memory: Memory = Memory(), carbonsInline: Bool = false) {
+        self.identityExists = identityExists; self.resumed = resumed; self.memory = memory; self.carbonsInline = carbonsInline
     }
 
     // Identity publication, rejoins and the walk always run: the identity check is the fail-closed guard against
     // another device using our device ID, and the walk catches what a resumed extension run acked without storing.
     public var skipsFeatures: Bool { resumed && memory.featuresFresh && memory.features != nil }
-    public var skipsCarbons: Bool { resumed && memory.carbonsOnStream }
+    public var skipsCarbons: Bool { carbonsInline || resumed && memory.carbonsOnStream }
     public var skipsUploads: Bool { resumed && memory.uploadsFresh }
 
     private struct StepFailure: Error {

@@ -223,7 +223,7 @@ public actor ShareSession {
         }
         try Task.checkCancellation()
         try await client.connect(route: account.route, domain: account.domain, username: account.username,
-                                 password: account.password, requireSCRAM: account.requiresSCRAM)
+                                 password: account.password, pin: account.pin)
         let resumed = await client.sessionResumed
         Self.log.notice("share session online resumed=\(resumed, privacy: .public)")
         // An identity mismatch fails closed before anything can be sealed.

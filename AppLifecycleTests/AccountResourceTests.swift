@@ -71,6 +71,7 @@ final class AccountResourceTests: XCTestCase {
         BlockedAddresses.save(XMPPBlocklist(["spam@example.org"]), accountID: account, defaults: group)
         ShareSuggestionSetting.set(false, accountID: account, defaults: group)
         _ = SharedSession.resource(accountID: account, defaults: group)
+        _ = SharedSession.clientID(accountID: account, defaults: group)
         _ = UploadServiceMemory(defaults: app, mirror: group)
             .settle(account: account, previous: nil, discovery: .success(XMPPUploadService(jid: "upload.example.org", maximumFileSize: 1)))
         let profiles = ServerProfileMemory(defaults: app, streamProfiles: group)

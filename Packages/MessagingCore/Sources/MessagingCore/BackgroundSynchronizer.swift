@@ -11,8 +11,10 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let domain: String
     public let username: String
     public let password: String
-    /// PLAIN is refused once the account has authenticated with SCRAM.
-    public let requiresSCRAM: Bool
+    /// What the account's earlier sign-ins rule out (PLAIN after SCRAM, RFC 6120 SASL after SASL2, no binding after it).
+    public let pin: XMPPAuthenticationPin
+    /// SASL2, Bind 2 and FAST; nil signs in with RFC 6120 SASL.
+    public let sasl2: XMPPSASL2Configuration?
     public let labCertificateAuthority: Data?
     /// Nil keeps a random one for this run.
     public let resource: String?
@@ -25,11 +27,11 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
     public let streamProfiles: (any XMPPStreamProfileStore)?
     public var accountID: String { username + "@" + domain }
 
-    public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
-                labCertificateAuthority: Data? = nil, resource: String? = nil,
+    public init(route: XMPPRoute, domain: String, username: String, password: String, pin: XMPPAuthenticationPin = .none,
+                sasl2: XMPPSASL2Configuration? = nil, labCertificateAuthority: Data? = nil, resource: String? = nil,
                 push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil, streamProfiles: (any XMPPStreamProfileStore)? = nil) {
         self.route = route; self.domain = domain
-        self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
+        self.username = username; self.password = password; self.pin = pin; self.sasl2 = sasl2
         self.labCertificateAuthority = labCertificateAuthority
         self.resource = resource; self.push = push; self.leftForeground = leftForeground; self.streamProfiles = streamProfiles
     }
@@ -101,7 +103,7 @@ public struct BackgroundSynchronizer: Sendable {
             try await BackgroundCatchUp(
                 connect: {
                     try await client.connect(route: account.route, domain: account.domain, username: account.username,
-                                             password: account.password, requireSCRAM: account.requiresSCRAM)
+                                             password: account.password, pin: account.pin)
                     progress?.noteOnline(resumed: await client.sessionResumed)
                 },
                 sessionDuties: { ownArchiveWalked in
@@ -292,6 +294,7 @@ extension BackgroundAccount {
         try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: accountID, encryption: encryption))
         if let resource { try await client.configureResource(resource) }
         if let streamProfiles { try await client.configureStreamProfiles(streamProfiles) }
+        try await client.configureSASL2(sasl2)
         let preferences = try await store.accountPreferences(accountID: accountID)
         try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen, leftForeground: leftForeground),
                                          clientActive: false)

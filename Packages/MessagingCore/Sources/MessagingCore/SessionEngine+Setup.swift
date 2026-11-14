@@ -14,7 +14,9 @@ extension SessionEngine {
         }
         let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
                                      uploadsFresh: delegate?.uploadsFresh(account: account) ?? false)
-        let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory)
+        let carbonsInline = await connection.client.carbonsEnabledInline
+        if carbonsInline { profiles.carbonsEnabled(account: account, stream: await streamID()) }
+        let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory, carbonsInline: carbonsInline)
         // The stream ID is a store read; a newer connection may have started meanwhile.
         guard setupIsCurrent(connection.token) else { return }
         if resumed {

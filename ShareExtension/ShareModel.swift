@@ -418,7 +418,7 @@ import AppKit
 
     private static func backgroundAccount(_ account: NotificationAccount) -> BackgroundAccount {
         BackgroundAccount(route: account.route, domain: account.domain, username: account.username, password: account.password,
-                          requiresSCRAM: account.requiresSCRAM, resource: SharedSession.resource(accountID: account.accountID),
+                          pin: account.pin, sasl2: account.backgroundSASL2, resource: SharedSession.resource(accountID: account.accountID),
                           push: PushRegistrationState.sessionSubscription(saved: account.push,
                                                                           state: try? PushRegistrationState.load(accountID: account.accountID)),
                           leftForeground: SharedSession.leftForeground(), streamProfiles: SharedSession.streamProfiles)
