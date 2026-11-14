@@ -121,10 +121,11 @@ jobs:
         run: |
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
           udid=$(xcrun simctl list devices available --json | SDK="$sdk" python3 -I -c '
-          import json, os, sys
+          import itertools, json, os, sys
           devices = json.load(sys.stdin)["devices"]
           sdk = [int(part) for part in os.environ["SDK"].split(".")]
-          version = lambda key: [int(part) for part in key.rsplit(".iOS-", 1)[1].split("-")]
+          # Device-specific runtimes append the model after the version, as in iOS-27-2-iPhone19-4.
+          version = lambda key: [int(part) for part in itertools.takewhile(str.isdigit, key.rsplit(".iOS-", 1)[1].split("-"))]
           runtimes = [key for key in devices if ".iOS-" in key and version(key) <= sdk]
           for runtime in sorted(runtimes, key=version, reverse=True):
               phones = [device for device in devices[runtime] if device["name"].startswith("iPhone")]
