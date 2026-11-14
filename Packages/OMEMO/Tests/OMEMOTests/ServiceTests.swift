@@ -628,12 +628,12 @@ final class ServiceTests: XCTestCase {
         for failure in failures {
             let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
             try await f.a.initialize(account: f.alice, transport: f.aTransport)
-            let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
             let log = TransportLog()
             let failing = CountingTransport(base: f.aTransport, log: log, beforeBundle: { _, _ in throw failure })
             do { try await f.a.initialize(account: f.alice, transport: failing); XCTFail("Initialized through \(failure)") }
             catch { expectEqual(String(describing: error), String(describing: failure)) }
-            expectEqual(await log.calls, [.devices(f.alice, .legacy), .bundle(f.alice, local, .legacy)])
+            // Both versions are read at once (`OwnPublicationTests` pins which reads); nothing is published.
+            expectEqual(await log.calls, await log.fetches)
         }
     }
 
