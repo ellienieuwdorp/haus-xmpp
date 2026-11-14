@@ -35,7 +35,7 @@
   "file_length": [
    [
     "",
-    537
+    534
    ]
   ],
   "force_unwrapping": [
@@ -89,7 +89,7 @@
   "type_body_length": [
    [
     "struct AccountTransfer: Sendable {",
-    518
+    515
    ]
   ]
  },
@@ -6623,7 +6623,7 @@
   "file_length": [
    [
     "",
-    1210
+    1202
    ]
   ],
   "force_unwrapping": [
@@ -6699,7 +6699,7 @@
   "type_body_length": [
    [
     "public actor XMPPClient {",
-    1090
+    1089
    ]
   ]
  },
