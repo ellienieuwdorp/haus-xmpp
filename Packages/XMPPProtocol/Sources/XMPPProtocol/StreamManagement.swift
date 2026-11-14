@@ -63,6 +63,8 @@ public struct XMPPStreamManagementSnapshot: Codable, Sendable, Equatable {
     public var outboundSent: UInt64
     public var outboundAcknowledged: UInt64
     public var journal: [XMPPStreamJournalEntry]
+    // Room occupancy from the last clean detach; the resume that restores it consumes it.
+    var retainedRooms: RetainedGroupRooms?
     public init(revision: Int, accountID: String, fullJID: String, streamID: String?, expiresAt: Date?, inboundHandled: UInt64,
                 outboundSent: UInt64, outboundAcknowledged: UInt64, journal: [XMPPStreamJournalEntry], resumeTimeoutSeconds: UInt32? = nil) {
         self.resumeTimeoutSeconds = resumeTimeoutSeconds
@@ -138,6 +140,8 @@ actor StreamManagement {
     // Always >= the persisted `snapshot.inboundHandled`; every member of `completed` is above it.
     private var handledContiguous: UInt64 = 0
     private var completed: Set<UInt64> = []
+    // `received` when this connection's counting began.
+    private var sessionStart: UInt64 = 0
     private var session = UUID()
     init(_ persistence: any XMPPStreamManagementPersistence) { self.persistence = persistence }
 
@@ -163,6 +167,7 @@ actor StreamManagement {
             snapshot = loaded; active = false; completed = []; session = UUID()
             received = loaded?.inboundHandled ?? 0
             handledContiguous = loaded?.inboundHandled ?? 0
+            sessionStart = received
             var candidate: XMPPStreamManagementSnapshot?
             if valid, let loaded, Self.attemptsResume(loaded, now: Date()) {
                 do { if try await persistence.permitsResumption(loaded) { candidate = loaded } }
@@ -239,7 +244,8 @@ actor StreamManagement {
             next.expiresAt = resumeTimeoutSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
             next.revision = (current ?? 0) + 1
             try await persistence.save(next, expectedRevision: current, acknowledgedMessageIDs: [])
-            snapshot = next; unreadableRevision = nil; received = 0; handledContiguous = 0; completed = []; active = true; session = UUID()
+            snapshot = next; unreadableRevision = nil; received = 0; handledContiguous = 0; sessionStart = 0; completed = []
+            active = true; session = UUID()
             await gate.leave()
         } catch { await gate.leave(); throw error }
     }
@@ -295,6 +301,9 @@ actor StreamManagement {
                     XMPPStreamJournalEntry(sequence: base + UInt64(offset) + 1, kind: entry.kind, xml: entry.xml, messageID: entry.messageID)
                 }
                 next.outboundSent = base + UInt64(next.journal.count)
+                // Restored by this resume (`restoreGroupRooms`); a later resume of the same count must not restore it
+                // over what this session sends to the rooms.
+                next.retainedRooms = nil
             }
             next.inboundHandled = handledContiguous
             try await commit(next, acknowledged: ids)
@@ -337,6 +346,21 @@ actor StreamManagement {
             for token in tokens where token.sequence > handledContiguous { completed.insert(token.sequence) }
             advanceHandled()
             try await commitHandled()
+            await gate.leave()
+        } catch { await gate.leave(); throw error }
+    }
+
+    // After the reader ended. `through` is the last sequence the client applied (nil: none on this connection); the
+    // rooms are exact only if nothing was counted after it and everything up to it was handled, which this commit makes
+    // the saved count. Otherwise nothing is saved and the next resume rejoins.
+    func retain(_ rooms: [RetainedGroupRoom], through: UInt64?) async throws {
+        await gate.enter()
+        do {
+            guard active, var next = snapshot, next.streamID != nil, (through ?? sessionStart) == received, handledContiguous == received,
+                  !rooms.isEmpty || next.retainedRooms != nil else { await gate.leave(); return }
+            next.inboundHandled = handledContiguous
+            next.retainedRooms = rooms.isEmpty ? nil : RetainedGroupRooms(handled: handledContiguous, rooms: rooms)
+            try await commit(next)
             await gate.leave()
         } catch { await gate.leave(); throw error }
     }

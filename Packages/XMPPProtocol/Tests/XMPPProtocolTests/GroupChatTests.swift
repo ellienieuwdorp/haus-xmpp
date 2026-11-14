@@ -182,3 +182,29 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: false) == [reading])
     #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: true) == [reading, caching])
 }
+
+@Test func restoredOccupancyRoutesButSendsWaitForTheRoomsOwnAnswer() throws {
+    let restored = GroupRoomState(members: [groupAlice, groupBob], occupants: [groupRoom + "/self": groupAlice, groupRoom + "/bob": groupBob],
+                                  joined: true, nickname: "self", validatedRevision: 0, restored: true)
+    #expect(!restored.sendable)
+    let xml = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "held")
+        .replacingOccurrences(of: "to='\(groupRoom)'", with: "from='\(groupRoom)/bob' to='\(groupAlice)'")
+    #expect(try GroupChatWire.message(groupNode(xml), account: groupAlice, room: groupRoom, state: restored).sender == groupBob)
+    // The room reflecting our presence confirms it.
+    var confirmed = restored
+    let item = "<item affiliation='member' jid='\(groupAlice)/phone'/><status code='110'/>"
+    let own = try groupNode("<presence from='\(groupRoom)/self' to='\(groupAlice)/phone'><x xmlns='\(GroupChatWire.user)'>\(item)</x></presence>")
+    GroupChatWire.applyPresence(own, room: groupRoom, account: groupAlice, state: &confirmed)
+    #expect(confirmed.sendable && !confirmed.restored)
+    // A join over it, even under the same nickname, waits for that answer like any other join.
+    var joining = restored
+    joining.requestNickname("self")
+    #expect(!joining.joined && !joining.sendable && !joining.restored)
+    #expect(joining.revision != restored.revision)
+    // Only joined, validated rooms that still map our nickname to us are kept.
+    #expect(RetainedGroupRoom(room: groupRoom, state: confirmed, account: groupAlice) != nil)
+    #expect(RetainedGroupRoom(room: groupRoom, state: joining, account: groupAlice) == nil)
+    var unvalidated = confirmed
+    unvalidated.validatedRevision = nil
+    #expect(RetainedGroupRoom(room: groupRoom, state: unvalidated, account: groupAlice) == nil)
+}

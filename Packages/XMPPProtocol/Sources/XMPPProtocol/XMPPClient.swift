@@ -231,6 +231,8 @@ public actor XMPPClient {
     /// earlier stream still holds.
     public private(set) var sessionResumed = false
     var groupRooms: [String: GroupRoomState] = [:]
+    // The sequence of the last inbound stanza counted on this connection, nil before the first.
+    var lastInboundSequence: UInt64?
     // Concurrent refreshes of one room share one read.
     var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
     private(set) var streamManagement: StreamManagement?
@@ -292,7 +294,7 @@ public actor XMPPClient {
         guard validRoute, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }) else { throw XMPPClientError.invalidConfiguration }
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
-        blocklistFetchIDs.removeAll(); blocklistRequested = false
+        blocklistFetchIDs.removeAll(); blocklistRequested = false; lastInboundSequence = nil
         self.domain = domain; self.username = username; self.password = password; self.requireSCRAM = requireSCRAM
         authenticatedWithSCRAM = false; loadProfile()
         phase = .features; generation = UUID()
@@ -438,11 +440,7 @@ public actor XMPPClient {
             _ = try? await requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: Self.farewellRoundTripLimit)
             try? await withFarewellDeadline { try await self.writeAcknowledgement(detaching: true) }
         }
-        finish(nil)
-        await previousReader?.value
-        // After the socket is gone, so a held journal gate never delays the cancel. A lagging counter only redelivers
-        // stanzas whose dispositions are already saved.
-        _ = try? await streamManagement?.flushHandled()
+        await close(joining: previousReader)
     }
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery. Retry an uncertain
@@ -656,7 +654,7 @@ public actor XMPPClient {
                 } else { throw XMPPClientError.unexpectedProtocol }
                 return
             }
-            let inbound = ["message", "iq", "presence"].contains(node.name) && node.namespace == "jabber:client" ? try await streamManagement?.receive() : nil
+            let inbound = try await countInbound(node)
             if ArchiveQuery.containsWrapper(node) { return try await receiveArchiveResult(node, inbound: inbound) }
             let rosterFetch = node.attributes["id"].map(rosterFetchIDs.contains) ?? false
             let blocklistFetch = node.attributes["id"].map(blocklistFetchIDs.contains) ?? false
@@ -962,7 +960,7 @@ public actor XMPPClient {
             guard provenance == .direct, let error = XMPPMessageError.parse(node) else { return }
             if error.meansNotInRoom, var state = groupRooms[error.from], state.joined {
                 // The room no longer counts us as an occupant: sends wait until a join succeeds again.
-                state.joined = false; state.revision &+= 1
+                state.joined = false; state.restored = false; state.revision &+= 1
                 groupRooms[error.from] = state
                 try emit(.groupPresence(room: error.from))
             }
