@@ -168,22 +168,77 @@ extension SessionEngine {
         var joined = Set<String>()
         defer { if setupIsCurrent(token) { delegate?.rejoinPassEnded(token: token, joined: joined) } }
         let rooms = try await connection.encryption.knownGroupRooms(account: account)
-        for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
-            guard setupIsCurrent(token), transportWorkAllowed else { throw CancellationError() }
-            delegate?.roomRejoining(room, members: members)
-            let nickname = delegate?.nickname(in: room, account: account) ?? String(account.prefix { $0 != "@" })
-            // Mention detection is best effort.
-            try? await store?.setGroupNickname(accountID: account, room: room, nickname: nickname)
-            do {
-                let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
-                guard setupIsCurrent(token) else { throw CancellationError() }
-                joined.insert(room)
-                delegate?.roomRejoined(room, joined: snapshot.joined)
-            } catch {
-                guard setupIsCurrent(token) else { throw CancellationError() }
-                // No send until this room's own authenticated presence arrives; the walk fails closed without provenance.
-                delegate?.roomRejoinFailed(room, error: error)
+        let restored = await client.restoredGroupRooms()
+        let operations = RoomRejoins(restored: restored, confirm: { await client.confirmRestoredGroupRoom($0) },
+                                     join: { try await client.joinGroupRoom($0, nickname: $1).joined })
+        joined = try await rejoin(rooms, account: account, token: token, operations)
+    }
+
+    // What one pass does to a room, apart from the engine's own bookkeeping.
+    struct RoomRejoins: Sendable {
+        // A resume restored these, with our nickname in each.
+        var restored: [String: String] = [:]
+        var confirm: @Sendable (_ room: String) async -> Bool
+        // Whether the room already counts us when it returns; usually its answer is still on the way.
+        var join: @Sendable (_ room: String, _ nickname: String) async throws -> Bool
+    }
+
+    enum RejoinOutcome: Sendable { case joined, failed, cancelled }
+
+    static let concurrentRejoins = 8
+
+    // Every room at once, up to `concurrentRejoins`: each costs the membership read the walk's prelude already has in
+    // flight, then one presence. A room the resume restored costs one self-ping instead, and joins only if that fails.
+    // Returns the rooms joined or confirmed; one room's failure never ends the others.
+    func rejoin(_ rooms: [String: [String]], account: String, token: UUID, _ operations: RoomRejoins) async throws -> Set<String> {
+        guard setupIsCurrent(token), transportWorkAllowed else { throw CancellationError() }
+        var pending = rooms.sorted(by: { $0.key < $1.key }).map { (room: $0.key, members: $0.value) }[...]
+        var outcomes: [String: RejoinOutcome] = [:]
+        await withTaskGroup(of: (String, RejoinOutcome).self) { group in
+            var running = 0
+            while true {
+                while running < Self.concurrentRejoins, let next = pending.popFirst() {
+                    running += 1
+                    let room = next.room, members = next.members
+                    group.addTask {
+                        let outcome = await self.rejoin(room, members: members, account: account, token: token, operations)
+                        return (room, outcome)
+                    }
+                }
+                guard let (room, outcome) = await group.next() else { break }
+                running -= 1
+                outcomes[room] = outcome
             }
+        }
+        if outcomes.values.contains(.cancelled) || !setupIsCurrent(token) { throw CancellationError() }
+        return Set(outcomes.filter { $0.value == .joined }.keys)
+    }
+
+    private func rejoin(_ room: String, members: [String], account: String, token: UUID, _ operations: RoomRejoins) async -> RejoinOutcome {
+        guard setupIsCurrent(token), transportWorkAllowed else { return .cancelled }
+        delegate?.roomRejoining(room, members: members)
+        let nickname = delegate?.nickname(in: room, account: account) ?? String(account.prefix { $0 != "@" })
+        // Mention detection is best effort.
+        try? await store?.setGroupNickname(accountID: account, room: room, nickname: nickname)
+        // A nickname changed meanwhile goes out as a join.
+        if operations.restored[room] == nickname {
+            let confirmed = await operations.confirm(room)
+            guard setupIsCurrent(token) else { return .cancelled }
+            if confirmed {
+                delegate?.roomRejoined(room, joined: true)
+                return .joined
+            }
+        }
+        do {
+            let joined = try await operations.join(room, nickname)
+            guard setupIsCurrent(token) else { return .cancelled }
+            delegate?.roomRejoined(room, joined: joined)
+            return .joined
+        } catch {
+            guard setupIsCurrent(token) else { return .cancelled }
+            // No send until this room's own authenticated presence arrives; the walk fails closed without provenance.
+            delegate?.roomRejoinFailed(room, error: error)
+            return .failed
         }
     }
 }
