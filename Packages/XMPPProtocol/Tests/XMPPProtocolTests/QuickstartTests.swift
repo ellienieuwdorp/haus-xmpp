@@ -30,11 +30,13 @@ struct QuickstartTests {
     }
 
     private static let sasl = "urn:ietf:params:xml:ns:xmpp-sasl"
+    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
 
-    private static func profile(_ server: LoopbackServer, _ mechanisms: [String], streamManagement: Bool = true) -> XMPPStreamProfile {
+    private static func profile(_ server: LoopbackServer, _ mechanisms: [String], streamManagement: Bool = true,
+                                refused: Date? = nil) -> XMPPStreamProfile {
         XMPPStreamProfile(endpoint: XMPPEndpoint(host: "127.0.0.1", port: server.port, security: .directTLS), mechanisms: mechanisms,
-                          streamManagement: streamManagement)
+                          streamManagement: streamManagement, refusedEarlyData: refused)
     }
 
     private static func features(_ mechanisms: [String]) -> String {
@@ -58,6 +60,7 @@ struct QuickstartTests {
                                snapshot: XMPPStreamManagementSnapshot? = nil) async throws -> (XMPPClient, ProfileStore, Persistence) {
         let client = server.client(), store = ProfileStore(profile), persistence = Persistence(snapshot)
         await client.pinSCRAMNonce(ScriptedSCRAM.clientNonce)
+        await client.pinClock(now)
         try await client.configureStreamProfiles(store)
         try await client.configureStreamManagement(persistence: persistence)
         try await client.configureResource("haus-q1")
@@ -136,7 +139,8 @@ struct QuickstartTests {
         await server.stop()
     }
 
-    // A refusal of the early `<auth>` may be the early data's fault, so it is never the answer: the plain order is.
+    // A refusal of the early `<auth>` may be the early data's fault, so it is never the answer: the plain order is. The
+    // endpoint then stays in the plain order for a week, so a server that always refuses costs one reconnect, not one each time.
     @Test(arguments: [true, false])
     func aRefusedEarlyLoginIsRetriedOnceAndOnlyThePlainOrderCanFailIt(_ secondSucceeds: Bool) async throws {
         let server = try await LoopbackServer.start()
@@ -154,11 +158,12 @@ struct QuickstartTests {
             try await Self.completeSCRAM(server, auth: auth)
             try await Self.bindInOrder(server)
             try await connecting.value
-            #expect(store.saves == [nil, Self.profile(server, offer)])
+            #expect(store.saves == [Self.profile(server, [], streamManagement: false, refused: Self.now),
+                                    Self.profile(server, offer, refused: Self.now)])
         } else {
             try await server.send("<failure xmlns='\(Self.sasl)'><not-authorized/></failure>")
             await #expect(throws: XMPPClientError.authenticationFailed) { try await connecting.value }
-            #expect(store.saves == [nil])
+            #expect(store.saves == [Self.profile(server, [], streamManagement: false, refused: Self.now)])
         }
         #expect(await server.connections == 2)
         await client.disconnect()
@@ -261,6 +266,32 @@ struct QuickstartTests {
         try await online
         #expect(await server.connections == 1)
         #expect(await persistence.value?.streamID == "s4")
+        await client.disconnect()
+        await server.stop()
+    }
+
+    @Test(arguments: [6, 8])
+    func aRefusalKeepsTheEndpointInThePlainOrderForAWeek(_ daysAgo: Int) async throws {
+        let server = try await LoopbackServer.start()
+        let offer = ["SCRAM-SHA-256"]
+        let refused = Self.now.addingTimeInterval(-Double(daysAgo) * 24 * 60 * 60)
+        let (client, store, _) = try await Self.client(server, profile: Self.profile(server, offer, refused: refused))
+        let ahead = daysAgo > 7
+        async let online: Void = Self.connect(client, server)
+        try await server.expectOpening()
+        #expect(await server.pending == (ahead ? 1 : 0))
+        if !ahead { try await server.send(LoopbackServer.header + Self.features(offer)) }
+        let auth = try await server.next()
+        try await Self.completeSCRAM(server, auth: auth, before: ahead ? LoopbackServer.header + Self.features(offer) : "")
+        if !ahead { try await server.send(LoopbackServer.header + Self.boundFeatures()) }
+        let bind = try await server.next()
+        #expect(await server.pending == (ahead ? 1 : 0))
+        try await server.send((ahead ? LoopbackServer.header + Self.boundFeatures() : "") + Self.bound(bind))
+        #expect(try await server.next().name == "enable")
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s5' resume='true'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+        #expect(store.saves == (ahead ? [Self.profile(server, offer)] : []))
         await client.disconnect()
         await server.stop()
     }

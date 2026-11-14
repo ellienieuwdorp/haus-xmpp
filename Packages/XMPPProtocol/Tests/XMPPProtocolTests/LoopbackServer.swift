@@ -105,6 +105,9 @@ actor LoopbackServer {
         if ended { self.ended = true }
     }
 
+    // Frames already read and not yet taken: what the client wrote together with the last one taken.
+    var pending: Int { frames.count }
+
     // How many bytes the client has written so far; pass it to `written(since:)`.
     func mark() -> Int { received.count }
 

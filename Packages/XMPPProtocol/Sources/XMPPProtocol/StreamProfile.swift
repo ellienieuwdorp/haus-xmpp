@@ -8,9 +8,12 @@ public struct XMPPStreamProfile: Sendable, Equatable, Codable {
     public let mechanisms: [String]
     /// XEP-0198, offered after authentication.
     public let streamManagement: Bool
+    /// When the endpoint last refused what went ahead; nothing goes ahead for a week after.
+    public let refusedEarlyData: Date?
 
-    public init(endpoint: XMPPEndpoint, mechanisms: [String], streamManagement: Bool) {
+    public init(endpoint: XMPPEndpoint, mechanisms: [String], streamManagement: Bool, refusedEarlyData: Date? = nil) {
         self.endpoint = endpoint; self.mechanisms = mechanisms.sorted(); self.streamManagement = streamManagement
+        self.refusedEarlyData = refusedEarlyData
     }
 }
 
@@ -19,6 +22,9 @@ public protocol XMPPStreamProfileStore: Sendable {
     func streamProfile(account: String) -> XMPPStreamProfile?
     func saveStreamProfile(_ profile: XMPPStreamProfile?, account: String)
 }
+
+// A remembered offer that no longer matches the features: forgotten, not held against the server.
+struct StaleProfile: Error {}
 
 // XEP-0305 quickstart: a server reads a stream in order. Only SCRAM goes ahead, so no secret precedes the features,
 // and the features must choose the mechanism sent, so a remembered offer never picks a weaker one than the server's.

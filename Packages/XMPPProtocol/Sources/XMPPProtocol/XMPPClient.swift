@@ -194,8 +194,8 @@ public actor XMPPClient {
     // No DNS query or further candidate starts after this; a candidate's own time is cut to what is left.
     static let connectTimeout: Duration = .seconds(30)
     static let discoveryTimeout: Duration = .seconds(5)
-    private var bindID = ""
-    private(set) var boundJID = ""
+    var bindID = ""
+    var boundJID = ""
     // Requested on every fresh bind so a new session replaces this installation's previous one instead of joining it as
     // a second resource. The owner persists one per installation and account.
     var resource = XMPPClient.makeResource()
@@ -247,19 +247,19 @@ public actor XMPPClient {
     var profile: XMPPStreamProfile?
     var quickstart: StreamQuickstart?
     // True while this attempt has written something ahead of the answer it depends on. A failure then retries the
-    // endpoint once with nothing sent ahead and forgets the profile, so a server that rejects early data costs one
-    // reconnect and never a credential prompt.
-    var pipelined = false
-    var pipeliningAllowed = true
+    // endpoint once with nothing sent ahead and keeps it in the plain order for a while, so a server that rejects early
+    // data costs one reconnect and never a credential prompt.
+    var pipelined = false, pipeliningAllowed = true
     private var abandonedRetry = false
-    var offeredMechanisms: [String] = []
+    var offeredMechanisms: [String] = [], attemptEndpoint: XMPPEndpoint?
     var restartAhead: RestartAhead?
     // `<enable/>`s written behind a bind and not yet answered. A server may refuse one, as before binding, when it
     // handles the bind late or refused it; the client then enables in order.
     var earlyEnables = 0
     enum RestartAhead { case resume, bind(enable: Bool) }
-    // Tests pin it to replay a published SCRAM exchange.
+    // Tests pin these to replay a published SCRAM exchange and to set the time.
     var scramNonce: @Sendable () -> String = { SCRAM.makeNonce() }
+    var now: @Sendable () -> Date = { Date() }
     enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
     /// A DER CA certificate for the explicit local lab only. System trust is the default.
@@ -294,7 +294,7 @@ public actor XMPPClient {
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         blocklistFetchIDs.removeAll(); blocklistRequested = false
         self.domain = domain; self.username = username; self.password = password; self.requireSCRAM = requireSCRAM
-        authenticatedWithSCRAM = false; pipeliningAllowed = true; profile = profiles?.streamProfile(account: username + "@" + domain)
+        authenticatedWithSCRAM = false; loadProfile()
         phase = .features; generation = UUID()
         let token = generation
         do { resumeSnapshot = try await streamManagement?.restore(accountID: username + "@" + domain) }
@@ -352,7 +352,7 @@ public actor XMPPClient {
     private func connect(to endpoint: XMPPEndpoint, token: UUID, within candidateTimeout: Duration) async throws {
         guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
         framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil; abandonedRetry = false
-        sasl = nil; bindRetried = false; offeredMechanisms = []; restartAhead = nil; earlyEnables = 0
+        sasl = nil; bindRetried = false; offeredMechanisms = []; restartAhead = nil; earlyEnables = 0; attemptEndpoint = endpoint
         quickstart = pipeliningAllowed ? StreamQuickstart(profile, endpoint: endpoint, password: password, requireSCRAM: requireSCRAM) : nil
         // A remembered profile for this endpoint means it negotiated STARTTLS before.
         let startTLSAhead = pipeliningAllowed && endpoint.security == .startTLS && profile?.endpoint == endpoint
@@ -410,7 +410,7 @@ public actor XMPPClient {
     private func abandonAttempt(_ attemptID: UUID, error: any Error, retry: Bool = false) {
         guard attempt == attemptID, !committed || retry else { return }
         // An unreachable endpoint says nothing about the profile; a server that answered wrongly does.
-        if retry { forgetProfile() }
+        if retry { if error is StaleProfile { forgetProfile() } else { refuseEarlyData() } }
         attempt = UUID(); abandonedError = error; abandonedRetry = retry
         deadline?.cancel(); deadline = nil
         connection?.cancel(); connection = nil
@@ -1379,7 +1379,11 @@ public actor XMPPClient {
         }
     }
     private func cancel(_ token: UUID) { if generation == token { finish(nil) } }
-    private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
+    private func timeout(_ token: UUID) {
+        guard generation == token, phase != .online else { return }
+        if pipelined, committed { refuseEarlyData() }
+        finish("Connection timed out", error: XMPPClientError.timedOut)
+    }
     func finish(_ reason: String?, error: any Error = XMPPClientError.connectionClosed) {
         generation = UUID()
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false

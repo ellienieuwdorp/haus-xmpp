@@ -13,7 +13,7 @@ extension XMPPClient {
             // The `<auth>` already sent must be what this offer chooses; anything else is a stale profile.
             let chosen = try SASLNegotiation.choose(offered: Set(mechanisms), preparable: SASLprep.prepare(password) != nil,
                                                     requireSCRAM: requireSCRAM)
-            guard chosen == quickstart.mechanism else { throw XMPPClientError.unexpectedProtocol }
+            guard chosen == quickstart.mechanism else { throw StaleProfile() }
             phase = .authentication
             try emit(.state(.authenticating))
             return
@@ -52,10 +52,10 @@ extension XMPPClient {
         csiOffered = node.child("csi", namespace: PushNotifications.clientStateNamespace) != nil
         switch restartAhead {
         case .resume:
-            guard smOffered else { throw XMPPClientError.unexpectedProtocol }
+            guard smOffered else { throw StaleProfile() }
             phase = .resumingSM
         case .bind(let enable):
-            guard smOffered || !enable else { throw XMPPClientError.unexpectedProtocol }
+            guard smOffered || !enable else { throw StaleProfile() }
             phase = .binding
             try emit(.state(.binding))
         case nil:
@@ -135,6 +135,7 @@ extension XMPPClient {
     }
 
     func pinSCRAMNonce(_ nonce: String) { scramNonce = { nonce } }
+    func pinClock(_ date: Date) { now = { date } }
 
     func connected(to endpoint: XMPPEndpoint) -> XMPPConnectedSession {
         password = ""
@@ -149,6 +150,21 @@ extension XMPPClient {
         return [endpoint]
     }
 
+    // A server that refused early data within the week gets the plain order.
+    func loadProfile() {
+        profile = profiles?.streamProfile(account: username + "@" + domain)
+        pipeliningAllowed = profile?.refusedEarlyData.map { now().timeIntervalSince($0) >= Self.plainOrderAfterRefusal } ?? true
+    }
+
+    static let plainOrderAfterRefusal: TimeInterval = 7 * 24 * 60 * 60
+
+    // The server answered what went ahead wrongly or not at all; the features are learned again in the plain order.
+    func refuseEarlyData() {
+        guard let attemptEndpoint else { return }
+        profile = XMPPStreamProfile(endpoint: attemptEndpoint, mechanisms: [], streamManagement: false, refusedEarlyData: now())
+        profiles?.saveStreamProfile(profile, account: username + "@" + domain)
+    }
+
     func forgetProfile() {
         guard profile != nil else { return }
         profile = nil
@@ -156,7 +172,8 @@ extension XMPPClient {
     }
 
     func learn(_ endpoint: XMPPEndpoint) {
-        let learned = XMPPStreamProfile(endpoint: endpoint, mechanisms: offeredMechanisms, streamManagement: smOffered)
+        let learned = XMPPStreamProfile(endpoint: endpoint, mechanisms: offeredMechanisms, streamManagement: smOffered,
+                                        refusedEarlyData: pipeliningAllowed ? nil : profile?.refusedEarlyData)
         guard learned != profile else { return }
         profile = learned
         profiles?.saveStreamProfile(learned, account: username + "@" + domain)
