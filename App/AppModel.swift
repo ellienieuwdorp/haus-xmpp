@@ -250,8 +250,8 @@ final class AppModel {
     private(set) var attachmentFiles: [String: URL] = [:]
     var attachmentDownloads: [String: AttachmentDownloadState] { downloads.states }
     // Persisted per account so the attach button survives launch and reconnect.
-    private var uploadService: XMPPUploadService?
-    private var uploads: UploadServiceMemory {
+    var uploadService: XMPPUploadService?
+    var uploads: UploadServiceMemory {
         UploadServiceMemory(defaults: preferences, mirror: testSessionID == nil ? SharedSession.groupDefaults : nil)
     }
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
@@ -271,7 +271,7 @@ final class AppModel {
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
-    @ObservationIgnored private lazy var uploadHolds = UploadHolds(resume: { [weak self] in self?.startUploads() }, notify: { [weak self] in self?.error = $0 })
+    @ObservationIgnored lazy var uploadHolds = UploadHolds(resume: { [weak self] in self?.startUploads() }, notify: { [weak self] in self?.error = $0 })
     @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
     var attachmentLimit: Int { AttachmentTransfer.plaintextLimit(serverMaximum: uploadService?.maximumFileSize) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
@@ -1796,34 +1796,10 @@ final class AppModel {
                     // A dropped connection is not the server refusing; the reconnect starts uploads again.
                     let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
                     guard let self, self.generation == token, !dropped else { continue }
-                    await self.uploadRefused(message, by: UploadRefusal(error, now: .now), service: service, client: client, account: account)
+                    await self.uploadRefused(message, by: UploadRefusal(error, now: .now), service: service, account: account, token: token)
                 }
             }
         }
-    }
-
-    // Called right after the slot request's account check.
-    private func uploadRefused(_ message: StoredMessage, by answer: UploadRefusal, service: XMPPUploadService, client: XMPPClient, account: String) async {
-        guard let refusal = uploadHolds.unlessHeld(answer, of: message.id, named: message.attachment?.name ?? "") else { return }
-        uploadService = uploads.refused(account: account, current: uploadService, service: service, maximumFileSize: refusal.statedLimit)
-        if refusal == .notAllowed, uploadHolds.rediscovers(on: generation) {
-            Task { [weak self, token = generation] in await self?.settleUploadDiscovery(await client.uploadDiscovery(), account: account, token: token) }
-        }
-        await uploadFailed(message, account: account, reason: refusal.failure(name: message.attachment?.name ?? ""))
-    }
-
-    // At the failure budget, or at once with a `reason`, the file is failed, so it shows Not sent with Retry and stops
-    // holding back what was queued after it.
-    private func uploadFailed(_ message: StoredMessage, account: String, reason: String? = nil) async {
-        guard let store, accountID == account, let name = message.attachment?.name else { return }
-        guard reason != nil || uploadHolds.recordFailure(message.id) else {
-            error = "Could not upload \(name). It will be retried."
-            return uploadHolds.wait(message.id, for: UploadFailureBudget.backOff)
-        }
-        guard (try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)) != nil, accountID == account else { return }
-        error = reason ?? "Could not upload \(name), so it was not sent. Retry it from the message."
-        await refresh()
-        startOutbox()
     }
 
     nonisolated static var uploadScope: String { launchTestSessionID ?? "primary" }
@@ -1841,7 +1817,7 @@ final class AppModel {
             // A staged file left behind goes with the cache; the upload is recorded either way.
             try? FileManager.default.removeItem(at: files.stagingURL(messageID: id))
         }
-        for message in settled.failed { await uploadFailed(message, account: account) }
+        for message in settled.failed { await uploadFailed(message, account: account, reason: settled.reason(for: message)) }
         if !settled.uploaded.isEmpty, accountID == account { await refresh(); startOutbox() }
         // A grace held for uploads ends once none is left.
         await graceUploadsChanged()

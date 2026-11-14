@@ -1,4 +1,5 @@
 import Foundation
+import MessageStore
 import XMPPProtocol
 
 // A file too large, or a service that does not let this account upload, never succeeds on a retry, so its message
@@ -111,5 +112,31 @@ extension XMPPClient {
     // Only a completed answer changes what the attach button remembers; one that throws keeps the last.
     func uploadDiscovery() async -> Result<XMPPUploadService?, any Error> {
         do { return .success(try await uploadService()) } catch { return .failure(error) }
+    }
+}
+
+extension AppModel {
+    // Called right after the slot request's account check, with the pass's connection.
+    func uploadRefused(_ message: StoredMessage, by answer: UploadRefusal, service: XMPPUploadService, account: String, token: UUID) async {
+        guard let refusal = uploadHolds.unlessHeld(answer, of: message.id, named: message.attachment?.name ?? "") else { return }
+        uploadService = uploads.refused(account: account, current: uploadService, service: service, maximumFileSize: refusal.statedLimit)
+        if refusal == .notAllowed, let client, uploadHolds.rediscovers(on: token) {
+            Task { [weak self] in await self?.uploadsDiscovered(await client.uploadDiscovery(), account: account, token: token) }
+        }
+        await uploadFailed(message, account: account, reason: refusal.failure(name: message.attachment?.name ?? ""))
+    }
+
+    // At the failure budget, or at once with a `reason`, the file is failed, so it shows Not sent with Retry and stops
+    // holding back what was queued after it.
+    func uploadFailed(_ message: StoredMessage, account: String, reason: String? = nil) async {
+        guard let store, accountID == account, let name = message.attachment?.name else { return }
+        guard reason != nil || uploadHolds.recordFailure(message.id) else {
+            error = "Could not upload \(name). It will be retried."
+            return uploadHolds.wait(message.id, for: UploadFailureBudget.backOff)
+        }
+        guard (try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)) != nil, accountID == account else { return }
+        error = reason ?? "Could not upload \(name), so it was not sent. Retry it from the message."
+        await refresh()
+        startOutbox()
     }
 }

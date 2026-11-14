@@ -177,7 +177,7 @@ final class AttachmentUploader: UploadTasks, Sendable {
             let phase: UploadTaskState.Phase
             switch task.state {
             case .running, .suspended: phase = .live
-            case .completed: phase = .finished(succeeded: UploadSessionEvents.succeeded(task, error: task.error))
+            case .completed: phase = .finished(succeeded: UploadSessionEvents.succeeded(task, error: task.error), tooLarge: UploadSessionEvents.tooLarge(task))
             case .canceling: return nil
             @unknown default: return nil
             }
@@ -222,7 +222,7 @@ private final class UploadSessionEvents: NSObject, URLSessionTaskDelegate, @unch
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         guard let tag = UploadTag(taskDescription: task.taskDescription) else { return }
-        journal.record(UploadOutcome(tag: tag, succeeded: Self.succeeded(task, error: error), finishedAt: Date()))
+        journal.record(UploadOutcome(tag: tag, succeeded: Self.succeeded(task, error: error), tooLarge: Self.tooLarge(task), finishedAt: Date()))
         lock.withLock { finished }()
     }
 
@@ -239,6 +239,9 @@ private final class UploadSessionEvents: NSObject, URLSessionTaskDelegate, @unch
     static func succeeded(_ task: URLSessionTask, error: (any Error)?) -> Bool {
         error == nil && (200...299).contains((task.response as? HTTPURLResponse)?.statusCode ?? 0)
     }
+
+    // A proxy in front of the upload service may cap bodies below the advertised `max-file-size`.
+    static func tooLarge(_ task: URLSessionTask) -> Bool { (task.response as? HTTPURLResponse)?.statusCode == 413 }
 }
 
 #if os(iOS)
