@@ -288,6 +288,7 @@
 		89268FE4D30CBFBC3172938F /* NotificationHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3DB70046B5B3E414378E09 /* NotificationHarness.swift */; };
 		8B8C24981ACBBDD6FB31E4A3 /* ContactName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2806958D2C698E69232C9A /* ContactName.swift */; };
 		8C6B78163B8DBC0A35918F02 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE59BD38D134F3C88543871 /* SessionState.swift */; };
+		8C9229C202B313CEBC38D86B /* ConnectionFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */; };
 		8CFC925CAE0288489AB8D78B /* LICENSE-ADDITIONAL-PERMISSION in Resources */ = {isa = PBXBuildFile; fileRef = 75BD0028734A76DE6D90D9E9 /* LICENSE-ADDITIONAL-PERMISSION */; };
 		8D4E4A2C98FDB946155DD865 /* ShareModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1440DAD066B0B05A53D8F4F6 /* ShareModel.swift */; };
 		8E0FE9BDCD31D79FA5C191F6 /* MacTimelineDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B5931536594576359E496B /* MacTimelineDebug.swift */; };
@@ -450,6 +451,7 @@
 		DC910FDC979FB743D000181A /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79318867472966FE7C1CE331 /* ConversationUITests.swift */; };
 		DCA02E204E43ED4D678791C5 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = 3E9C53216836835810A07D0D /* OMEMO */; };
 		DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */; };
+		DCD8A2F58D1C07EB4795D7C3 /* ConnectionFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */; };
 		DD23B3F92D405219F65EB0D0 /* XMPPNotificationServiceMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EB9DE78DDB637C851451A0A9 /* XMPPNotificationServiceMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DDA862EB7C763729540D3DDA /* MessageActionMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */; };
 		DE181BB520CFD9CA40C8B389 /* MacPerfProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0128F3074596997403D4F4C /* MacPerfProbe.swift */; };
@@ -636,6 +638,7 @@
 		198B61EF24F8F532830EF75A /* ReceiptUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptUITests.swift; sourceTree = "<group>"; };
 		1A13172218752625D22B5412 /* MacToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacToolbar.swift; sourceTree = "<group>"; };
 		1B16B2BDD3A5B351589430FC /* EncryptionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionUITests.swift; sourceTree = "<group>"; };
+		1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFailure.swift; sourceTree = "<group>"; };
 		219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetup.swift; sourceTree = "<group>"; };
 		2232019E106C6E1BF8B39092 /* PushSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSetupTests.swift; sourceTree = "<group>"; };
 		2308A07FF5F75965A3B7F077 /* schema-24.sql */ = {isa = PBXFileReference; path = "schema-24.sql"; sourceTree = "<group>"; };
@@ -1318,6 +1321,7 @@
 				4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */,
 				0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */,
 				24971C9AFE6065119E87D945 /* CoalescedReload.swift */,
+				1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */,
 				219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */,
 				39FC65A732AA1ECEF720F45E /* ContactDirectory.swift */,
 				07698C55DB964708DC796FF2 /* ContactLinkCenter.swift */,
@@ -1855,6 +1859,7 @@
 				9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */,
 				4A5356525D8C703155480E40 /* ComposerLinkPreview.swift in Sources */,
 				57981266BBD1EDA970D8B64F /* ComposerPlan.swift in Sources */,
+				8C9229C202B313CEBC38D86B /* ConnectionFailure.swift in Sources */,
 				BAD829949F27036DE79F2BF4 /* ConnectionSetup.swift in Sources */,
 				10C87C54F49D7C6681BCB316 /* ContactDirectory.swift in Sources */,
 				308EC6B3CA8D4889AD4B1035 /* ContactLinkCenter.swift in Sources */,
@@ -2201,6 +2206,7 @@
 				1CF0C69F0D1E02B2DE2270E9 /* CoalescedReload.swift in Sources */,
 				D3AC16FDB0E4550E4125E3DD /* ComposerLinkPreview.swift in Sources */,
 				3B9E9364A9E655EA3758735C /* ComposerPlan.swift in Sources */,
+				DCD8A2F58D1C07EB4795D7C3 /* ConnectionFailure.swift in Sources */,
 				F90D2978D1DDF5F8E365A428 /* ConnectionSetup.swift in Sources */,
 				766140FFC89D836BD0DE11C4 /* ContactDirectory.swift in Sources */,
 				267691D2FE92FDA016105A70 /* ContactLinkCenter.swift in Sources */,

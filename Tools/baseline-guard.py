@@ -2,12 +2,17 @@
 """Fail if the checks were loosened since BASE: python3 -I Tools/baseline-guard.py BASE [HEAD]
 
 Baselines only ever lose entries: a new file, rule or entry, or a larger recorded size, fails. So does a new line
-in the crypto import allowlist, and any change to the checks themselves (.swiftlint.yml, Tools/, the Checks
-workflow) once BASE has them. A renamed file keeps its entries under the new path. A person who agrees with the
-change labels the pull request `baseline-growth-approved`, saying why in the description. Exit 2 means BASE or
-HEAD is not a commit, or a baseline does not parse.
+in the crypto import allowlist, any change to the checks themselves (.swiftlint.yml, Tools/, the Checks workflow)
+once BASE has them. In project.yml, the Xcode project, Config/*.xcconfig and Packages/*/Package.swift, so does a
+strict compiler setting that occurs fewer times (warnings as errors, the ExistentialAny, MemberImportVisibility and
+ImmutableWeakCaptures upcoming features, `swiftSettings: swiftSettings`), or an added line that undoes strictness
+(-no-warnings-as-errors, -Wwarning, -disable-upcoming-feature, -Wno-error, -w, SWIFT_SUPPRESS_WARNINGS or
+GCC_WARN_INHIBIT_ALL_WARNINGS set to YES, `as: .warning`). A renamed file keeps its entries under the new path. A
+person who agrees with the change labels the pull request `baseline-growth-approved`, saying why in the description.
+Exit 2 means BASE or HEAD is not a commit, or a baseline does not parse.
 """
 import json
+import re
 import subprocess
 import sys
 
@@ -15,6 +20,17 @@ SWIFTLINT = ".swiftlint-baseline.json"
 SLOP = ".slop-baseline.json"
 ALLOWLIST = "Tools/crypto-imports.txt"
 GATE = ("Tools/", ".swiftlint.yml", ".github/workflows/checks.yml")
+BUILD_SETTINGS = re.compile(r"^(project\.yml|HausXMPP\.xcodeproj/project\.pbxproj|Config/[^/]+\.xcconfig|"
+                            r"Packages/[^/]+/Package\.swift)$")
+# Each is counted per file, in the forms project.yml, the Xcode project and a package manifest write it.
+STRICT = [r'SWIFT_TREAT_WARNINGS_AS_ERRORS\W*[:=]\W*YES', r'GCC_TREAT_WARNINGS_AS_ERRORS\W*[:=]\W*YES',
+          r'EXISTENTIAL_ANY\W*[:=]\W*YES',
+          r'MEMBER_IMPORT_VISIBILITY\W*[:=]\W*YES', r'-enable-upcoming-feature ImmutableWeakCaptures',
+          r'treatAllWarnings\(as: \.error\)', r'swiftSettings: swiftSettings',
+          *(rf'enableUpcomingFeature\("{feature}"\)'
+            for feature in ("ExistentialAny", "MemberImportVisibility", "ImmutableWeakCaptures"))]
+UNDOING = re.compile(r"-no-warnings-as-errors|-Wwarning|-disable-upcoming-feature|(?<![\w-])(-Wno-error|-w)(?![\w-])|"
+                     r"as:\s*\.warning\b|(SWIFT_SUPPRESS_WARNINGS|GCC_WARN_INHIBIT_ALL_WARNINGS)\S*\W*[:=]\W*YES")
 # The one slop-check rule whose entry is a recorded value rather than a fingerprint.
 SLOP_MEASURED = {"comment.density"}
 
@@ -135,6 +151,25 @@ def check_gate(base, changed, additions):
     return problems
 
 
+# A strict setting may be added; one may not go, and no line that undoes them may come, in a new file either.
+def strict_settings_loosened(base, head, changed):
+    if show(base, "Tools/baseline-guard.py") is None:
+        return []
+    problems = []
+    for status, paths in changed:
+        path = paths[-1]
+        if status[0] == "D" or not BUILD_SETTINGS.match(path):
+            continue
+        old, new = show(base, paths[0]) or "", show(head, path) or ""
+        if old:
+            problems += [f"{path}: fewer `{pattern}` settings" for pattern in STRICT
+                         if len(re.findall(pattern, new)) < len(re.findall(pattern, old))]
+        old_lines, new_lines = [line.strip() for line in old.splitlines()], [line.strip() for line in new.splitlines()]
+        problems += [f"{path}: added a setting that undoes strictness: '{line[:80]}'" for line in sorted(set(new_lines))
+                     if UNDOING.search(line) and new_lines.count(line) > old_lines.count(line)]
+    return problems
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         print(__doc__, file=sys.stderr)
@@ -146,7 +181,8 @@ def main():
     problems = (check_baseline(SWIFTLINT, grown_swiftlint, base, head, renames)
                 + check_baseline(SLOP, grown_slop, base, head, renames)
                 + [f"{ALLOWLIST}: added {line}" for line in additions]
-                + check_gate(base, changed, additions))
+                + check_gate(base, changed, additions)
+                + strict_settings_loosened(base, head, changed))
     if problems:
         print("The checks may only get stricter:\n" + "\n".join(problems))
         print("\nFix the new violations instead of recording them. If the change is right, a maintainer adds the"

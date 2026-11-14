@@ -85,6 +85,54 @@ import MessageStore
         }
     }
 
+    // Sign-out could not take the lease, and an extension run posted after its first clear. The next connection's
+    // settle deletes the rows and clears the notifications again; a settle that deleted nothing leaves them.
+    func testTheSettleBeforeASessionClearsNotificationsOnceItDeletedRows() async throws {
+        let (store, url, seeded) = try seededStore()
+        var cleanup = seeded, cleared = 0
+        cleanup.clearNotifications = { cleared += 1 }
+        cleanup.owe(alice)
+        let withoutLease = await cleanup.settle(store: store, connecting: alice)
+        XCTAssertFalse(withoutLease)
+        XCTAssertEqual(cleared, 0, "nothing was deleted, so nothing is cleared")
+
+        try await store.acquireTransportOwnership()
+        let connects = await cleanup.settle(store: store, connecting: alice)
+        XCTAssertTrue(connects)
+        XCTAssertEqual(cleared, 1)
+        for table in deleted { XCTAssertEqual(try count(url, table, alice), 0, table.rawValue) }
+
+        let nothingOwed = await cleanup.settle(store: store, connecting: bob)
+        XCTAssertTrue(nothingOwed)
+        XCTAssertEqual(cleared, 1, "with nothing owed a connection leaves the notifications")
+        try await store.close()
+        cleanup.owe(bob)
+        let closed = await cleanup.settle(store: store, connecting: alice)
+        XCTAssertTrue(closed, "alice is no longer owed")
+        XCTAssertEqual(cleared, 1, "bob's failed delete clears nothing")
+    }
+
+    // Sign-out's own settle clears the notifications again whether or not it deleted anything: an extension run may have
+    // posted after the first clear.
+    func testSignOutsSettleAlwaysClearsNotifications() async throws {
+        let (store, _, seeded) = try seededStore()
+        var cleanup = seeded, cleared = 0
+        cleanup.clearNotifications = { cleared += 1 }
+        try await store.acquireTransportOwnership()
+        cleanup.owe(alice)
+        let settled = await cleanup.settle(store: store)
+        XCTAssertTrue(settled)
+        XCTAssertEqual(cleared, 1)
+        let nothingOwed = await cleanup.settle(store: store)
+        XCTAssertTrue(nothingOwed)
+        XCTAssertEqual(cleared, 2, "nothing was owed, and the notifications are cleared anyway")
+        try await store.close()
+        cleanup.owe(bob)
+        let failed = await cleanup.settle(store: store)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(cleared, 3, "a failed delete still clears")
+    }
+
     // One account's delete keeps failing: it stays owed and is refused a session, while another account connects.
     func testAnotherAccountsFailingDeleteNeverBlocksThisOne() async throws {
         let (store, url, cleanup) = try seededStore()

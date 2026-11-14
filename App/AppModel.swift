@@ -705,32 +705,6 @@ final class AppModel {
         }
     }
 
-    nonisolated static func isAuthenticationFailure(_ error: any Error) -> Bool {
-        switch error as? XMPPClientError {
-        case .authenticationFailed, .authenticationUnavailable, .authenticationDowngrade: true
-        default: false
-        }
-    }
-
-    nonisolated static func failureMessage(for error: any Error) -> String {
-        switch error {
-        case XMPPClientError.authenticationFailed: "The password was not accepted."
-        case XMPPClientError.authenticationUnavailable: "The server does not offer a sign-in method this app supports."
-        case XMPPClientError.authenticationDowngrade:
-            "The server no longer offers SCRAM sign-in, which this account used before, so the password was not sent. Sign out and in again only if the server’s operator made this change."
-        case XMPPClientError.authenticationRetryable: "The server could not check the password right now."
-        case XMPPClientError.encryptionUnavailable: "The server did not offer an encrypted connection."
-        case XMPPClientError.serviceNotOffered: "This domain does not offer XMPP service."
-        case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
-        case XMPPClientError.timedOut: "The server did not respond."
-        case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
-        case is SignOutCleanup.Owed: "Couldn’t finish signing out this account. Try again."
-        case is CancellationError: "Connection cancelled."
-        case XMPPIdentityError.boundAccountMismatch: "The server signed in a different account than the one entered."
-        default: "Could not reach the server."
-        }
-    }
-
     private var wantsConnection: Bool {
         transportWanted && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
             && transferState == .none
@@ -1362,9 +1336,15 @@ final class AppModel {
         guard signingOut else { return await releaseLeaseInBackground(store) }
         // The rows go under the lease, so no extension run writes them meanwhile. Until the lease is released again a
         // background transition joins this and connect waits; in the background the rows stay owed.
-        let background = BackgroundActivity("Sign out"); quiescing = true; acquiringOwnership = true
+        let background = BackgroundActivity("Sign out")
+        quiescing = true
+        acquiringOwnership = true
         defer { quiescing = false; acquiringOwnership = false; background.end() }
-        if transportWanted, await takeLease(store, whileWanted: true) { await settleSignOut(store) } else { SignOutCleanup.log.error("sign-out rows stay owed: no lease") }
+        if transportWanted, await takeLease(store, whileWanted: true) {
+            await settleSignOut(store)
+        } else {
+            SignOutCleanup.log.error("sign-out rows stay owed: no lease")
+        }
         await releaseLeaseInBackground(store)
     }
 
@@ -1440,7 +1420,10 @@ final class AppModel {
             do {
                 try await store.acquireTransportOwnership()
                 // An account whose sign-out rows are still owed never gets a session.
-                guard await SignOutCleanup(defaults: preferences).settle(store: store, connecting: accountID) else { await releaseLeaseInBackground(store); throw SignOutCleanup.Owed() }
+                guard await settleSignOut(store, connecting: accountID) else {
+                    await releaseLeaseInBackground(store)
+                    throw SignOutCleanup.Owed()
+                }
                 guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
                 return
