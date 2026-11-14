@@ -273,7 +273,7 @@ final class AppModel {
     @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
     @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
-    var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
+    var attachmentLimit: Int { AttachmentTransfer.plaintextLimit(serverMaximum: uploadService?.maximumFileSize) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
     var canSendAttachments: Bool { isDemo || uploadService != nil }
     @ObservationIgnored let testSessionID = AppModel.launchTestSessionID

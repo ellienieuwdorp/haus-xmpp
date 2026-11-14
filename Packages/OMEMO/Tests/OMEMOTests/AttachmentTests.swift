@@ -83,6 +83,24 @@ final class AttachmentTests: XCTestCase {
         }
     }
 
+    // A server's `max-file-size` bounds the sealed upload, so the plaintext budget leaves room for the tag.
+    func testThePlaintextLimitLeavesRoomForTheTag() throws {
+        let cap = AttachmentTransfer.maximumBytes, tag = 16
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: nil), cap, "No stated limit leaves our own")
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: 1_000), 1_000 - tag)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: tag), 0)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: tag - 1), 0, "A limit smaller than the tag allows nothing")
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: cap + tag), cap)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: cap + tag - 1), cap - 1)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: cap), cap - tag)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: cap + 1_024), cap)
+        XCTAssertEqual(AttachmentTransfer.plaintextLimit(serverMaximum: .max), cap)
+
+        let limit = AttachmentTransfer.plaintextLimit(serverMaximum: 64)
+        let sealed = try AttachmentTransfer.seal(Data(repeating: 1, count: limit))
+        XCTAssertEqual(sealed.ciphertext.count, 64, "The largest allowed file seals to exactly the server's limit")
+    }
+
     func testAttachmentSecretIsBoundToTheAccount() throws {
         let (sharing, _) = try file()
         let store = try MessageStore(url: FileManager.default.temporaryDirectory.appending(path: "attachment-\(UUID()).sqlite"))

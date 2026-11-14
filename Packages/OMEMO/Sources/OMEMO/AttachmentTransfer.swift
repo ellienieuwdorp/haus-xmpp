@@ -10,8 +10,15 @@ public enum AttachmentTransfer {
     public enum Failure: Error, Equatable { case cipherHashMismatch, authenticationFailed, plainHashMismatch, tooLarge, unencrypted }
     public static let maximumBytes = 32 * 1024 * 1024
 
+    /// The largest plaintext to seal for a service whose `max-file-size` is `serverMaximum`: that limit applies
+    /// to the uploaded ciphertext, which carries the GCM tag.
+    public static func plaintextLimit(serverMaximum: Int?) -> Int {
+        guard let serverMaximum else { return maximumBytes }
+        return max(0, min(maximumBytes, serverMaximum - AttachmentCrypto.tagByteCount))
+    }
+
     public static func open(_ downloaded: Data, key: Data, iv: Data, expectedCipherHash: Data?, expectedPlainHash: Data?) throws -> Data {
-        guard downloaded.count <= maximumBytes + 16 else { throw Failure.tooLarge }
+        guard downloaded.count <= maximumBytes + AttachmentCrypto.tagByteCount else { throw Failure.tooLarge }
         if let expectedCipherHash, Data.sha256(downloaded) != expectedCipherHash { throw Failure.cipherHashMismatch }
         let plaintext: Data
         do { plaintext = try AttachmentCrypto.open(EncryptedAttachment(ciphertext: downloaded, key: key, iv: iv), maximumBytes: maximumBytes) }

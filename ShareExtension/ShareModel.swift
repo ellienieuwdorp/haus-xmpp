@@ -80,7 +80,7 @@ import AppKit
 
     var files: [SharedItem] { items.filter(\.isFile) }
     var hasFiles: Bool { !files.isEmpty }
-    var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
+    var attachmentLimit: Int { AttachmentTransfer.plaintextLimit(serverMaximum: uploadService?.maximumFileSize) }
     var listedChats: [ShareRules.Chat] { ShareRules.listed(chats, search: search) }
     var selectedChats: [ShareRules.Chat] { selection.compactMap { id in chats.first { $0.id == id } } }
     var isPreparing: Bool { prepared.values.contains(.preparing) }
