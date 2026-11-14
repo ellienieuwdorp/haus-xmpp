@@ -145,14 +145,23 @@ import XMPPProtocol
         if case .success = discovery { uploadsKnown = true }
     }
 
+    // As the app's group state: a rejoin pass reports a room a resume restored and a self-ping confirmed.
+    func roomRejoined(_ room: String, joined: Bool) {
+        if joined { roomJoined(room) }
+    }
+
+    private func roomJoined(_ room: String) {
+        joined.insert(room)
+        if joined.count == expectedRooms { mark("roomsJoined") }
+        engine.startOutbox()
+    }
+
     func received(_ event: XMPPEvent, token: UUID) async {
         switch event {
         case .groupPresence(let room):
             // Only the room's own presence for us makes it joined; a failed read leaves it as it was.
             guard let client = engine.client, (try? await client.groupRoomSnapshot(room))??.joined == true else { break }
-            joined.insert(room)
-            if joined.count == expectedRooms { mark("roomsJoined") }
-            engine.startOutbox()
+            roomJoined(room)
         case .streamAcknowledged:
             mark("acknowledged")
         default:
