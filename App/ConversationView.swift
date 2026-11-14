@@ -100,6 +100,8 @@ struct PendingAttachment: Identifiable {
 struct ConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
+    // Still in the navigation path: a pushed details screen hides the chat without leaving it.
+    let routed: () -> Bool
     @State private var composerState = ComposerState()
     @State private var showingPhotoPicker = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -382,17 +384,14 @@ struct ConversationView: View {
             let jobs: [ComposerIntake.Job] = items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit, keepingFirst: $0) } }
             composerState.intake.add(jobs, to: composerState, model: model)
         }
-        .onChange(of: [chatID, model.accountID]) {
-            composerState.closeAttachments()
-            composerState.tray = []
-            composerState.intake.reset()
-        }
+        .onChange(of: [chatID, model.accountID]) { composerState.closeAttachments(); composerState.tray = []; composerState.intake.reset() }
         // The list's search and compose bar goes with the push instead of lingering over the composer after it.
         .toolbarVisibility(.hidden, for: .bottomBar)
         // Before the first frame: a cached page puts the newest messages on screen as the push starts.
         .onAppear { model.prepareChat(chatID) }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
-        .onDisappear { model.closeChat(chatID) }
+        // Leaving the chat drops its composer, so a video still converting for it would only be thrown away.
+        .onDisappear { model.closeChat(chatID); if !routed() { composerState.intake.reset() } }
     }
 
     // Hosted inside the timeline controller, outside this view's environment, so the accent travels with it.
