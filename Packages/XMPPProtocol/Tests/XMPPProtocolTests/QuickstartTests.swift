@@ -300,13 +300,13 @@ struct QuickstartTests {
     @Test func aPlainOnlyProfileWaitsForTheFeatures() {
         let endpoint = XMPPEndpoint(host: "127.0.0.1", port: 5223, security: .directTLS)
         let plain = XMPPStreamProfile(endpoint: endpoint, mechanisms: ["PLAIN"], streamManagement: true)
-        #expect(StreamQuickstart(plain, endpoint: endpoint, password: "loopback", requireSCRAM: false) == nil)
+        #expect(StreamQuickstart(plain, endpoint: endpoint, password: "loopback", pin: .none, sasl2: false) == nil)
         let scram = XMPPStreamProfile(endpoint: endpoint, mechanisms: ["PLAIN", "SCRAM-SHA-1"], streamManagement: true)
-        #expect(StreamQuickstart(scram, endpoint: endpoint, password: "loopback", requireSCRAM: false)?.mechanism == .scramSHA1)
+        #expect(StreamQuickstart(scram, endpoint: endpoint, password: "loopback", pin: .none, sasl2: false)?.mechanism == .scramSHA1)
         // Another endpoint, or a password SCRAM cannot prepare, sends nothing early either.
         #expect(StreamQuickstart(scram, endpoint: XMPPEndpoint(host: "127.0.0.1", port: 5222, security: .startTLS), password: "loopback",
-                                 requireSCRAM: false) == nil)
-        #expect(StreamQuickstart(scram, endpoint: endpoint, password: "\u{0627}\u{0644}", requireSCRAM: false) == nil)
+                                 pin: .none, sasl2: false) == nil)
+        #expect(StreamQuickstart(scram, endpoint: endpoint, password: "\u{0627}\u{0644}", pin: .none, sasl2: false) == nil)
     }
 }
 

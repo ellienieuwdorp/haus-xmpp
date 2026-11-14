@@ -46,6 +46,18 @@ enum XMPPTransport {
     }
 
     static let startTLSRefused = NWError.posix(.EPROTONOSUPPORT)
+
+    // RFC 9266: 32 bytes exported under "EXPORTER-Channel-Binding" with an empty context, TLS 1.3 only (TLS 1.2 would
+    // need the extended master secret, which the metadata cannot confirm).
+    static func channelBinding(_ connection: NWConnection) -> ChannelBinding? {
+        guard let tls = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return nil }
+        let metadata = tls.securityProtocolMetadata
+        guard sec_protocol_metadata_get_negotiated_tls_protocol_version(metadata) == .TLSv13 else { return nil }
+        let label = "EXPORTER-Channel-Binding"
+        guard let secret = label.withCString({ sec_protocol_metadata_create_secret(metadata, label.utf8.count, $0, 32) }) else { return nil }
+        let data = Data(secret as DispatchData)
+        return data.count == 32 ? ChannelBinding(data: data) : nil
+    }
 }
 
 // RFC 6120 §5 as a framer (`nw_framer_prepend_application_protocol`): it negotiates in plaintext while the connection

@@ -1,5 +1,18 @@
 import Foundation
 
+/// What a successful `connect` used; the caller remembers both for the next connection.
+public struct XMPPConnectedSession: Sendable, Equatable {
+    public let endpoint: XMPPEndpoint
+    public let authenticatedWithSCRAM: Bool
+    /// The pin the account had, with what this sign-in proved added.
+    public let pin: XMPPAuthenticationPin
+
+    public init(endpoint: XMPPEndpoint, authenticatedWithSCRAM: Bool, pin: XMPPAuthenticationPin? = nil) {
+        self.endpoint = endpoint; self.authenticatedWithSCRAM = authenticatedWithSCRAM
+        self.pin = pin ?? XMPPAuthenticationPin(scram: authenticatedWithSCRAM)
+    }
+}
+
 // Sign-in from the first stream features to online: SASL, the restart, bind or resume, and the XEP-0198 enable.
 extension XMPPClient {
     func handleFeatures(_ node: XMLNode) async throws {
@@ -9,17 +22,37 @@ extension XMPPClient {
             .filter { $0.name == "mechanism" && $0.namespace == SASLNegotiation.namespace }
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) } ?? []
         offeredMechanisms = mechanisms
+        signIn.channelBindings = ChannelBinding.offered(node)
+        signIn.offer = SASL2Wire.offer(node)
+        let offer = signIn.configuration == nil ? nil : signIn.offer
         if let quickstart {
-            // The `<auth>` already sent must be what this offer chooses; anything else is a stale profile.
-            let chosen = try SASLNegotiation.choose(offered: Set(mechanisms), preparable: SASLprep.prepare(password) != nil,
-                                                    requireSCRAM: requireSCRAM)
-            guard chosen == quickstart.mechanism else { throw StaleProfile() }
-            phase = .authentication
+            // What already went ahead must be what this offer chooses; anything else is a stale profile.
+            switch quickstart.kind {
+            case .sasl1(let sent):
+                let chosen = try SASLNegotiation.choose(offered: Set(mechanisms), preparable: SASLprep.prepare(password) != nil,
+                                                        pin: pin, binds: bindsChannel)
+                guard chosen == sent else { throw StaleProfile() }
+                phase = .authentication
+            case .sasl2:
+                guard let offer, let sent = signIn.attempt,
+                      try makeSASL2Attempt(offer: offer, binds: bindsChannel).request.shape == sent.request.shape else { throw StaleProfile() }
+                phase = .sasl2
+            }
             try emit(.state(.authenticating))
             return
         }
-        let negotiation = try SASLNegotiation(offered: Set(mechanisms), username: username, password: password, requireSCRAM: requireSCRAM,
-                                              nonce: scramNonce())
+        if let offer {
+            let attempt = try makeSASL2Attempt(offer: offer, binds: bindsChannel)
+            signIn.attempt = attempt
+            phase = .sasl2
+            try emit(.state(.authenticating))
+            try await write(attempt.request.xml)
+            return
+        }
+        // Only a server that lists Bind 2 counts as offering SASL2.
+        if pin.sasl2 { throw XMPPClientError.authenticationDowngrade }
+        let negotiation = try SASLNegotiation(offered: Set(mechanisms), username: username, password: password, pin: pin,
+                                              channelBinding: bindsChannel ? signIn.channelBinding : nil, nonce: scramNonce())
         sasl = negotiation
         phase = .authentication
         try emit(.state(.authenticating))
@@ -37,6 +70,7 @@ extension XMPPClient {
             try negotiation.complete(SASLNegotiation.decode(node.text))
             sasl = nil
             authenticatedWithSCRAM = negotiation.usesSCRAM
+            signIn.achievedPin = XMPPAuthenticationPin(scram: negotiation.usesSCRAM, channelBinding: negotiation.mechanism.binds)
             phase = .authenticatedFeatures
             framer = XMLStreamFramer()
             try await writeTogether([streamOpening()] + afterRestart())
@@ -101,13 +135,18 @@ extension XMPPClient {
         }
         guard node.namespace == "urn:xmpp:sm:3", node.name == "enabled" else { throw XMPPClientError.unexpectedProtocol }
         pipelined = false; earlyEnables = 0
+        try await enableStreamManagement(node)
+        try await becomeOnline(token: token)
+    }
+
+    // An `<enabled/>`, in order or inside Bind 2's `<bound/>`.
+    func enableStreamManagement(_ node: XMLNode) async throws {
         let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")
         let id = node.attributes["id"]
         guard !resumable || id.map(validArchiveID) == true else { throw XMPPClientError.unexpectedProtocol }
         let timeout = node.attributes["max"].flatMap(Self.smCount).map { min($0, StreamManagement.maxResumeTimeout) }
         try await streamManagement?.enable(accountID: username + "@" + domain, fullJID: boundJID,
                                            streamID: resumable ? id : nil, resumeTimeoutSeconds: resumable ? timeout : nil)
-        try await becomeOnline(token: token)
     }
 
     func handleResumption(_ node: XMLNode, token: UUID) async throws {
@@ -118,21 +157,26 @@ extension XMPPClient {
             resumeSnapshot = nil
             try await startBinding(resource: resource)
         } else {
-            guard node.name == "resumed", let snapshot = resumeSnapshot,
-                  node.attributes["previd"] == snapshot.streamID,
-                  let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
-            boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
-            restoreGroupRooms(from: snapshot)
-            let replay = try await acknowledge(h, resumed: true, streamManagement)
-            try emit(.streamAcknowledged)
-            guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
-            // IQs are never replayed: their continuations failed on disconnect and setup re-runs.
-            for entry in replay {
-                guard entry.kind != .iq, let xml = entry.xml else { continue }
-                try await rawWrite(xml, expectedGeneration: token)
-            }
-            try await becomeOnline(token: token, resumed: true)
+            guard node.name == "resumed" else { throw XMPPClientError.unexpectedProtocol }
+            try await resume(node, token: token)
         }
+    }
+
+    // A `<resumed/>`, in order or inside SASL2's `<success/>`.
+    func resume(_ node: XMLNode, token: UUID) async throws {
+        guard let snapshot = resumeSnapshot, node.attributes["previd"] == snapshot.streamID,
+              let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
+        boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
+        restoreGroupRooms(from: snapshot)
+        let replay = try await acknowledge(h, resumed: true, streamManagement)
+        try emit(.streamAcknowledged)
+        guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
+        // IQs are never replayed: their continuations failed on disconnect and setup re-runs.
+        for entry in replay {
+            guard entry.kind != .iq, let xml = entry.xml else { continue }
+            try await rawWrite(xml, expectedGeneration: token)
+        }
+        try await becomeOnline(token: token, resumed: true)
     }
 
     func pinSCRAMNonce(_ nonce: String) { scramNonce = { nonce } }
@@ -141,7 +185,7 @@ extension XMPPClient {
     func connected(to endpoint: XMPPEndpoint) -> XMPPConnectedSession {
         password = ""
         learn(endpoint)
-        return XMPPConnectedSession(endpoint: endpoint, authenticatedWithSCRAM: authenticatedWithSCRAM)
+        return XMPPConnectedSession(endpoint: endpoint, authenticatedWithSCRAM: authenticatedWithSCRAM, pin: pin.union(signIn.achievedPin))
     }
 
     // The endpoint once more when an attempt that sent ahead failed, with nothing sent ahead from then on.
@@ -174,7 +218,8 @@ extension XMPPClient {
 
     func learn(_ endpoint: XMPPEndpoint) {
         let learned = XMPPStreamProfile(endpoint: endpoint, mechanisms: offeredMechanisms, streamManagement: smOffered,
-                                        refusedEarlyData: pipeliningAllowed ? nil : profile?.refusedEarlyData)
+                                        refusedEarlyData: pipeliningAllowed ? nil : profile?.refusedEarlyData, sasl2: signIn.offer,
+                                        channelBindings: signIn.channelBindings.isEmpty ? nil : signIn.channelBindings)
         guard learned != profile else { return }
         profile = learned
         profiles?.saveStreamProfile(learned, account: username + "@" + domain)
@@ -229,5 +274,16 @@ extension XMPPClient {
             try await rawWrite(elements.joined(), expectedGeneration: token)
             await writeGate.leave()
         } catch { await writeGate.leave(); throw error }
+    }
+
+    /// `haus-` and 16 random hex digits: nothing about the user or device.
+    public static func makeResource() -> String {
+        "haus-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
+    }
+
+    public static func validResource(_ resource: String) -> Bool {
+        (1...64).contains(resource.utf8.count) && resource.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
+        }
     }
 }

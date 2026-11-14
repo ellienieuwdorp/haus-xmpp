@@ -105,6 +105,12 @@ actor LoopbackServer {
         if ended { self.ended = true }
     }
 
+    // The RFC 9266 `tls-exporter` value of the current connection, as the client reads it on its side.
+    func channelBinding() -> Data? {
+        guard let connection else { return nil }
+        return XMPPTransport.channelBinding(connection)?.data
+    }
+
     // Frames already read and not yet taken: what the client wrote together with the last one taken.
     var pending: Int { frames.count }
 

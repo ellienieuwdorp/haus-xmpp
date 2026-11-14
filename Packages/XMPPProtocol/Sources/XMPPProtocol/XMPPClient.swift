@@ -122,7 +122,8 @@ public enum XMPPClientError: Error, Sendable {
     case authenticationFailed, bindingFailed, unexpectedProtocol, connectionClosed, timedOut, eventConsumerTooSlow
     /// The server could not check the credentials right now (`temporary-auth-failure`, `aborted`): retry later.
     case authenticationRetryable
-    /// The account authenticated with SCRAM before and the server now offers only weaker mechanisms.
+    /// The account's pin (`XMPPAuthenticationPin`) asks for SCRAM, SASL2 or channel binding, and the server now offers
+    /// less. No credential was sent.
     case authenticationDowngrade
     /// A STARTTLS endpoint did not offer or refused TLS. Nothing was sent in plaintext.
     case encryptionUnavailable
@@ -130,17 +131,7 @@ public enum XMPPClientError: Error, Sendable {
     case serviceNotOffered
 }
 
-/// What a successful `connect` used; the caller remembers both for the next connection.
-public struct XMPPConnectedSession: Sendable, Equatable {
-    public let endpoint: XMPPEndpoint
-    public let authenticatedWithSCRAM: Bool
-
-    public init(endpoint: XMPPEndpoint, authenticatedWithSCRAM: Bool) {
-        self.endpoint = endpoint; self.authenticatedWithSCRAM = authenticatedWithSCRAM
-    }
-}
-
-/// Direct TLS or mandatory STARTTLS via SRV or a fixed endpoint, SCRAM or PLAIN over SASL1, OMEMO PEP, durable
+/// Direct TLS or mandatory STARTTLS via SRV or a fixed endpoint, SCRAM, PLAIN or a FAST token over SASL1 or SASL2, OMEMO PEP, durable
 /// stream management and bounded archive recovery. Every mechanism runs only inside validated TLS; never use this
 /// API as an encryption fallback.
 public actor XMPPClient {
@@ -180,9 +171,11 @@ public actor XMPPClient {
     private(set) var domain = ""
     var username = ""
     var password = ""
-    var requireSCRAM = false
+    var pin = XMPPAuthenticationPin.none
     var sasl: SASLNegotiation?
     var authenticatedWithSCRAM = false
+    // SASL2, channel binding and what this attempt's sign-in proved.
+    var signIn = SASL2Login()
     // One TCP/TLS attempt; a failed candidate is abandoned without ending the connect.
     private var attempt = UUID()
     private var abandonedError: (any Error)?
@@ -262,7 +255,7 @@ public actor XMPPClient {
     // Tests pin these to replay a published SCRAM exchange and to set the time.
     var scramNonce: @Sendable () -> String = { SCRAM.makeNonce() }
     var now: @Sendable () -> Date = { Date() }
-    enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
+    enum Phase { case idle, features, authentication, sasl2, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
     /// A DER CA certificate for the explicit local lab only. System trust is the default.
     public init(labCertificateAuthority: Data? = nil) {
@@ -275,17 +268,17 @@ public actor XMPPClient {
     /// A fixed endpoint; the default is direct TLS on 5223.
     @discardableResult
     public func connect(host: String, port: UInt16 = 5223, security: XMPPTransportSecurity = .directTLS, domain: String,
-                        username: String, password: String, requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
+                        username: String, password: String, pin: XMPPAuthenticationPin = .none) async throws -> XMPPConnectedSession {
         try await connect(route: .fixed(XMPPEndpoint(host: host, port: port, security: security)), domain: domain,
-                          username: username, password: password, requireSCRAM: requireSCRAM)
+                          username: username, password: password, pin: pin)
     }
 
     /// Tries the route's candidates in order, skipping one that is unreachable, fails TLS or refuses STARTTLS. Once a
     /// candidate delivers stream features inside TLS the connect commits to it: authentication and binding failures end
-    /// it. `requireSCRAM` refuses PLAIN.
+    /// it. `pin` refuses whatever the account's earlier sign-ins rule out.
     @discardableResult
     public func connect(route: XMPPRoute, domain: String, username: String, password: String,
-                        requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
+                        pin: XMPPAuthenticationPin = .none) async throws -> XMPPConnectedSession {
         guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
         let validRoute = switch route {
         case .fixed(let endpoint): !endpoint.host.isEmpty && endpoint.port > 0
@@ -295,7 +288,7 @@ public actor XMPPClient {
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }) else { throw XMPPClientError.invalidConfiguration }
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         blocklistFetchIDs.removeAll(); blocklistRequested = false; lastInboundSequence = nil
-        self.domain = domain; self.username = username; self.password = password; self.requireSCRAM = requireSCRAM
+        self.domain = domain; self.username = username; self.password = password; self.pin = pin
         authenticatedWithSCRAM = false; loadProfile()
         phase = .features; generation = UUID()
         let token = generation
@@ -355,7 +348,9 @@ public actor XMPPClient {
         guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
         framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil; abandonedRetry = false
         sasl = nil; bindRetried = false; offeredMechanisms = []; restartAhead = nil; earlyEnables = 0; attemptEndpoint = endpoint
-        quickstart = pipeliningAllowed ? StreamQuickstart(profile, endpoint: endpoint, password: password, requireSCRAM: requireSCRAM) : nil
+        signIn = SASL2Login(configuration: signIn.configuration)
+        quickstart = pipeliningAllowed ? StreamQuickstart(profile, endpoint: endpoint, password: password, pin: pin,
+                                                          sasl2: signIn.configuration != nil) : nil
         // A remembered profile for this endpoint means it negotiated STARTTLS before.
         let startTLSAhead = pipeliningAllowed && endpoint.security == .startTLS && profile?.endpoint == endpoint
         pipelined = quickstart != nil || startTLSAhead
@@ -375,12 +370,13 @@ public actor XMPPClient {
         do {
             try await Self.start(conn, queue: socket.queue)
             guard generation == token, attempt == attemptID else { throw XMPPClientError.connectionClosed }
-            if let quickstart {
-                let negotiation = try SASLNegotiation(offered: [quickstart.mechanism.rawValue], username: username, password: password,
-                                                      requireSCRAM: requireSCRAM, nonce: scramNonce())
-                sasl = negotiation
-                try await writeTogether([streamOpening(), Self.authXML(negotiation)])
-            } else { try await write(streamOpening()) }
+            signIn.channelBinding = XMPPTransport.channelBinding(conn)
+            if let ahead = try authenticationAhead() {
+                try await writeTogether([streamOpening(), ahead])
+            } else {
+                quickstart = nil; pipelined = startTLSAhead
+                try await write(streamOpening())
+            }
         } catch {
             guard generation == token else { throw XMPPClientError.connectionClosed }
             // Only a server that answered the early `<starttls/>` badly is worth a second, plain-order try.
@@ -609,7 +605,7 @@ public actor XMPPClient {
                     switch frame {
                     case .opened: break
                     case .closed: throw XMPPClientError.connectionClosed
-                    case .element(let node): try await handle(node, token: token)
+                    case .element(let node): if !takesPostAuthenticationFeatures(node) { try await handle(node, token: token) }
                     }
                 }
             }
@@ -624,7 +620,7 @@ public actor XMPPClient {
         if node.name == "error", node.namespace == "http://etherx.jabber.org/streams" { throw XMPPClientError.unexpectedProtocol }
         switch phase {
         case .features: try await handleFeatures(node)
-        case .authentication: try await handleSASL(node)
+        case .authentication, .sasl2: try await phase == .sasl2 ? handleSASL2(node, token: token) : handleSASL(node)
         case .authenticatedFeatures: try await handleAuthenticatedFeatures(node)
         case .binding: try await handleBinding(node, token: token)
         case .enablingSM: try await handleEnabled(node, token: token)
@@ -733,22 +729,18 @@ public actor XMPPClient {
         streamManagement = StreamManagement(persistence)
     }
 
-    /// The resource every fresh bind requests; otherwise the random one the client was created with.
+    /// SASL2 with Bind 2 and FAST when the server offers them; without this call, RFC 6120 SASL only.
+    public func configureSASL2(_ configuration: XMPPSASL2Configuration?) throws {
+        guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
+        signIn.configuration = configuration
+    }
+
+    /// The resource every fresh RFC 6120 bind requests; otherwise the random one the client was created with. A Bind 2
+    /// server assigns its own.
     public func configureResource(_ resource: String) throws {
         guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
         guard Self.validResource(resource) else { throw XMPPClientError.invalidConfiguration }
         self.resource = resource
-    }
-
-    /// `haus-` and 16 random hex digits: nothing about the user or device.
-    public static func makeResource() -> String {
-        "haus-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
-    }
-
-    public static func validResource(_ resource: String) -> Bool {
-        (1...64).contains(resource.utf8.count) && resource.utf8.allSatisfy {
-            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
-        }
     }
 
     /// Before connecting, records what the session announces once online (fresh or resumed). Online, announces it now,
@@ -1364,7 +1356,6 @@ public actor XMPPClient {
         request.continuation.resume(throwing: error)
     }
 
-    func streamOpening() -> String { "<stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>" }
     func emit(_ event: XMPPEvent) throws {
         emittedEvents &+= 1
         switch continuation.yield(event) {
@@ -1399,7 +1390,7 @@ public actor XMPPClient {
         reader?.cancel()
         deadline?.cancel(); deadline = nil
         liveness?.cancel(); liveness = nil
-        password = ""; sasl = nil; phase = .idle; csiOffered = false; bindRetried = false
+        password = ""; sasl = nil; signIn.attempt = nil; phase = .idle; csiOffered = false; bindRetried = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
     func write(_ xml: String, groupSnapshot: XMPPGroupRoomSnapshot? = nil) async throws {
@@ -1480,7 +1471,7 @@ public actor XMPPClient {
         case XMPPClientError.authenticationFailed: "Authentication failed"
         case XMPPClientError.authenticationUnavailable: "Server offers no supported authentication mechanism"
         case XMPPClientError.authenticationRetryable: "Server could not authenticate now"
-        case XMPPClientError.authenticationDowngrade: "Server no longer offers SCRAM"
+        case XMPPClientError.authenticationDowngrade: "Server no longer offers the sign-in this account used"
         case XMPPClientError.encryptionUnavailable: "Server did not offer TLS"
         case XMPPClientError.serviceNotOffered: "Domain offers no XMPP client service"
         case XMPPClientError.bindingFailed: "Resource binding failed"

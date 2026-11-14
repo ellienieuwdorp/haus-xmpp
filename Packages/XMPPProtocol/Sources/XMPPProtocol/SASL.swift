@@ -2,24 +2,63 @@ import CommonCrypto
 import CryptoKit
 import Foundation
 
-// RFC 6120 §6 (SASL1), strongest first: SCRAM-SHA-256, SCRAM-SHA-1 (RFC 5802, RFC 7677), PLAIN, only inside verified
-// TLS; PLAIN is refused once the account used SCRAM. No channel binding, so SCRAM sends GS2 flag `n`, which a server
-// offering -PLUS accepts.
+/// What an account's earlier sign-ins proved its server offers; a stream that offers less is a downgrade and gets no
+/// credential. Each part only ever turns on, and signing out lifts it.
+public struct XMPPAuthenticationPin: Sendable, Equatable, Codable {
+    /// SCRAM succeeded: PLAIN is refused.
+    public var scram: Bool
+    /// XEP-0388 SASL2 with XEP-0386 Bind 2 succeeded: a stream without them is refused.
+    public var sasl2: Bool
+    /// `tls-exporter` channel binding (RFC 9266, TLS 1.3) succeeded: only a mechanism that binds is used.
+    public var channelBinding: Bool
+
+    public init(scram: Bool = false, sasl2: Bool = false, channelBinding: Bool = false) {
+        self.scram = scram; self.sasl2 = sasl2; self.channelBinding = channelBinding
+    }
+
+    public static let none = XMPPAuthenticationPin()
+
+    public func union(_ other: XMPPAuthenticationPin) -> XMPPAuthenticationPin {
+        XMPPAuthenticationPin(scram: scram || other.scram, sasl2: sasl2 || other.sasl2, channelBinding: channelBinding || other.channelBinding)
+    }
+}
+
+// RFC 9266 `tls-exporter`, used only when the server lists it (XEP-0440).
+struct ChannelBinding: Equatable {
+    static let type = "tls-exporter"
+    static let namespace = "urn:xmpp:sasl-cb:0"
+    let data: Data
+
+    static func offered(_ features: XMLNode) -> [String] {
+        features.child("sasl-channel-binding", namespace: namespace)?.children
+            .filter { $0.name == "channel-binding" && $0.namespace == namespace }.compactMap { $0.attributes["type"] }.sorted() ?? []
+    }
+}
+
+// RFC 6120 §6 and XEP-0388, strongest first: SCRAM-SHA-256-PLUS, SCRAM-SHA-1-PLUS, SCRAM-SHA-256, SCRAM-SHA-1, PLAIN,
+// only inside verified TLS. Unbound SCRAM sends GS2 flag `n` (cannot bind here), which a server offering -PLUS accepts.
 struct SASLNegotiation {
     static let namespace = "urn:ietf:params:xml:ns:xmpp-sasl"
-    enum Mechanism: String { case scramSHA256 = "SCRAM-SHA-256", scramSHA1 = "SCRAM-SHA-1", plain = "PLAIN" }
+    enum Mechanism: String {
+        case scramSHA256Plus = "SCRAM-SHA-256-PLUS", scramSHA1Plus = "SCRAM-SHA-1-PLUS"
+        case scramSHA256 = "SCRAM-SHA-256", scramSHA1 = "SCRAM-SHA-1", plain = "PLAIN"
+        var binds: Bool { self == .scramSHA256Plus || self == .scramSHA1Plus }
+    }
 
     let mechanism: Mechanism
     private var scram: SCRAM?
     // PLAIN's credentials or SCRAM's client-first.
     let initialResponse: Data
 
-    init(offered: Set<String>, username: String, password: String, requireSCRAM: Bool, nonce: String = SCRAM.makeNonce()) throws {
+    init(offered: Set<String>, username: String, password: String, pin: XMPPAuthenticationPin, channelBinding: ChannelBinding? = nil,
+         nonce: String = SCRAM.makeNonce()) throws {
         let prepared = SASLprep.prepare(password)
-        mechanism = try Self.choose(offered: offered, preparable: prepared != nil, requireSCRAM: requireSCRAM)
+        mechanism = try Self.choose(offered: offered, preparable: prepared != nil, pin: pin, binds: channelBinding != nil)
         switch mechanism {
-        case .scramSHA256, .scramSHA1:
-            let scram = SCRAM(variant: mechanism == .scramSHA256 ? .sha256 : .sha1, username: username, password: prepared ?? "", nonce: nonce)
+        case .scramSHA256Plus, .scramSHA1Plus, .scramSHA256, .scramSHA1:
+            let variant: SCRAM.Variant = mechanism == .scramSHA256 || mechanism == .scramSHA256Plus ? .sha256 : .sha1
+            let scram = SCRAM(variant: variant, username: username, password: prepared ?? "", nonce: nonce,
+                              channelBinding: mechanism.binds ? channelBinding : nil)
             self.scram = scram
             initialResponse = Data(scram.clientFirst.utf8)
         case .plain:
@@ -27,12 +66,13 @@ struct SASLNegotiation {
         }
     }
 
-    // The one rule for every offer, whether the server's or a remembered one.
-    static func choose(offered: Set<String>, preparable: Bool, requireSCRAM: Bool) throws -> Mechanism {
-        let variant = [SCRAM.Variant.sha256, .sha1].first { offered.contains($0.mechanism.rawValue) }
-        if preparable, let variant { return variant.mechanism }
+    // The one rule for every offer, the server's or a remembered one.
+    static func choose(offered: Set<String>, preparable: Bool, pin: XMPPAuthenticationPin, binds: Bool) throws -> Mechanism {
+        let order: [Mechanism] = (binds ? [.scramSHA256Plus, .scramSHA1Plus] : []) + (pin.channelBinding ? [] : [.scramSHA256, .scramSHA1])
+        let best = order.first { offered.contains($0.rawValue) }
+        if preparable, let best { return best }
         // A password SCRAM accepted before prepares the same way again, so a missing SCRAM is the server's doing.
-        if requireSCRAM { throw variant == nil ? XMPPClientError.authenticationDowngrade : XMPPClientError.authenticationUnavailable }
+        if pin.scram || pin.channelBinding { throw best == nil ? XMPPClientError.authenticationDowngrade : XMPPClientError.authenticationUnavailable }
         if offered.contains(Mechanism.plain.rawValue) { return .plain }
         throw XMPPClientError.authenticationUnavailable
     }
@@ -78,10 +118,7 @@ struct SASLNegotiation {
 
 // RFC 5802. Hashing, HMAC and constant-time comparison from CryptoKit; PBKDF2 from CommonCrypto.
 struct SCRAM {
-    enum Variant {
-        case sha256, sha1
-        var mechanism: SASLNegotiation.Mechanism { self == .sha256 ? .scramSHA256 : .scramSHA1 }
-    }
+    enum Variant { case sha256, sha1 }
     // RFC 5802 §5.1 and RFC 7677 ask for at least 4096; the ceiling keeps a hostile count from stalling the
     // notification extension (Prosody's default is 10,000).
     static let iterations = 4096...1_000_000
@@ -90,15 +127,18 @@ struct SCRAM {
     let variant: Variant
     let clientFirst: String
     private let clientFirstBare: String
+    private let channelBindingInput: Data
     private let nonce: String
     private var password: String
     private var state = State.awaitingServerFirst
 
-    init(variant: Variant, username: String, password: String, nonce: String) {
+    init(variant: Variant, username: String, password: String, nonce: String, channelBinding: ChannelBinding? = nil) {
         self.variant = variant; self.password = password; self.nonce = nonce
         let name = username.replacingOccurrences(of: "=", with: "=3D").replacingOccurrences(of: ",", with: "=2C")
+        let header = channelBinding == nil ? "n,," : "p=\(ChannelBinding.type),,"
         clientFirstBare = "n=\(name),r=\(nonce)"
-        clientFirst = "n,," + clientFirstBare
+        clientFirst = header + clientFirstBare
+        channelBindingInput = Data(header.utf8) + (channelBinding?.data ?? Data())
     }
 
     // Base64 contains no `,`, so this is a valid SCRAM nonce.
@@ -145,7 +185,7 @@ struct SCRAM {
               let count = Int(attributes[2].dropFirst(2)), Self.iterations.contains(count) else { throw XMPPClientError.unexpectedProtocol }
         let salted = try saltedPassword(salt: salt, iterations: count)
         password = ""
-        let withoutProof = "c=biws,r=\(combinedNonce)" // biws = base64("n,,")
+        let withoutProof = "c=\(channelBindingInput.base64EncodedString()),r=\(combinedNonce)"
         let authMessage = Data("\(clientFirstBare),\(serverFirst),\(withoutProof)".utf8)
         let clientKey = mac(Data("Client Key".utf8), key: salted)
         let signature = mac(authMessage, key: SymmetricKey(data: digest(clientKey)))
@@ -221,5 +261,36 @@ enum SASLprep {
     private static func rightToLeft(_ v: UInt32) -> Bool {
         let ranges: [ClosedRange<UInt32>] = [0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFE, 0x10800...0x10FFF, 0x1E800...0x1EFFF]
         return ranges.contains { $0.contains(v) }
+    }
+}
+
+// draft-schmaus-kitten-sasl-ht-09 for XEP-0484: identity, NUL, HMAC-SHA-256(token, "Initiator" ‖ binding data); the
+// server answers with "Responder". EXPR binds to `tls-exporter`, NONE to nothing.
+struct HashedToken {
+    static let bound = "HT-SHA-256-EXPR", unbound = "HT-SHA-256-NONE"
+
+    let mechanism: String
+    let initialResponse: Data
+    private let key: SymmetricKey
+    private let channelBinding: Data
+
+    init?(token: XMPPFastToken, username: String, channelBinding: ChannelBinding?) {
+        switch token.mechanism {
+        case Self.bound: guard let channelBinding else { return nil }; self.channelBinding = channelBinding.data
+        case Self.unbound: self.channelBinding = Data()
+        default: return nil
+        }
+        mechanism = token.mechanism
+        key = SymmetricKey(data: Data(token.secret.utf8))
+        let proof = Data(HMAC<SHA256>.authenticationCode(for: Data("Initiator".utf8) + self.channelBinding, using: key))
+        initialResponse = Data(username.utf8) + Data([0]) + proof
+    }
+
+    var responderProof: Data { Data(HMAC<SHA256>.authenticationCode(for: Data("Responder".utf8) + channelBinding, using: key)) }
+
+    func verify(_ additionalData: Data) throws {
+        guard HMAC<SHA256>.isValidAuthenticationCode(additionalData, authenticating: Data("Responder".utf8) + channelBinding, using: key) else {
+            throw XMPPClientError.authenticationFailed
+        }
     }
 }
