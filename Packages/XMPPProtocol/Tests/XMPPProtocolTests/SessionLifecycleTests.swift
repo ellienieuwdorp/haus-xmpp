@@ -220,6 +220,44 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
+    // The background grace waits for this: a message counts until the server's `<a/>` covers it; presence never does.
+    @Test func aMessageAwaitsAcknowledgementUntilTheServerCountsIt() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        try await bindFresh(client, on: server)
+        // The initial presence occupies the first slot.
+        #expect(await !client.awaitsAcknowledgement())
+        _ = try await client.sendMessage(to: "bob@localhost", body: "hi", id: "m1")
+        #expect(try await server.next().name == "message")
+        #expect(await client.awaitsAcknowledgement())
+        // The client handles stanzas in order, so its answer to the `<r/>` means the `<a/>` is in.
+        try await server.send("<a xmlns='urn:xmpp:sm:3' h='2'/><r xmlns='urn:xmpp:sm:3'/>")
+        #expect(try await server.next().name == "a")
+        #expect(await !client.awaitsAcknowledgement())
+        await client.disconnect()
+        #expect(await !client.awaitsAcknowledgement())
+        await server.stop()
+    }
+
+    // A deadline cannot wait for the farewell: abort cancels the socket without the actor, and the stream ends as for
+    // any socket failure, so a disconnect still reaches the consumer.
+    @Test func abortEndsTheStreamWithoutAFarewell() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        let ended = Task {
+            for await event in client.events { if case .state(.disconnected) = event { return true } }
+            return false
+        }
+        try await bindFresh(client, on: server)
+        client.abort()
+        #expect(await ended.value)
+        #expect(await !client.isOnline)
+        #expect(try await server.remainder().isEmpty)
+        await server.stop()
+    }
+
     // A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
     // connect binds instead of resuming into the same count for the rest of the 72 h window.
     @Test func acknowledgementAboveWhatWasSentRetiresTheSession() async throws {

@@ -147,7 +147,9 @@ public actor XMPPClient {
     public nonisolated let events: AsyncStream<XMPPEvent>
     private let continuation: AsyncStream<XMPPEvent>.Continuation
     private let labCertificateAuthority: Data?
-    private var connection: NWConnection?
+    private var connection: NWConnection? { didSet { socket.set(connection) } }
+    // The transport queue and the live socket, which `abort` cancels without the actor.
+    nonisolated let socket = TransportSocket(label: "xmpp.transport")
     private var reader: Task<Void, Never>?
     private var deadline: Task<Void, Never>?
     private var liveness: Task<Void, Never>?
@@ -229,17 +231,16 @@ public actor XMPPClient {
     var groupRooms: [String: GroupRoomState] = [:]
     // Concurrent refreshes of one room share one read.
     var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
-    private var streamManagement: StreamManagement?
+    private(set) var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
     // Kept through a refused resume.
     private var stampFloor: Date?
     // Open from going online until the server's initial catch-up is over.
     private var stampWindow: ServerStampWindow?
-    private var smOffered = false
+    private(set) var smOffered = false
     private var csiOffered = false
     private let writeGate = XMPPAsyncGate()
     private var handshake: CheckedContinuation<Void, any Error>?
-    private let queue = DispatchQueue(label: "xmpp.transport")
     private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
     /// A DER CA certificate for the explicit local lab only. System trust is the default.
@@ -336,7 +337,7 @@ public actor XMPPClient {
         attempt = attemptID
         let conn = NWConnection(host: NWEndpoint.Host(endpoint.host), port: port,
                                 using: XMPPTransport.parameters(for: endpoint.security, domain: domain,
-                                                                labCertificateAuthority: labCertificateAuthority, queue: queue))
+                                                                labCertificateAuthority: labCertificateAuthority, queue: socket.queue))
         connection = conn
         deadline?.cancel()
         deadline = Task { [weak self] in
@@ -346,7 +347,7 @@ public actor XMPPClient {
             await self?.timeout(token)
         }
         do {
-            try await Self.start(conn, queue: queue)
+            try await Self.start(conn, queue: socket.queue)
             guard generation == token, attempt == attemptID else { throw XMPPClientError.connectionClosed }
             try await write(streamOpening())
         } catch {
@@ -389,7 +390,6 @@ public actor XMPPClient {
     public func disconnect() {
         finish(nil)
     }
-
     /// Cancels the connection and joins its reader; call before releasing a shared database lease, never from the
     /// reader itself. The owner must also cancel and join event consumers and senders.
     public func disconnectAndWait() async {

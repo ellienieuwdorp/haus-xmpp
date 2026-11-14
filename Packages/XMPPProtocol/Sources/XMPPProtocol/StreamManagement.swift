@@ -341,6 +341,10 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
+    func awaitsMessageAcknowledgement() -> Bool {
+        active && (snapshot?.journal.contains { $0.kind == .message } ?? false)
+    }
+
     // The only source for an advertised h. Never commits when SM is inactive or nothing moved.
     func flushHandled() async throws -> UInt32 {
         await gate.enter()
