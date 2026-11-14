@@ -49,19 +49,25 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
+    /// The network work's share of the coordinator's `runLimit`: the farewell, the final presentation and closing the
+    /// store follow it.
+    public static let timeBudget: Duration = .seconds(17)
+    public static let maximumTimeBudget: Duration = .seconds(20)
+
     /// Runs under the lease.
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
     /// `leaseWait` is spent inside `timeBudget`. With `liveness`, a busy lease first asks a running app; an answer in
     /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed and rooms follow, and
     /// once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
-    /// store and throws `handedOff` once the app confirms its takeover, `takeoverUnconfirmed` otherwise.
+    /// store and throws `handedOff` once the app confirms its takeover, `takeoverUnconfirmed` otherwise. Cancelling the
+    /// run closes its socket at once; it returns once the store is closed.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
-                            timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
+                            timeBudget: Duration = Self.timeBudget, leaseWait: Duration = .seconds(6),
                             liveness: (any LivenessChannel)? = nil, giveWay: GiveWaySwitch? = nil,
                             progress: NotificationRunProgress? = nil,
                             presentation: Presentation? = nil) async throws {
-        guard timeBudget > .zero, timeBudget <= .seconds(25), leaseWait >= .zero, leaseWait < timeBudget else {
+        guard timeBudget > .zero, timeBudget <= Self.maximumTimeBudget, leaseWait >= .zero, leaseWait < timeBudget else {
             throw BackgroundSynchronizationError.invalidTimeBudget
         }
         try Task.checkCancellation()
@@ -130,7 +136,7 @@ public struct BackgroundSynchronizer: Sendable {
                 consume: {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
                 },
-                stop: { await client.disconnectAndWait() }, giveWay: giveWay ?? GiveWaySwitch()
+                stop: { await stopTransport(client) }, giveWay: giveWay ?? GiveWaySwitch()
             ).run(store: store, deadline: deadline, clock: ContinuousClock(), progress: progress, presentation: presentation)
         } catch {
             // runBackgroundWork has joined crypto, archive and reader work. close releases ownership only if this
@@ -404,6 +410,17 @@ func finishBackgroundPresentation(store: MessageStore,
     } catch {
         try await store.close()
         throw error
+    }
+}
+
+// A cancelled run (an expiry or the run limit) has no time for the farewell: the socket closes at once, which ends every
+// read and write and leaves the stream-management session to resume.
+func stopTransport(_ client: XMPPClient) async {
+    await withTaskCancellationHandler {
+        if Task.isCancelled { await client.disconnect() }
+        await client.disconnectAndWait()
+    } onCancel: {
+        Task { await client.disconnect() }
     }
 }
 

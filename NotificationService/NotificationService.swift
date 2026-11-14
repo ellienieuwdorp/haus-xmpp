@@ -33,12 +33,25 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         }
     }
 
+    // iOS may suspend once every handler ran: `expire` answers after the lease release, the backstop with the fallback.
     override func serviceExtensionTimeWillExpire() {
         let pending = lock.withLock {
             defer { deliveries.removeAll() }
             return deliveries
         }
-        for (ticket, delivery) in pending { delivery.finish(Self.coordinator.expire(ticket: ticket)) }
+        let answered = DispatchSemaphore(value: 0)
+        Task.detached {
+            await withTaskGroup(of: Void.self) { group in
+                for (ticket, delivery) in pending {
+                    group.addTask { delivery.finish(await NotificationService.coordinator.expire(ticket: ticket)) }
+                }
+            }
+            answered.signal()
+        }
+        let backstop = NotificationRunCoordinator.expiryWait + .milliseconds(500)
+        if answered.wait(timeout: .now() + .milliseconds(Int(backstop / .milliseconds(1)))) == .timedOut {
+            for delivery in pending.values { delivery.finish(.fallback(.expired)) }
+        }
     }
 }
 
@@ -157,8 +170,7 @@ private enum ExtensionRun {
                     ? AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())) : nil,
                 giveWay: listening ? giveWay : nil,
                 progress: progress, presentation: { store, stage in
-                    // The transport lease spans presentation, so preferences cannot change; logout authorization is
-                    // reread before each presentation.
+                    // The lease spans presentation, so preferences hold; logout authorization is reread before each.
                     try await presenter.present(store: store, accountID: accountID, progress: progress, stage: stage,
                                                 blocklist: BlockedAddresses.load(accountID: accountID), authorize: {
                         guard try NotificationAccount.load() == account else { throw CancellationError() }

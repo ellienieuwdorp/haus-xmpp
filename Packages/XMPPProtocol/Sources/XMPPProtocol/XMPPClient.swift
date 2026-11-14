@@ -383,6 +383,9 @@ public actor XMPPClient {
         handshake?.resume(throwing: CandidateFailure(error: error)); handshake = nil
     }
 
+    /// The hard close: cancels the socket at once, writing no farewell `<a/>` and no `</stream>`. Every pending read,
+    /// write, request and connect fails with `connectionClosed`, and a `disconnectAndWait` in its farewell stops there.
+    /// The stream-management session stays saved, so the next connect resumes it. Use it when time runs out.
     public func disconnect() {
         finish(nil)
     }
