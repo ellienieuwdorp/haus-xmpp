@@ -94,8 +94,9 @@ enum AttachmentPreparer {
         try await prepareVideo(AVURLAsset(url: url), name: name, limit: limit, keepingFirst: first, clock: clock)
     }
 
-    // Slow-motion library videos arrive as compositions rather than files, so this takes any asset. One encode at the
-    // planned bitrate usually fits; an overshoot gets one more try at a bitrate scaled down by how far it missed.
+    // Takes any asset, as slow-motion library videos arrive as compositions. An overshoot gets one more try at a bitrate
+    // scaled by the miss; the encoder's floor can still overshoot hard content, so a last miss offers the start that
+    // fits at the rate it measured.
     static func prepareVideo(_ asset: AVAsset, name: String, limit: Int, keepingFirst first: Int? = nil,
                              clock: any Clock<Duration> = ContinuousClock()) async throws -> PreparedAttachment {
         let source = try await VideoTranscoder.source(of: asset, keepingFirst: first)
@@ -125,7 +126,11 @@ enum AttachmentPreparer {
                 return PreparedAttachment(data: data, name: (name as NSString).deletingPathExtension + ".mp4", mediaType: "video/mp4",
                                           width: plan.width, height: plan.height)
             }
-            guard attempt == 1, size > 0, let retry = VideoSizePlan.retry(plan, source: source, limit: limit, actualBytes: size) else { break }
+            guard attempt == 1, size > 0, let retry = VideoSizePlan.retry(plan, source: source, limit: limit, actualBytes: size) else {
+                let fitting = VideoSizePlan.longestSeconds(measuredBytes: size, plannedSeconds: plan.seconds, limit: limit, currentSeconds: source.seconds)
+                if let fitting { throw Failure.tooLong(seconds: fitting) }
+                break
+            }
             plan = retry
         }
         throw Failure.tooLarge(limit: limit)

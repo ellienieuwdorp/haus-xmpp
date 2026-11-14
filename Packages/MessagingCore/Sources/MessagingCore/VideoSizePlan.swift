@@ -68,6 +68,17 @@ public struct VideoSizePlan: Sendable, Equatable {
         return self.plan(source, videoBitRate: video, audioBitRate: plan.audioBitRate)
     }
 
+    /// After the last attempt still came out at `measuredBytes`, over `limit`: the longest start that fits at the rate
+    /// the encoder actually reached, with the same margins as a plan. Nil when not a second fits or the start would be
+    /// no shorter than the `currentSeconds` already tried, so an offer to shorten can never repeat itself.
+    public static func longestSeconds(measuredBytes: Int, plannedSeconds: Double, limit: Int, currentSeconds: Double) -> Int? {
+        guard measuredBytes > 0, plannedSeconds > 0, currentSeconds > 0 else { return nil }
+        let bytesPerSecond = Double(measuredBytes) / plannedSeconds
+        let fitting = (Double(limit) * budgetShare * retryShare / bytesPerSecond).rounded(.down)
+        let seconds = Int(min(fitting, currentSeconds.rounded(.up) - 1))
+        return seconds >= 1 && Double(seconds) < currentSeconds ? seconds : nil
+    }
+
     static func audioBitRate(total: Int, hasAudio: Bool) -> Int {
         guard hasAudio else { return 0 }
         return total < lowAudioBelow ? lowAudioBitRate : audioBitRate

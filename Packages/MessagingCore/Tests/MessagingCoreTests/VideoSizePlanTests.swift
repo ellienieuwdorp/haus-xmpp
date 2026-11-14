@@ -121,4 +121,21 @@ struct VideoSizePlanTests {
         let tight = try #require(encoded(VideoSizePlan.plan(starved, limit: 10 * Self.mebibyte)))
         #expect(VideoSizePlan.retry(tight, source: starved, limit: 10 * Self.mebibyte, actualBytes: 40 * Self.mebibyte) == nil)
     }
+
+    // The encoder's floor at the smallest rung can sit above the planned rate, so the start offered after a miss is
+    // sized by the rate it measured, with the plan's margins, and is always shorter than what was tried.
+    @Test func aMissAtTheEncoderFloorOffersTheStartThatFitsAtTheMeasuredRate() {
+        let limit = 10 * Self.mebibyte
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 12 * Self.mebibyte, plannedSeconds: 200, limit: limit, currentSeconds: 200) == 142)
+        let shortened = VideoSizePlan.longestSeconds(measuredBytes: 10 * Self.mebibyte + Self.mebibyte / 2, plannedSeconds: 142, limit: limit,
+                                                     currentSeconds: 142)
+        #expect(shortened == 115, "an already shortened start shortens again")
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 5 * Self.mebibyte, plannedSeconds: 10, limit: limit, currentSeconds: 10) == 9,
+                "never the length already tried")
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 5 * Self.mebibyte, plannedSeconds: 10.4, limit: limit, currentSeconds: 10.4) == 10)
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 5 * Self.mebibyte, plannedSeconds: 1, limit: limit, currentSeconds: 1) == nil)
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 100 * Self.mebibyte, plannedSeconds: 5, limit: limit, currentSeconds: 5) == nil,
+                "not a second fits")
+        #expect(VideoSizePlan.longestSeconds(measuredBytes: 0, plannedSeconds: 5, limit: limit, currentSeconds: 5) == nil)
+    }
 }
