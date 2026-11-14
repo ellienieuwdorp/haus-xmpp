@@ -61,8 +61,7 @@ public struct BackgroundSynchronizer: Sendable {
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
     /// `leaseWait` is spent inside `timeBudget`. With `liveness`, a busy lease first asks a running app; an answer in
-    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed and rooms follow, and
-    /// once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
+    /// time throws `handedOff`. `presentation` runs as `.direct` once the own archive committed, and once at the end. With `giveWay`, an app's request stops the run before its final presentation: it closes the
     /// store and throws `handedOff` once the app confirms its takeover, `takeoverUnconfirmed` otherwise. Cancelling the
     /// run closes its socket at once; it returns once the store is closed.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
@@ -128,7 +127,10 @@ public struct BackgroundSynchronizer: Sendable {
                                                                             progress: walkProgress, ownArchiveWalked: ownArchiveWalked)
                 },
                 pull: { timeout in
-                    try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
+                    let apply = try await ReadSync(store: store).fetched(account: account.accountID, encryption: encryption) {
+                        try await client.fetchDisplayedSync(timeout: timeout)
+                    }
+                    return { _ = try await apply() }
                 },
                 consume: {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
@@ -161,7 +163,8 @@ struct BackgroundCatchUp: Sendable {
     let sessionDuties: @Sendable (_ ownArchiveWalked: CatchUpMark) async -> Void
     let walk: @Sendable (_ progress: @escaping @Sendable (ArchiveSyncProgress) async -> Void,
                          _ ownArchiveWalked: @escaping @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void) async throws -> Void
-    let pull: @Sendable (Duration) async throws -> Void
+    // Fetches the read state within the timeout; what it returns applies it.
+    let pull: @Sendable (Duration) async throws -> ReadStatePrefetch.Apply
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
     var roomsAfterPost: Duration = .seconds(5)
@@ -170,22 +173,24 @@ struct BackgroundCatchUp: Sendable {
     // The budget's timer ends at `deadline`.
     func run<C: Clock<Duration>>(store: MessageStore, deadline: C.Instant, clock: C, progress: NotificationRunProgress?,
                                  presentation: BackgroundSynchronizer.Presentation?) async throws {
-        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
-        // A slow or lost server leaves the run a success.
+        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger(), early = ReadStatePrefetch()
+        // A slow or lost server leaves the run a success. The first pull takes the fetch made beside the own archive's
+        // walk; a later one fetches again.
         @Sendable func pullReadState() async throws {
-            if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout) }
+            if let apply = try await early.take() { try await apply() }
+            else if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout)() }
             await ledger.notePull()
         }
         let giveWay = giveWay
         @Sendable func walkArchives() async throws {
-            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
+            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, _ in
                 await ownArchiveWalked.reach()
                 // The own archive holds the direct messages a push is about; without it the run shows the fallback.
                 guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
                 progress?.noteOwnArchiveCommitted()
                 await caughtUp.reach()
-                guard rooms > 0 else { return }
-                // Before the claim, so chats read on another device lose their candidates.
+                // Before the claim, so chats read on another device lose their candidates. Also without rooms: the
+                // final presentation waits for the farewell's round trip.
                 try await pullReadState()
                 guard let presentation else { return }
                 // A stop waits for a presentation that is posting, so nothing is posted twice.
@@ -200,6 +205,11 @@ struct BackgroundCatchUp: Sendable {
         try await runBackgroundWork(timeBudget: clock.now.duration(to: deadline), clock: clock, caughtUp: caughtUp, giveWay: giveWay, operation: {
             try await connect()
             try Task.checkCancellation()
+            await early.start()
+            async let prefetched: Void = early.fetch {
+                guard let timeout = readSyncTimeout(until: deadline, now: clock.now) else { return nil }
+                return try await pull(timeout)
+            }
             async let duties: Void = sessionDuties(ownArchiveWalked)
             do {
                 try await withThrowingTaskGroup(of: Void.self) { group in
@@ -220,6 +230,7 @@ struct BackgroundCatchUp: Sendable {
                 await ledger.noteRoomWalkFailed(error)
             }
             if await ledger.needsPull { try await pullReadState() }
+            await prefetched
             await duties
         }, consume: {
             try await consumeUntilDisconnect(after: caughtUp) { try await consume() }
