@@ -4,8 +4,9 @@ import MessageStore
 @testable import XMPPProtocol
 @testable import MessagingCore
 
-// A room whose newest archive entry is its checkpoint needs neither a membership read nor a page; anything short of
-// that proof refreshes and walks the room after the own archive, which classifies any failure.
+// Every room's membership refresh and newest-entry probe run beside the own archive's walk. A room whose newest entry
+// is its checkpoint needs no page; anything short of that proof walks the room after the own archive, and a refresh
+// failure counts there, as the room's own refresh would.
 struct ArchiveRoomProbeTests {
     private let account = "alice@localhost"
     private let room = "quiet@rooms.localhost"
@@ -75,19 +76,19 @@ struct ArchiveRoomProbeTests {
         return operations
     }
 
-    @Test func aRoomWhoseNewestEntryIsItsCheckpointIsNeitherReadNorWalked() async throws {
+    @Test func aRoomWhoseNewestEntryIsItsCheckpointIsNotWalked() async throws {
         try await fixture { store in
             try await checkpoints(store, rooms: [room: "room-9"])
             let log = Log()
             let outcome = try await ArchiveSynchronizer(store: store).synchronize(
                 account: account, operations: operations(log, rooms: [room], newest: { _ in newest("room-9") }))
             #expect(outcome.isComplete)
-            #expect(Set(await log.events) == ["probe:\(room)", "ack:9", "fetch:own:after(own-1)"])
+            #expect(Set(await log.events) == ["refresh:\(room)", "probe:\(room)", "ack:9", "fetch:own:after(own-1)"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "room-9")
         }
     }
 
-    @Test func aRoomThatMovedIsReadAndWalkedAfterTheOwnArchiveAsBefore() async throws {
+    @Test func aRoomThatMovedIsWalkedAfterTheOwnArchive() async throws {
         try await fixture { store in
             try await checkpoints(store, rooms: [room: "room-9", other: "busy-3"])
             let log = Log()
@@ -98,11 +99,11 @@ struct ArchiveRoomProbeTests {
             let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(outcome.isComplete)
             let events = await log.events
-            let walk = try #require(events.firstIndex(of: "refresh:\(other)"))
-            // Every probe and the own archive come before the room's read; only the room that moved is read and walked.
-            #expect(events[..<walk].contains("fetch:own:after(own-1)"))
-            #expect(Array(events[walk...]) == ["refresh:\(other)", "fetch:\(other):after(busy-3)", "durable:busy-4", "ack:4"])
-            #expect(!events.contains("refresh:\(room)"))
+            let walk = try #require(events.firstIndex(of: "fetch:\(other):after(busy-3)"))
+            // Both rooms were refreshed and probed before the walk; only the room that moved is walked.
+            #expect(Set(events[..<walk]).isSuperset(of: ["fetch:own:after(own-1)", "refresh:\(room)", "refresh:\(other)"]))
+            #expect(Array(events[walk...]) == ["fetch:\(other):after(busy-3)", "durable:busy-4", "ack:4"])
+            #expect(!events.contains { $0.hasPrefix("fetch:\(room)") })
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: other)?.cursor == "busy-4")
         }
     }
@@ -128,8 +129,8 @@ struct ArchiveRoomProbeTests {
                                         fetch: { bound, selected in selected == room && bound == .before(nil) ? page("room-1", sequence: 2) : emptyPage })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             let events = await log.events
-            let walk = try #require(events.firstIndex(of: "refresh:\(room)"))
-            #expect(Array(events[walk...]) == ["refresh:\(room)", "fetch:\(room):before(nil)", "durable:room-1", "ack:2", "fetch:\(room):after(room-1)"])
+            let walk = try #require(events.firstIndex(of: "fetch:\(room):before(nil)"))
+            #expect(Array(events[walk...]) == ["fetch:\(room):before(nil)", "durable:room-1", "ack:2", "fetch:\(room):after(room-1)"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "room-1")
         }
     }
@@ -141,7 +142,7 @@ struct ArchiveRoomProbeTests {
             let outcome = try await ArchiveSynchronizer(store: store).synchronize(
                 account: account, operations: operations(log, rooms: [room], newest: { _ in newest(nil) }))
             #expect(outcome.isComplete)
-            #expect(await log.events.allSatisfy { !$0.hasPrefix("refresh:") && !$0.hasPrefix("fetch:\(room)") })
+            #expect(await log.events.allSatisfy { !$0.hasPrefix("fetch:\(room)") })
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room) == nil)
             #expect(try await store.archiveGaps(accountID: account).isEmpty)
             // What arrives later is unread, as after the walk's own empty newest page.
@@ -167,8 +168,33 @@ struct ArchiveRoomProbeTests {
             let gaps = try await store.archiveGaps(accountID: account)
             #expect(gaps.map(\.archiveID) == [room])
             #expect(gaps.first?.since == Date(timeIntervalSince1970: 100))
-            #expect(await log.events.allSatisfy { !$0.hasPrefix("refresh:") && !$0.hasPrefix("fetch:\(room)") })
+            #expect(await log.events.allSatisfy { !$0.hasPrefix("fetch:\(room)") })
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "room-9")
+        }
+    }
+
+    @Test func aRefreshFailureInThePreludeEndsTheWalkOnlyAfterTheOwnArchive() async throws {
+        try await fixture { store in
+            try await checkpoints(store, rooms: [room: "room-9"])
+            let log = Log()
+            let operations = operations(log, rooms: [room], newest: { _ in newest("room-9") }, refresh: { _ in throw XMPPIQError.malformedResponse },
+                                        fetch: { _, selected in selected == nil ? page("own-2", sequence: 1) : emptyPage })
+            await #expect(throws: XMPPIQError.self) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
+            let events = await log.events
+            #expect(events.last == "disconnect")
+            #expect(events.contains("durable:own-2"))
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "own-2")
+        }
+    }
+
+    @Test func aQuietRoomWhoseMembershipWasRevokedStaysUnfinished() async throws {
+        try await fixture { store in
+            try await checkpoints(store, rooms: [room: "room-9"])
+            let log = Log()
+            let operations = operations(log, rooms: [room], newest: { _ in newest("room-9") }, refresh: { _ in throw XMPPGroupError.incompleteMembership })
+            let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+            #expect(outcome.unfinishedRooms == [room])
+            #expect(await !log.contains("disconnect"))
         }
     }
 

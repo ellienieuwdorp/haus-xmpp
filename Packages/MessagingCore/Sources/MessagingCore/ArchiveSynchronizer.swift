@@ -35,8 +35,8 @@ public enum BackfillOutcome: Sendable, Equatable {
 /// of the archive and outer stanza identifiers. Without a forward checkpoint a walk starts at the newest page
 /// (`<before/>`) and records a backward cursor that `backfill` pages through on demand.
 public struct ArchiveSynchronizer: Sendable {
-    private let store: MessageStore
-    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    let store: MessageStore
+    static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
     public init(store: MessageStore) { self.store = store }
 
     /// `ownArchiveWalked` runs before the first room; a throw from it ends the walk and closes the stream.
@@ -192,23 +192,24 @@ public struct ArchiveSynchronizer: Sendable {
             guard Set(rooms).count == rooms.count, !rooms.contains(account) else { throw XMPPIQError.malformedResponse }
             // Own-archive group entries are validated by OMEMO against persisted room membership, so no refresh is
             // needed. An archived occupant nickname alone never recovers a real sender JID.
-            // Beside the own archive's walk: a probe processes nothing, so entries are decrypted in the same order.
-            async let probes = probeRooms(account: account, rooms: rooms, operations: operations)
+            // Beside the own archive's walk: a prelude processes nothing, so entries are decrypted in the same order.
+            async let preludes = prepareRooms(account: account, rooms: rooms, operations: operations)
             let ownArchiveComplete = try await synchronizePages(account: account, room: nil, operations: operations)
             try await operations.ownArchiveWalked(ownArchiveComplete, rooms.count)
-            let probed = try await probes
+            let prepared = try await preludes
             var unfinishedRooms: [String] = []
             for room in rooms {
                 try Task.checkCancellation()
-                if try await walkIsProvenEmpty(account: account, room: room, probe: probed[room]) { continue }
                 do {
-                    try await operations.refreshRoom(room)
+                    // A prelude's failure counts here, after the own archive, as the room's own refresh would.
+                    if let prelude = prepared[room] { try prelude.refresh.get() } else { try await operations.refreshRoom(room) }
                 } catch {
                     guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
                     Self.log.notice("room skipped before its archive walk: \(Self.describe(error), privacy: .public)")
                     unfinishedRooms.append(room)
                     continue
                 }
+                if try await walkIsProvenEmpty(account: account, room: room, probe: prepared[room]?.probe) { continue }
                 if try await !synchronizePages(account: account, room: room, operations: operations) { unfinishedRooms.append(room) }
             }
             return ArchiveSyncOutcome(ownArchiveComplete: ownArchiveComplete, unfinishedRooms: unfinishedRooms)
@@ -216,60 +217,6 @@ public struct ArchiveSynchronizer: Sendable {
             // A returned page may own unhandled stream tokens: never leave a live stream with a hole.
             await operations.disconnect()
             throw error
-        }
-    }
-
-    // What a room's newest entry proved before its walk. Only a positive answer skips the walk; anything else, a failed
-    // probe included, refreshes and walks the room, so the walk classifies the failure.
-    enum RoomProbe: Sendable, Equatable {
-        // The newest entry is the checkpoint: nothing follows it.
-        case unchanged
-        // The archive holds nothing: never walked, or under a checkpoint whose cursor is gone.
-        case empty(ArchiveCheckpoint?)
-        case unknown
-    }
-
-    // Every room at once. A probe's results were never processed and its cursor does not move, so acknowledging them
-    // owes nothing; an acknowledgement that fails ends the walk, as for a page.
-    private func probeRooms(account: String, rooms: [String], operations: ArchiveSyncOperations) async throws -> [String: RoomProbe] {
-        guard let newestEntry = operations.newestEntry, !rooms.isEmpty else { return [:] }
-        let store = store
-        return try await withThrowingTaskGroup(of: (String, RoomProbe).self) { group in
-            for room in rooms {
-                group.addTask {
-                    let checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: room)
-                    let newest: XMPPArchiveNewest
-                    do { newest = try await newestEntry(room) } catch {
-                        if error is CancellationError { throw error }
-                        Self.log.notice("room probe failed, walking: \(Self.describe(error), privacy: .public)")
-                        return (room, .unknown)
-                    }
-                    if !newest.handledTokens.isEmpty { try await operations.acknowledge(newest.handledTokens) }
-                    guard let id = newest.id else { return (room, .empty(checkpoint)) }
-                    return (room, checkpoint.map { $0.cursor == id } == true ? .unchanged : .unknown)
-                }
-            }
-            var probed: [String: RoomProbe] = [:]
-            for try await (room, probe) in group { probed[room] = probe }
-            return probed
-        }
-    }
-
-    // An empty archive records what the walk's empty newest page would: never walked, that the archive was empty;
-    // under a checkpoint, what it finds once the cursor is refused and re-anchored, a possible gap (once per cursor).
-    private func walkIsProvenEmpty(account: String, room: String, probe: RoomProbe?) async throws -> Bool {
-        switch probe {
-        case .unchanged?:
-            return true
-        case .empty(nil)?:
-            try await store.recordEmptyArchive(accountID: account, archiveID: room)
-            return true
-        case .empty(let checkpoint?)?:
-            try await store.recordArchiveGap(accountID: account, archiveID: room, cursor: checkpoint.cursor, since: checkpoint.stamp)
-            Self.log.notice("room archive empty under its checkpoint; recorded as a possible gap")
-            return true
-        case .unknown?, nil:
-            return false
         }
     }
 
@@ -348,7 +295,7 @@ public struct ArchiveSynchronizer: Sendable {
     }
 
     // No addresses or content.
-    private static func describe(_ error: any Error) -> String {
+    static func describe(_ error: any Error) -> String {
         if case .stanza(let condition)? = error as? XMPPIQError { return condition }
         return String(describing: error)
     }
