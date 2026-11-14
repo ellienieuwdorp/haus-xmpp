@@ -2,39 +2,46 @@ import Foundation
 import os
 import XMPPProtocol
 
-// Durations and counts only, never addresses or content. Steps report from their own tasks, reloads and notification
-// work from the main actor.
-final class SyncPhaseTimings: Sendable {
-    enum Phase: String {
-        case features, carbons, uploads, keys, rejoin, walk, retry, reload, notify
+/// Durations and counts only, never addresses or content. Steps report from their own tasks, reloads and
+/// notification work from the main actor.
+public final class SyncPhaseTimings: Sendable {
+    public enum Phase: String, CaseIterable, Sendable {
+        case features, carbons, uploads, keys, rejoin, walk, retry, reload, notify, roster
     }
 
     private let totals = OSAllocatedUnfairLock(initialState: (durations: [Phase: Duration](), counts: [Phase: Int]()))
 
-    func add(_ phase: Phase, since start: ContinuousClock.Instant) {
+    public init() {}
+
+    public func add(_ phase: Phase, since start: ContinuousClock.Instant) {
         let elapsed = ContinuousClock.now - start
         totals.withLock { $0.durations[phase, default: .zero] += elapsed; $0.counts[phase, default: 0] += 1 }
     }
 
-    func measure<T>(_ phase: Phase, _ body: () async throws -> T) async rethrows -> T {
+    public func measure<T>(_ phase: Phase, _ body: () async throws -> T) async rethrows -> T {
         let start = ContinuousClock.now
         defer { add(phase, since: start) }
         return try await body()
     }
 
-    func summary(_ phases: [Phase]) -> String {
+    public func summary(_ phases: [Phase]) -> String {
         let t = totals.withLock { $0 }
         var fields = phases.compactMap { phase in t.durations[phase].map { "\(phase.rawValue)_ms=\(Self.ms($0))" } }
         if phases.contains(.reload) { fields.append("reloads=\(t.counts[.reload] ?? 0)") }
         return fields.joined(separator: " ")
     }
 
-    static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
+    /// Every phase measured so far, in milliseconds.
+    public var milliseconds: [Phase: Int] { totals.withLock { $0.durations.mapValues(Self.ms) } }
 
-    struct ConnectPhases {
+    public static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
+
+    public struct ConnectPhases: Sendable {
         private var connecting, authenticating, binding: ContinuousClock.Instant?
 
-        mutating func mark(_ state: XMPPConnectionState) {
+        public init() {}
+
+        public mutating func mark(_ state: XMPPConnectionState) {
             switch state {
             case .connecting: self = ConnectPhases(); connecting = .now
             case .authenticating: authenticating = .now
@@ -43,7 +50,7 @@ final class SyncPhaseTimings: Sendable {
             }
         }
 
-        func summary(online: ContinuousClock.Instant) -> String {
+        public func summary(online: ContinuousClock.Instant) -> String {
             guard let connecting, let authenticating else { return "" }
             var text = " connect_ms=\(SyncPhaseTimings.ms(authenticating - connecting)) auth_ms=\(SyncPhaseTimings.ms((binding ?? online) - authenticating))"
             if let binding { text += " bind_ms=\(SyncPhaseTimings.ms(online - binding))" }
@@ -53,7 +60,7 @@ final class SyncPhaseTimings: Sendable {
 }
 
 extension ConnectionSetup.Operations {
-    func timed(by timings: SyncPhaseTimings) -> Self {
+    public func timed(by timings: SyncPhaseTimings) -> Self {
         var timed = self
         let base = self
         timed.features = { try await timings.measure(.features) { try await base.features() } }

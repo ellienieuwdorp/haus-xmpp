@@ -1,3 +1,4 @@
+import MessagingCore
 import OMEMO
 import XCTest
 import XMPPProtocol

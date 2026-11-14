@@ -58,19 +58,15 @@
       "_ = try? await client.updatePushRegistration(revoke, configuration: old, environment: PushService.environment ?? .sandbox)",
       "_ = try? await processor.process(event)",
       "if alsoSubscribe { try? await client.sendSubscription(.subscribe, to: event.from) }",
-      "if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }",
       "if let store { try? await DeliveredNotificationCleaner.removeRead(accountID: message.accountID, store: store) }",
       "let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }",
       "ownTypingSend = Task { await previous?.value; try? await client.sendChatState(state, to: chatID, groupchat: group) }",
-      "retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })",
       "try? FileManager.default.removeItem(at: AttachmentFiles.root(directory: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.directory(root: storageRoot, account: account))",
       "try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))",
       "try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))",
       "try? NotificationAccessGate.disable(at: NotificationAccessGate.location())",
       "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
-      "try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID",
-      "try? await Task.sleep(for: .milliseconds(10))",
       "try? await Task.sleep(for: .seconds(2))",
       "try? await Task.sleep(for: UploadFailureBudget.backOff)",
       "try? await Task.sleep(for: duration)",
@@ -83,7 +79,6 @@
       "try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)",
       "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.keysPending], sender: owner)",
       "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])",
-      "try? await encryption?.flushBundlePublications(account: account, transport: client)",
       "try? await store.close()",
       "try? await store.close()",
       "try? await store.close()",
@@ -106,11 +101,6 @@
     "unsafe.discarded-try" : [
       "Task { try? await Task.sleep(for: pinCommitDelay); await model.markChatRead(chat.id) }",
       "try? await Task.sleep(for: pinCommitDelay)"
-    ]
-  },
-  "App/ConnectionSetup.swift" : {
-    "unsafe.discarded-try" : [
-      "async let domain: Set<String>? = { try? await server() }()"
     ]
   },
   "App/ContactDirectory.swift" : {

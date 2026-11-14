@@ -101,7 +101,7 @@
    ],
    [
     "func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {",
-    22
+    16
    ],
    [
     "func loadAvatar(for chatID: String) async {",
@@ -116,10 +116,6 @@
     15
    ],
    [
-    "private func handle(_ event: XMPPEvent, token: UUID) async {",
-    46
-   ],
-   [
     "private func openStorageOnce(withoutSnapshot: Bool) async {",
     16
    ],
@@ -131,7 +127,7 @@
   "file_length": [
    [
     "",
-    3863
+    3661
    ]
   ],
   "function_body_length": [
@@ -141,7 +137,7 @@
    ],
    [
     "func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {",
-    97
+    76
    ],
    [
     "func loadDemo() async {",
@@ -150,10 +146,6 @@
    [
     "func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil, force: Bool = false) async {",
     61
-   ],
-   [
-    "private func handle(_ event: XMPPEvent, token: UUID) async {",
-    162
    ],
    [
     "private func openStorageOnce(withoutSnapshot: Bool) async {",
@@ -168,10 +160,6 @@
    [
     "nonisolated static func filesAloneCanReply(to source: ChatMessage, accountID: String, chatID: String, isGroup: Bool,",
     6
-   ],
-   [
-    "private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,",
-    7
    ]
   ],
   "line_length": [
@@ -192,14 +180,6 @@
     0
    ],
    [
-    "Logger(subsystem: \"haus.xmpp.ios\", category: \"sync\").notice(\"catch-up incomplete: own=\\(outcome.ownArchiveComplete, privacy: .public) rooms=\\(outcome.unfinishedRooms.count, privacy: .public)\")",
-    0
-   ],
-   [
-    "Self.syncLog.notice(\"catch-up finished +\\(elapsed, privacy: .public) ms pages=\\(pages, privacy: .public) messages=\\(messages, privacy: .public) entries_per_s=\\(rate, privacy: .public) \\(self.syncTimings.summary([.reload, .notify]), privacy: .public)\")",
-    0
-   ],
-   [
     "Self.syncLog.notice(\"encryption set up again: new device \\(deviceID.map(String.init) ?? \"none\", privacy: .public), discarded \\(plan.states.count, privacy: .public) rows\")",
     0
    ],
@@ -209,14 +189,6 @@
    ],
    [
     "Self.syncLog.notice(\"replies saved before the upgrade: \\(result.queued, privacy: .public) queued, \\(result.rejected, privacy: .public) rejected, \\(result.expired, privacy: .public) too old\")",
-    0
-   ],
-   [
-    "Self.syncLog.notice(\"resume reuses features=\\(setup.skipsFeatures, privacy: .public) carbons=\\(setup.skipsCarbons, privacy: .public) uploads=\\(setup.skipsUploads, privacy: .public)\")",
-    0
-   ],
-   [
-    "Self.syncLog.notice(\"setup finished +\\(self.syncElapsed(), privacy: .public) ms \\(timings.summary([.features, .carbons, .uploads, .keys, .rejoin, .walk, .retry]), privacy: .public)\")",
     0
    ],
    [
@@ -249,10 +221,6 @@
    ],
    [
     "if !rooms.isEmpty { Self.syncLog.notice(\"rooms that bounced during setup: \\(rooms.count, privacy: .public), left to rejoin: \\(needed.count, privacy: .public)\") }",
-    0
-   ],
-   [
-    "if case .encryptedMessage(let message) = event, message.provenance == .direct, let sender = message.from.split(separator: \"/\").first.map(String.init) {",
     0
    ],
    [
@@ -374,10 +342,6 @@
     0
    ],
    [
-    "} catch MessageStoreError.transportOwnershipRequired {",
-    0
-   ],
-   [
     "} catch {}",
     0
    ]
@@ -391,7 +355,7 @@
   "type_body_length": [
    [
     "final class AppModel {",
-    3368
+    3165
    ]
   ]
  },
@@ -506,20 +470,6 @@
    [
     "ChatAvatar(key: chat.id, name: chat.displayTitle, image: model.avatar(for: chat.id), isGroup: model.isGroup(chat.id), size: 40)",
     0
-   ]
-  ]
- },
- "App/ConnectionSetup.swift": {
-  "cyclomatic_complexity": [
-   [
-    "func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {",
-    20
-   ]
-  ],
-  "function_body_length": [
-   [
-    "func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {",
-    89
    ]
   ]
  },

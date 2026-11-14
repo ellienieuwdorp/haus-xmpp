@@ -1,4 +1,5 @@
 import Foundation
+import MessagingCore
 
 // Per-account state outside the store (whose tables are `AccountTable`), and what sign-out and a transfer do to it. A
 // pre-upgrade copy takes both preference domains whole, `PreUpgradeSnapshot.folders`, the account record and the push
