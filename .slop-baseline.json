@@ -504,7 +504,6 @@
   },
   "Packages/OMEMO/Sources/OMEMO/OMEMOService.swift" : {
     "unsafe.discarded-try" : [
-      "_ = try? await queueReceiptLocked(account: account, chatID: peer, messageID: stored.id, kind: .receipt)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: reaction.id, expectedWire: wire)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: receipt.id, expectedWire: wire)",
       "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: retraction.id, expectedWire: wire)"

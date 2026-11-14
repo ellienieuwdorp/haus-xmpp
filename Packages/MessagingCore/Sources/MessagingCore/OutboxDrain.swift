@@ -14,11 +14,14 @@ public struct OutboxDrain: Sendable {
     let sender: OutboxSender
     // A group message waits for its room to be joined on this connection.
     let joinedGroups: Set<String>
+    // Receipts and markers wait for a pass after the archive walk, so they neither contend with its decryption nor go
+    // out one pass at a time while it queues them.
+    let defersReceipts: Bool
 
     public init(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore, sender: OutboxSender,
-                joinedGroups: Set<String>) {
+                joinedGroups: Set<String>, defersReceipts: Bool = false) {
         self.account = account; self.client = client; self.encryption = encryption; self.store = store
-        self.sender = sender; self.joinedGroups = joinedGroups
+        self.sender = sender; self.joinedGroups = joinedGroups; self.defersReceipts = defersReceipts
     }
 
     /// `hold` and `groupFailed` return the chats they marked as held for trust.
@@ -74,7 +77,7 @@ public struct OutboxDrain: Sendable {
             try? await client.requestAcknowledgement()
         }, didChange: hooks.didChange)
         // Preparation seals; the flush re-validates and sends.
-        let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client)
+        let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client, deferringReceipts: defersReceipts)
         heldForTrust.formUnion(await hooks.hold(updates.blockedChats))
         var updateIDs = updates.messageIDs
         for update in try await store.queuedReactions(accountID: account) where joinedGroups.contains(update.chatID) {

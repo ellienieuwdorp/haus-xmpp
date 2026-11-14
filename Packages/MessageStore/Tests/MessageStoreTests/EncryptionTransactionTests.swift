@@ -147,3 +147,64 @@ private func encryptedStoreURL() throws -> URL {
     #expect(messages.first { $0.id == "dropped" }?.reply == nil)
     #expect(messages.first { $0.id == "dropped" }?.encryptionProfile == "legacy")
 }
+
+// A run of decrypted messages is one transaction: a failure in any of them, after the state write, leaves the state,
+// every message and every key transport as they were.
+@Test func incomingRunCommitsEverythingOrNothing() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+    func message(_ id: String) -> StoredMessage {
+        StoredMessage(id: id, accountID: "a", chatID: "b", senderID: "b", body: "secret \(id)", encryptionProfile: "legacy", wireID: "wire-\(id)")
+    }
+    let commits = (1...3).map { EncryptedIncomingCommit(sender: "b", digest: "d\($0)", message: message("m\($0)"), queuesReceipt: true) }
+    let control = EncryptionControl(id: "kt", recipient: "b", wire: Data([7]))
+    #expect(sqliteExecute(url: url, sql: "CREATE TRIGGER injected BEFORE INSERT ON messages WHEN NEW.id='m3' BEGIN SELECT RAISE(ABORT, 'injected'); END"))
+    await #expect(throws: MessageStoreError.self) {
+        try await store.commitEncryptedIncoming(accountID: "a", expectedRevision: 1, state: Data([2]), commits: commits, controls: [control])
+    }
+    #expect(try await store.encryptionState(accountID: "a")?.data == Data([1]))
+    #expect(try await store.messages(accountID: "a", chatID: "b").isEmpty)
+    #expect(try await store.queuedUpdates(accountID: "a", kind: .keyTransport).isEmpty)
+    #expect(try await store.queuedReceipts(accountID: "a").isEmpty)
+    #expect(sqliteExecute(url: url, sql: "DROP TRIGGER injected"))
+    await #expect(throws: MessageStoreError.invalidTransition) {
+        try await store.commitEncryptedIncoming(accountID: "a", expectedRevision: 0, state: Data([2]), commits: commits, controls: [control])
+    }
+    try await store.commitEncryptedIncoming(accountID: "a", expectedRevision: 1, state: Data([2]), commits: commits, controls: [control])
+    let reopened = try MessageStore(url: url)
+    #expect(try await reopened.encryptionState(accountID: "a")?.revision == 2)
+    #expect(try await reopened.messages(accountID: "a", chatID: "b").map(\.id) == ["m1", "m2", "m3"])
+    #expect(try await reopened.queuedReceipts(accountID: "a").map(\.targetMessageID) == ["m1", "m2", "m3"])
+    #expect(try await reopened.queuedUpdates(accountID: "a", kind: .keyTransport).map(\.id) == ["kt"])
+    for index in 1...3 { #expect(try await reopened.hasEncryptedIncoming(accountID: "a", sender: "b", digest: "d\(index)")) }
+}
+
+// A receipt that cannot be queued rolls back alone; its message and the others commit.
+@Test func unqueueableReceiptNeverFailsItsMessage() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+    // No wire ID: nothing a receipt could refer to.
+    let unaddressable = StoredMessage(id: "m1", accountID: "a", chatID: "b", senderID: "b", body: "one", encryptionProfile: "legacy")
+    let addressable = StoredMessage(id: "m2", accountID: "a", chatID: "b", senderID: "b", body: "two", encryptionProfile: "legacy", wireID: "w2")
+    try await store.commitEncryptedIncoming(accountID: "a", expectedRevision: 1, state: Data([2]), commits: [
+        EncryptedIncomingCommit(sender: "b", digest: "d1", message: unaddressable, queuesReceipt: true),
+        EncryptedIncomingCommit(sender: "b", digest: "d2", message: addressable, queuesReceipt: true),
+    ], controls: [])
+    #expect(try await store.messages(accountID: "a", chatID: "b").map(\.id) == ["m1", "m2"])
+    #expect(try await store.queuedReceipts(accountID: "a").map(\.targetMessageID) == ["m2"])
+    // Receipts switched off queue none, and the messages still commit.
+    var preferences = try await store.accountPreferences(accountID: "a")
+    preferences.deliveryReceipts = false
+    try await store.setAccountPreferences(accountID: "a", preferences)
+    let third = StoredMessage(id: "m3", accountID: "a", chatID: "b", senderID: "b", body: "three", encryptionProfile: "legacy", wireID: "w3")
+    try await store.commitEncryptedIncoming(accountID: "a", sender: "b", digest: "d3", expectedRevision: 2, state: Data([3]), message: third,
+                                            queuesReceipt: true)
+    #expect(try await store.queuedReceipts(accountID: "a").count == 1)
+    #expect(try await store.messages(accountID: "a", chatID: "b").count == 3)
+}

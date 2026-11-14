@@ -47,4 +47,25 @@ final class SnapshotBenchmarks: XCTestCase {
   func testSnapshotRoundTripWith1Session() throws { try measureRoundTrip(sessions: 1) }
   func testSnapshotRoundTripWith50Sessions() throws { try measureRoundTrip(sessions: 50) }
   func testSnapshotRoundTripWith200Sessions() throws { try measureRoundTrip(sessions: 200) }
+
+  // 100 operations per sample, so the reported seconds read as milliseconds per operation over ten.
+  private func measureHundred(sessions: Int, _ operation: (OMEMOEngine, Data) throws -> Void) throws {
+    let (snapshot, _) = try snapshot(sessions: sessions)
+    let engine = try OMEMOEngine(snapshot: snapshot)
+    try operation(engine, snapshot)
+    var failed = false
+    measure {
+      for _ in 0..<100 where !failed {
+        do { try operation(engine, snapshot) } catch { failed = true }
+      }
+    }
+    XCTAssertFalse(failed)
+  }
+
+  func testExportWith1Session() throws { try measureHundred(sessions: 1) { engine, _ in _ = try engine.snapshot() } }
+  func testExportWith200Sessions() throws { try measureHundred(sessions: 200) { engine, _ in _ = try engine.snapshot() } }
+  func testImportWith1Session() throws { try measureHundred(sessions: 1) { _, data in _ = try OMEMOEngine(snapshot: data) } }
+  func testImportWith200Sessions() throws { try measureHundred(sessions: 200) { _, data in _ = try OMEMOEngine(snapshot: data) } }
+  // A full prekey set: the check finds nothing to generate.
+  func testPreKeyCheckWith200Sessions() throws { try measureHundred(sessions: 200) { engine, _ in try engine.replenishPreKeys() } }
 }

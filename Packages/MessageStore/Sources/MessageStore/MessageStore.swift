@@ -1439,54 +1439,23 @@ public actor MessageStore {
 
     /// Authenticated plaintext, consumed prekeys/ratchet changes and replay outcome are inseparable.
     /// A key-transport-only message commits state and replay outcome without creating an empty bubble.
+    /// `queuesReceipt` queues the delivery receipt for `message` in the same transaction, as `enqueueReceipt` would;
+    /// a receipt that cannot be queued never fails the message.
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
                                         expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil,
                                         event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil,
                                         groupMembers: [String] = [], archiveStanzaID: String? = nil, readMarker: OwnReadMarker? = nil,
-                                        correctsEarlierMessage: Bool = false) throws {
-        guard !sender.isEmpty, !digest.isEmpty,
-              // Another device of this account said it displayed a peer message: nothing else rides with it.
-              readMarker.map({ _ in message == nil && reaction == nil && event == nil && groupRoom == nil && sender == accountID }) ?? true,
-              // A room's ids travel as `roomStanzaID`; this one is the account's own archive's.
-              archiveStanzaID == nil || groupRoom == nil,
-              message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
-        if let groupRoom {
-            guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false, event == nil else { throw MessageStoreError.invalidValue }
+                                        correctsEarlierMessage: Bool = false, queuesReceipt: Bool = false) throws {
+        let commit = EncryptedIncomingCommit(sender: sender, digest: digest, message: message, reaction: reaction, event: event,
+                                             archiveStanzaID: archiveStanzaID, readMarker: readMarker, queuesReceipt: queuesReceipt)
+        try commit.validate(accountID: accountID, groupRoom: groupRoom)
+        if groupRoom != nil {
+            guard event == nil else { throw MessageStoreError.invalidValue }
         } else if roomStanzaID != nil || !groupMembers.isEmpty { throw MessageStoreError.invalidValue }
         try connection.transaction {
-            guard try !hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
-            if let reaction {
-                guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
-                // Authenticated (SCE) reactions only reach here; plaintext ones go through `recordReaction` and never alert.
-                let previous = try latestReaction(accountID: accountID, reaction: reaction)
-                try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
-                try queueReactionNotification(accountID: accountID, reaction: reaction, previous: previous)
-            }
-            if let event {
-                // Authenticated content about another message, never a bubble of its own: a peer's receipt, or a retraction/correction.
-                guard message == nil, reaction == nil, groupRoom == nil, event.actorID == sender,
-                      [.delivered, .displayed, .retraction, .correction].contains(event.kind) else { throw MessageStoreError.invalidValue }
-                try insertEvent(accountID: accountID, event: event)
-            }
-            if let message {
-                try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
-                let inserted = try insertMessageInTransaction(message)
-                if let groupRoom {
-                    try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
-                    if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
-                }
-                if let archiveStanzaID { try bindDirectStanzaID(accountID: accountID, messageID: message.id, stanzaID: archiveStanzaID) }
-                // A room correction is still stored as its own row (the group decoder cannot resolve its target yet),
-                // but it edits a message the user was already alerted about: it never alerts as a new message.
-                if inserted, !correctsEarlierMessage, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
-                    try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
-                }
-            }
-            try connection.execute("INSERT INTO encrypted_inbox(account_id,sender,digest,message_id) VALUES(?,?,?,?)",
-                                   [.text(accountID), .text(sender), .text(digest), message.map { .text($0.id) } ?? .null])
-            if let readMarker { _ = try advanceReadPointer(accountID: accountID, ownMarker: readMarker) }
-            try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)])
+            try applyEncryptedIncoming(commit, accountID: accountID, groupRoom: groupRoom, roomStanzaID: roomStanzaID, groupMembers: groupMembers,
+                                       correctsEarlierMessage: correctsEarlierMessage)
             if let control {
                 guard control.recipient == sender else { throw MessageStoreError.invalidValue }
                 try insertEncryptionControl(accountID: accountID, control: control)
@@ -2524,25 +2493,30 @@ public actor MessageStore {
     /// A receipt is one row per message. A marker is cumulative, so one queued row per chat is kept
     /// and replaced only by a newer target; once submitting it is immutable and a newer target is a new row.
     public func enqueueReceipt(accountID: String, chatID: String, targetMessageID: String, kind: StoredUpdate.Kind, createdAt: Date = Date()) throws -> String? {
+        try connection.transaction {
+            try enqueueReceiptRow(accountID: accountID, chatID: chatID, targetMessageID: targetMessageID, kind: kind, createdAt: createdAt)
+        }
+    }
+
+    // Inside the caller's transaction.
+    private func enqueueReceiptRow(accountID: String, chatID: String, targetMessageID: String, kind: StoredUpdate.Kind, createdAt: Date) throws -> String? {
         guard kind == .receipt || kind == .marker, !accountID.isEmpty else { throw MessageStoreError.invalidValue }
         let preferences = try accountPreferences(accountID: accountID)
         guard kind == .receipt ? preferences.deliveryReceipts : preferences.readReceipts else { return nil }
-        return try connection.transaction {
-            guard let target = try message(accountID: accountID, messageID: targetMessageID), target.chatID == chatID, !target.isOutgoing,
-                  let wireID = target.wireID, try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == target.id else { throw MessageStoreError.invalidValue }
-            let existing = try connection.query("""
-                SELECT u.state FROM outgoing_updates u JOIN messages m ON m.account_id=u.account_id AND m.id=u.target_message_id
-                WHERE u.account_id=? AND u.kind=? AND u.chat_id=? AND (u.target_message_id=? OR (?='marker' AND m.sent_at>=?))
-                """, [.text(accountID), .text(kind.rawValue), .text(chatID), .text(targetMessageID), .text(kind.rawValue), .real(target.sentAt.timeIntervalSince1970)])
-            if !existing.isEmpty { return nil } // Already asserted this, or something newer, for this chat.
-            if kind == .marker {
-                try connection.execute("DELETE FROM outgoing_updates WHERE account_id=? AND kind='marker' AND chat_id=? AND state='queued'", [.text(accountID), .text(chatID)])
-            }
-            let id = UUID().uuidString
-            try insertUpdate(accountID: accountID, id: id, kind: kind, chatID: chatID, createdAt: createdAt,
-                             targetMessageID: targetMessageID, targetWireID: wireID, reactionsJSON: nil, wire: nil)
-            return id
+        guard let target = try message(accountID: accountID, messageID: targetMessageID), target.chatID == chatID, !target.isOutgoing,
+              let wireID = target.wireID, try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == target.id else { throw MessageStoreError.invalidValue }
+        let existing = try connection.query("""
+            SELECT u.state FROM outgoing_updates u JOIN messages m ON m.account_id=u.account_id AND m.id=u.target_message_id
+            WHERE u.account_id=? AND u.kind=? AND u.chat_id=? AND (u.target_message_id=? OR (?='marker' AND m.sent_at>=?))
+            """, [.text(accountID), .text(kind.rawValue), .text(chatID), .text(targetMessageID), .text(kind.rawValue), .real(target.sentAt.timeIntervalSince1970)])
+        if !existing.isEmpty { return nil } // Already asserted this, or something newer, for this chat.
+        if kind == .marker {
+            try connection.execute("DELETE FROM outgoing_updates WHERE account_id=? AND kind='marker' AND chat_id=? AND state='queued'", [.text(accountID), .text(chatID)])
         }
+        let id = UUID().uuidString
+        try insertUpdate(accountID: accountID, id: id, kind: kind, chatID: chatID, createdAt: createdAt,
+                         targetMessageID: targetMessageID, targetWireID: wireID, reactionsJSON: nil, wire: nil)
+        return id
     }
 
     public func queuedReceipts(accountID: String) throws -> [StoredUpdate] {
@@ -2791,27 +2765,6 @@ public actor MessageStore {
     }
 }
 
-enum Value {
-    case text(String), integer(Int), real(Double), blob(Data), null
-    var data: Data? { if case let .blob(value) = self { return value }; return nil }
-    var string: String { if case let .text(value) = self { return value }; return "" }
-    var optionalString: String? { if case let .text(value) = self { return value }; return nil }
-    var integer: Int { if case let .integer(value) = self { return value }; return 0 }
-    var double: Double {
-        if case let .real(value) = self { return value }
-        if case let .integer(value) = self { return Double(value) }
-        return 0
-    }
-    // A nullable REAL column holding seconds since 1970.
-    var optionalDate: Date? {
-        switch self {
-        case .real(let seconds): Date(timeIntervalSince1970: seconds)
-        case .integer(let seconds): Date(timeIntervalSince1970: TimeInterval(seconds))
-        default: nil
-        }
-    }
-}
-
 // Owned exclusively by its MessageStore actor after initialization.
 final class Connection: @unchecked Sendable {
     private(set) var handle: OpaquePointer?
@@ -2923,17 +2876,6 @@ private final class TransportOwnership: @unchecked Sendable {
         // Closing the descriptor drops a lock still held.
         Darwin.close(descriptor)
         if isHeld { Self.locked.withLock { $0 -= 1 } }
-    }
-}
-
-// Which file a connection opened, compared again once the lease is held.
-struct FileIdentity: Equatable, Sendable {
-    let device: UInt64
-    let inode: UInt64
-    init?(path: String) {
-        var info = stat()
-        guard stat(path, &info) == 0 else { return nil }
-        device = UInt64(info.st_dev); inode = UInt64(info.st_ino)
     }
 }
 
@@ -3111,6 +3053,69 @@ extension MessageStore {
         try connection.transaction {
             try connection.execute("PRAGMA defer_foreign_keys = ON")
             for table in tables { try connection.execute("DELETE FROM \"\(table.rawValue)\" WHERE account_id=?", [.text(accountID)]) }
+        }
+    }
+}
+
+// Direct messages decrypted together commit here.
+extension MessageStore {
+    /// Several direct messages decrypted from one state, in order, with the state they left behind: one transaction,
+    /// so either every message, receipt, key transport and the ratchet state are durable, or none is.
+    public func commitEncryptedIncoming(accountID: String, expectedRevision: Int, state: Data, commits: [EncryptedIncomingCommit],
+                                        controls: [EncryptionControl]) throws {
+        guard !commits.isEmpty, commits.count <= 1000, controls.count <= 1000,
+              Set(commits.map { [$0.sender, $0.digest] }).count == commits.count,
+              controls.allSatisfy({ control in commits.contains { $0.sender == control.recipient } }) else { throw MessageStoreError.invalidValue }
+        for commit in commits { try commit.validate(accountID: accountID, groupRoom: nil) }
+        try connection.transaction {
+            try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
+            for commit in commits { try applyEncryptedIncoming(commit, accountID: accountID) }
+            for control in controls { try insertEncryptionControl(accountID: accountID, control: control) }
+        }
+    }
+
+    // Inside the caller's transaction, after the state write.
+    private func applyEncryptedIncoming(_ commit: EncryptedIncomingCommit, accountID: String, groupRoom: String? = nil, roomStanzaID: String? = nil,
+                                        groupMembers: [String] = [], correctsEarlierMessage: Bool = false) throws {
+        let (sender, digest, message, reaction, event) = (commit.sender, commit.digest, commit.message, commit.reaction, commit.event)
+        let (archiveStanzaID, readMarker) = (commit.archiveStanzaID, commit.readMarker)
+        guard try !hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) else { throw MessageStoreError.invalidTransition }
+        if let reaction {
+            guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
+            // Authenticated (SCE) reactions only reach here; plaintext ones go through `recordReaction` and never alert.
+            let previous = try latestReaction(accountID: accountID, reaction: reaction)
+            try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
+            try queueReactionNotification(accountID: accountID, reaction: reaction, previous: previous)
+        }
+        if let event {
+            // Authenticated content about another message, never a bubble of its own: a peer's receipt, or a retraction/correction.
+            guard message == nil, reaction == nil, groupRoom == nil, event.actorID == sender,
+                  [.delivered, .displayed, .retraction, .correction].contains(event.kind) else { throw MessageStoreError.invalidValue }
+            try insertEvent(accountID: accountID, event: event)
+        }
+        if let message {
+            try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
+            let inserted = try insertMessageInTransaction(message)
+            if let groupRoom {
+                try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
+                if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
+            }
+            if let archiveStanzaID { try bindDirectStanzaID(accountID: accountID, messageID: message.id, stanzaID: archiveStanzaID) }
+            // A room correction is still stored as its own row (the group decoder cannot resolve its target yet),
+            // but it edits a message the user was already alerted about: it never alerts as a new message.
+            if inserted, !correctsEarlierMessage, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
+                try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
+            }
+        }
+        try connection.execute("INSERT INTO encrypted_inbox(account_id,sender,digest,message_id) VALUES(?,?,?,?)",
+                               [.text(accountID), .text(sender), .text(digest), message.map { .text($0.id) } ?? .null])
+        if let readMarker { _ = try advanceReadPointer(accountID: accountID, ownMarker: readMarker) }
+        try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)])
+        if commit.queuesReceipt, let message {
+            // Only the receipt rolls back when it cannot be queued.
+            _ = try? connection.savepoint("receipt") {
+                try enqueueReceiptRow(accountID: accountID, chatID: message.chatID, targetMessageID: message.id, kind: .receipt, createdAt: Date())
+            }
         }
     }
 }

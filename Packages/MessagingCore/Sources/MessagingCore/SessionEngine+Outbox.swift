@@ -18,7 +18,7 @@ extension SessionEngine {
               let client, let outboxSender, let encryption, let store else { return }
         outboxRequested = false
         let joinedGroups = delegate?.joinedRooms ?? []
-        let account = account
+        let account = account, walking = walking
         let token = generation
         let endActivity = delegate?.backgroundActivity("Send the outbox")
         if milestones.outboxStarted == nil { milestones.outboxStarted = .now }
@@ -28,7 +28,7 @@ extension SessionEngine {
             let result: Result<Set<String>, any Error>
             do {
                 let drain = OutboxDrain(account: account, client: client, encryption: encryption, store: store,
-                                        sender: outboxSender, joinedGroups: joinedGroups)
+                                        sender: outboxSender, joinedGroups: joinedGroups, defersReceipts: walking)
                 result = .success(try await drain.run(hooks))
             } catch {
                 result = .failure(error)
