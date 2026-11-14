@@ -108,7 +108,6 @@ public actor ShareSession {
                         guard let self else { return }
                         await progress(await self.states(messageIDs))
                     }))
-                try? await client.requestAcknowledgement()
             } onCancel: {
                 Task { await self.disconnect() }
             }
