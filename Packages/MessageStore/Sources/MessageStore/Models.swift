@@ -173,6 +173,11 @@ public enum MessageStoreError: Error, Equatable, Sendable {
     case replaced
     /// A snapshot copy did not match its source: integrity, schema or row counts.
     case snapshotMismatch(String)
+    /// The store is parked and `MessageStore.reopeningAllowed` is off: nothing was read or written; try again once the
+    /// process may reopen storage.
+    case suspended
+    /// `park` was asked while the store holds the transport lease or SQLite is inside a transaction.
+    case parkingRefused
 }
 
 /// Local progress and authenticated stream acknowledgement. None proves peer delivery.
