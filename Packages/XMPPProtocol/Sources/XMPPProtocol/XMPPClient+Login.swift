@@ -56,7 +56,7 @@ extension XMPPClient {
             phase = .resumingSM
         case .bind(let enable):
             guard smOffered || !enable else { throw XMPPClientError.unexpectedProtocol }
-            phase = .binding; enableAhead = enable
+            phase = .binding
             try emit(.state(.binding))
         case nil:
             if smOffered, let xml = resumeXML() {
@@ -67,13 +67,12 @@ extension XMPPClient {
     }
 
     func handleBinding(_ node: XMLNode, token: UUID) async throws {
-        if refusedEnablePending, node.namespace == "urn:xmpp:sm:3", node.name == "failed" { refusedEnablePending = false; return }
+        if earlyEnables > 0, node.namespace == "urn:xmpp:sm:3", node.name == "failed" { earlyEnables -= 1; return }
         if node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
            node.attributes["type"] == "error", !bindRetried {
             // RFC 6120 §7.7.2: a conflict or refused resource. Let the server pick one rather than fail the
             // session.
             bindRetried = true
-            refusedEnablePending = enableAhead
             try await startBinding(resource: nil)
             return
         }
@@ -87,7 +86,7 @@ extension XMPPClient {
         boundJID = bound.full
         if smOffered, streamManagement != nil {
             phase = .enablingSM
-            if !enableAhead { try await write(Self.enableXML) }
+            if earlyEnables == 0 { try await write(Self.enableXML) }
         } else { try await becomeOnline(token: token) }
     }
 
@@ -95,8 +94,13 @@ extension XMPPClient {
         // The resource is stable, so the server may route to it before `<enabled/>`. Those stanzas are uncounted by
         // the server and dropped here; archives cover them.
         if node.namespace == "jabber:client", ["message", "presence", "iq"].contains(node.name) { return }
+        if earlyEnables > 0, node.namespace == "urn:xmpp:sm:3", node.name == "failed" {
+            earlyEnables -= 1
+            if earlyEnables == 0 { try await write(Self.enableXML) }
+            return
+        }
         guard node.namespace == "urn:xmpp:sm:3", node.name == "enabled" else { throw XMPPClientError.unexpectedProtocol }
-        pipelined = false
+        pipelined = false; earlyEnables = 0
         let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")
         let id = node.attributes["id"]
         guard !resumable || id.map(validArchiveID) == true else { throw XMPPClientError.unexpectedProtocol }
@@ -163,8 +167,8 @@ extension XMPPClient {
     func startBinding(resource: String?) async throws {
         phase = .binding
         try emit(.state(.binding))
-        enableAhead = pipeliningAllowed && smOffered && streamManagement != nil
-        if enableAhead { pipelined = true }
+        let enableAhead = pipeliningAllowed && smOffered && streamManagement != nil
+        if enableAhead { pipelined = true; earlyEnables += 1 }
         try await writeTogether([bindXML(resource: resource)] + (enableAhead ? [Self.enableXML] : []))
     }
 
@@ -195,6 +199,7 @@ extension XMPPClient {
             return [xml]
         }
         restartAhead = .bind(enable: streamManagement)
+        if streamManagement { earlyEnables += 1 }
         return [bindXML(resource: resource)] + (streamManagement ? [Self.enableXML] : [])
     }
 

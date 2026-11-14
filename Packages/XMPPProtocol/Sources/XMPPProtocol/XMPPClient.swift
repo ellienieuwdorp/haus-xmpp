@@ -254,9 +254,9 @@ public actor XMPPClient {
     private var abandonedRetry = false
     var offeredMechanisms: [String] = []
     var restartAhead: RestartAhead?
-    var enableAhead = false
-    // An `<enable/>` written behind a bind the server refused gets its own `<failed/>` first.
-    var refusedEnablePending = false
+    // `<enable/>`s written behind a bind and not yet answered. A server may refuse one, as before binding, when it
+    // handles the bind late or refused it; the client then enables in order.
+    var earlyEnables = 0
     enum RestartAhead { case resume, bind(enable: Bool) }
     // Tests pin it to replay a published SCRAM exchange.
     var scramNonce: @Sendable () -> String = { SCRAM.makeNonce() }
@@ -352,7 +352,7 @@ public actor XMPPClient {
     private func connect(to endpoint: XMPPEndpoint, token: UUID, within candidateTimeout: Duration) async throws {
         guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
         framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil; abandonedRetry = false
-        sasl = nil; bindRetried = false; offeredMechanisms = []; restartAhead = nil; enableAhead = false; refusedEnablePending = false
+        sasl = nil; bindRetried = false; offeredMechanisms = []; restartAhead = nil; earlyEnables = 0
         quickstart = pipeliningAllowed ? StreamQuickstart(profile, endpoint: endpoint, password: password, requireSCRAM: requireSCRAM) : nil
         // A remembered profile for this endpoint means it negotiated STARTTLS before.
         let startTLSAhead = pipeliningAllowed && endpoint.security == .startTLS && profile?.endpoint == endpoint

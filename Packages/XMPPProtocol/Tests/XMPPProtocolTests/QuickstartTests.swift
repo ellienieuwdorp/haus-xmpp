@@ -242,6 +242,29 @@ struct QuickstartTests {
         await server.stop()
     }
 
+    // A server that handles IQs off its stream reader can read the early `<enable/>` before the bind finished and
+    // refuse it, before or after the bind's answer. The client enables in order on the same stream.
+    @Test(arguments: [true, false])
+    func anEarlyEnableRefusedBeforeTheBindFinishedIsSentAgainInOrder(_ refusalFirst: Bool) async throws {
+        let server = try await LoopbackServer.start()
+        let (client, _, persistence) = try await Self.client(server, profile: nil)
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        #expect(try await server.next().name == "enable")
+        let refusal = "<failed xmlns='urn:xmpp:sm:3'><unexpected-request xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></failed>"
+        let result = Self.bound(bind, account: "alice@localhost")
+        try await server.send(refusalFirst ? refusal + result : result + refusal)
+        #expect(try await server.next().name == "enable")
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s4' resume='true'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+        #expect(await server.connections == 1)
+        #expect(await persistence.value?.streamID == "s4")
+        await client.disconnect()
+        await server.stop()
+    }
+
     // PLAIN would put the password ahead of the features, so a PLAIN-only profile sends nothing early.
     @Test func aPlainOnlyProfileWaitsForTheFeatures() {
         let endpoint = XMPPEndpoint(host: "127.0.0.1", port: 5223, security: .directTLS)
