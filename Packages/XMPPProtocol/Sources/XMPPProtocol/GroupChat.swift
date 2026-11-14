@@ -88,6 +88,8 @@ struct GroupRoomState {
     // Occupancy a resume restored (`RetainedGroupRoom`): it routes the stanzas the server held for the session, but
     // nothing is sent to the room until a self-ping or our own presence shows the room still counts us.
     var restored = false
+    // The room's last discovery advertised `muc#self-ping-optimization`: it answers a self-ping itself.
+    var answersSelfPing = false
 
     var sendable: Bool { joined && !restored }
 
@@ -160,12 +162,15 @@ enum GroupChatWire {
     static let user = muc + "#user"
     static let admin = muc + "#admin"
     static let disco = "http://jabber.org/protocol/disco#info"
-    static func checkFeatures(_ reply: XMLNode, room: String) throws {
+    static let selfPingOptimization = muc + "#self-ping-optimization"
+    @discardableResult
+    static func checkFeatures(_ reply: XMLNode, room: String) throws -> Bool {
         guard reply.attributes["from"] == room else { throw XMPPGroupError.unsupportedRoom }
         let query = try OMEMOWire.singleton(reply, "query", disco)
         let features = Set(query.children.filter { $0.name == "feature" && $0.namespace == disco }.compactMap { $0.attributes["var"] })
         guard features.contains("muc_nonanonymous"), features.contains("muc_membersonly"), features.contains("urn:xmpp:sid:0"),
               !features.contains("muc_semianonymous"), !features.contains("muc_open") else { throw XMPPGroupError.unsupportedRoom }
+        return features.contains(selfPingOptimization)
     }
     static func members(_ reply: XMLNode, room: String, affiliation: String) throws -> [String] {
         guard reply.attributes["from"] == room else { throw XMPPGroupError.incompleteMembership }
@@ -365,7 +370,8 @@ extension XMPPClient {
         async let members = requestIQ(type: "get", to: room, payload: affiliationQuery("member"))
         async let admins = requestIQ(type: "get", to: room, payload: affiliationQuery("admin"))
         async let owners = requestIQ(type: "get", to: room, payload: affiliationQuery("owner"))
-        try GroupChatWire.checkFeatures(try await disco, room: room)
+        let answersSelfPing = try GroupChatWire.checkFeatures(try await disco, room: room)
+        groupRooms[room]?.answersSelfPing = answersSelfPing
         var all = try GroupChatWire.members(try await members, room: room, affiliation: "member")
         all += try GroupChatWire.members(try await admins, room: room, affiliation: "admin")
         all += try GroupChatWire.members(try await owners, room: room, affiliation: "owner")

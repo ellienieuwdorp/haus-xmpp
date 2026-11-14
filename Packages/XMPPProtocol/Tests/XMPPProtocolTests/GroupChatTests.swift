@@ -208,3 +208,12 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     unvalidated.validatedRevision = nil
     #expect(RetainedGroupRoom(room: groupRoom, state: unvalidated, account: groupAlice) == nil)
 }
+
+@Test func discoveryNotesWhetherTheRoomAnswersSelfPingsItself() throws {
+    func discovery(_ features: [String]) throws -> XMPPProtocol.XMLNode {
+        try groupNode("<iq from='\(groupRoom)'><query xmlns='\(GroupChatWire.disco)'>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query></iq>")
+    }
+    let required = ["muc_nonanonymous", "muc_membersonly", "urn:xmpp:sid:0"]
+    #expect(try !GroupChatWire.checkFeatures(discovery(required), room: groupRoom))
+    #expect(try GroupChatWire.checkFeatures(discovery(required + [GroupChatWire.selfPingOptimization]), room: groupRoom))
+}

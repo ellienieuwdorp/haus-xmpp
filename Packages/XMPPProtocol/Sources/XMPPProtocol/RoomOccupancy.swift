@@ -12,17 +12,19 @@ struct RetainedGroupRoom: Codable, Sendable, Equatable {
     let nickname: String
     let members: [String]
     let occupants: [String: String]
+    let answersSelfPing: Bool
 
     static let limit = 1_000
 
-    init(room: String, nickname: String, members: [String], occupants: [String: String]) {
+    init(room: String, nickname: String, members: [String], occupants: [String: String], answersSelfPing: Bool = false) {
         self.room = room; self.nickname = nickname; self.members = members; self.occupants = occupants
+        self.answersSelfPing = answersSelfPing
     }
 
     init?(room: String, state: GroupRoomState, account: String) {
         guard state.joined, state.validatedRevision != nil, !state.members.isEmpty, let nickname = state.nickname,
               state.occupants[room + "/" + nickname] == account else { return nil }
-        self.init(room: room, nickname: nickname, members: state.members, occupants: state.occupants)
+        self.init(room: room, nickname: nickname, members: state.members, occupants: state.occupants, answersSelfPing: state.answersSelfPing)
     }
 
     // Validated as on the wire: saved state is never trusted more than the stanzas it came from.
@@ -33,7 +35,7 @@ struct RetainedGroupRoom: Codable, Sendable, Equatable {
               occupants.allSatisfy({ $0.key.hasPrefix(room + "/") && $0.key.count > room.count + 1 && OMEMOWire.bareJID($0.value) == $0.value })
         else { return nil }
         return GroupRoomState(members: members.sorted(), occupants: occupants, revision: 0, joined: true, nickname: nickname,
-                              validatedRevision: 0, restored: true)
+                              validatedRevision: 0, restored: true, answersSelfPing: answersSelfPing)
     }
 }
 
@@ -66,20 +68,13 @@ extension XMPPClient {
     }
 
     /// XEP-0410 §3.2: a result, `service-unavailable` or `feature-not-implemented` mean the room still counts us. Anything
-    /// else, a timeout included, ends the restored occupancy, so the caller joins as after a fresh bind.
+    /// else, a timeout included, ends the restored occupancy, so the caller joins as after a fresh bind. Only a room that
+    /// answers self-pings itself (§3.3) is asked: another routes the ping to some joined client, which may never answer.
     public func confirmRestoredGroupRoom(_ room: String, within limit: Duration = XMPPClient.selfPingTimeout) async -> Bool {
         guard let state = groupRooms[room], let nickname = state.nickname else { return false }
         guard state.restored else { return state.sendable }
         let token = generation
-        let confirmed: Bool
-        do {
-            _ = try await requestIQ(type: "get", to: room + "/" + nickname, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: limit)
-            confirmed = true
-        } catch XMPPIQError.stanza(let condition) {
-            confirmed = ["service-unavailable", "feature-not-implemented"].contains(condition)
-        } catch {
-            confirmed = false
-        }
+        let confirmed = state.answersSelfPing ? await selfPing(room + "/" + nickname, within: limit) : false
         guard generation == token, !Task.isCancelled, var current = groupRooms[room], current.nickname == nickname else { return false }
         guard current.restored else { return current.sendable }
         if confirmed, current.joined {
@@ -90,6 +85,17 @@ extension XMPPClient {
         }
         groupRooms[room] = current
         return current.sendable
+    }
+
+    private func selfPing(_ occupant: String, within limit: Duration) async -> Bool {
+        do {
+            _ = try await requestIQ(type: "get", to: occupant, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: limit)
+            return true
+        } catch XMPPIQError.stanza(let condition) {
+            return ["service-unavailable", "feature-not-implemented"].contains(condition)
+        } catch {
+            return false
+        }
     }
 
     // Before anything redelivered is read; a malformed room drops the whole set.

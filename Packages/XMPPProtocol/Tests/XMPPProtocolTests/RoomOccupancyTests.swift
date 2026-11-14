@@ -39,7 +39,8 @@ struct RoomOccupancyTests {
         snapshot.capabilities = EntityCapabilities.verification
         snapshot.availability = .active
         snapshot.retainedRooms = RetainedGroupRooms(handled: handled, rooms: rooms.map {
-            RetainedGroupRoom(room: $0, nickname: "alice", members: [alice, bob], occupants: [$0 + "/alice": alice, $0 + "/bob": bob])
+            RetainedGroupRoom(room: $0, nickname: "alice", members: [alice, bob], occupants: [$0 + "/alice": alice, $0 + "/bob": bob],
+                              answersSelfPing: !$0.hasPrefix("r6@"))
         })
         return snapshot
     }
@@ -80,6 +81,7 @@ struct RoomOccupancyTests {
             let id = query.attributes["id"] ?? ""
             if query.child("query", namespace: GroupChatWire.disco) != nil {
                 let features = "<feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/>"
+                    + "<feature var='\(GroupChatWire.selfPingOptimization)'/>"
                 try await server.send("<iq type='result' from='\(room)' id='\(id)'><query xmlns='\(GroupChatWire.disco)'>\(features)</query></iq>")
             } else {
                 let affiliation = query.child("query", namespace: GroupChatWire.admin)?.child("item", namespace: GroupChatWire.admin)?.attributes["affiliation"]
@@ -135,7 +137,8 @@ struct RoomOccupancyTests {
         let retained = try #require(saved.retainedRooms)
         #expect(retained.handled == saved.inboundHandled)
         #expect(retained.rooms == [RetainedGroupRoom(room: Self.room, nickname: "alice", members: [Self.alice, Self.bob],
-                                                     occupants: [Self.room + "/alice": Self.alice, Self.room + "/bob": Self.bob])])
+                                                     occupants: [Self.room + "/alice": Self.alice, Self.room + "/bob": Self.bob],
+                                                     answersSelfPing: true)])
 
         let (server, client) = try await resume(persistence)
         var events = client.events.makeAsyncIterator()
@@ -163,13 +166,14 @@ struct RoomOccupancyTests {
     }
 
     // XEP-0410 §3.2: a result, or an error only a joined client's own answer produces, confirms; anything else (not an
-    // occupant, an unreachable service) ends the restored occupancy, and so does a room returning our message first.
+    // occupant, an unreachable service) ends the restored occupancy, and so do a returned message and a room that would
+    // route the ping to some other client (§3.3).
     @Test func selfPingAnswersDecideWhetherARestoredRoomStillCountsUs() async throws {
-        let rooms = (1...5).map { "r\($0)@rooms.localhost" }
+        let rooms = (1...6).map { "r\($0)@rooms.localhost" }
         let persistence = Persistence(Self.retained(rooms, handled: 3))
         let (server, client) = try await resume(persistence)
         var events = client.events.makeAsyncIterator()
-        #expect(await client.restoredGroupRooms().count == 5)
+        #expect(await client.restoredGroupRooms().count == 6)
         let notAcceptable = "<error type='cancel'><not-acceptable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error>"
         try await server.send("<message from='\(rooms[4])' to='\(Self.alice)/r' type='error' id='g1'>\(notAcceptable)</message>")
         while let event = await events.next() { if case .messageError = event { break } }
@@ -189,7 +193,7 @@ struct RoomOccupancyTests {
             for await (room, answer) in group { answers[room] = answer }
             return answers
         }
-        #expect(answers == [rooms[0]: true, rooms[1]: true, rooms[2]: false, rooms[3]: false, rooms[4]: false])
+        #expect(answers == [rooms[0]: true, rooms[1]: true, rooms[2]: false, rooms[3]: false, rooms[4]: false, rooms[5]: false])
         for (index, room) in rooms.enumerated() {
             #expect(try await client.groupRoomSnapshot(room)?.joined == (index < 2))
         }
