@@ -6,8 +6,8 @@ import XMPPProtocol
 @testable import MessagingCore
 
 // Once, on existing accounts and rooms: identities, trust, the sender's and the peer's stores (the peer knows two rooms)
-// and the measured account's snapshots (before the seeded messages, caught up, and caught up with five rooms). Plain clients without stream management, so
-// no snapshot holds a session to resume.
+// and the measured accounts' snapshots (before the seeded messages, caught up, caught up with five rooms, and the bulk
+// account before its backlog). Plain clients without stream management, so no snapshot holds a session to resume.
 @Suite(.serialized, .enabled(if: SyncBenchEnvironment.provisioning))
 struct SyncBenchProvisionTests {
     private struct Party {
@@ -75,17 +75,20 @@ struct SyncBenchProvisionTests {
         // A missing directory is the first provisioning.
         try? FileManager.default.removeItem(at: work)
         try? FileManager.default.removeItem(at: environment.peerStore)
-        let appDirectory = work.appending(path: "app"), peerDirectory = environment.peerStore
+        let appDirectory = work.appending(path: "app"), peerDirectory = environment.peerStore, bulkDirectory = work.appending(path: "bulk")
 
         // Identities and trust: the app and the sender trust the peer, the peer trusts both.
         var app = try await Party.open(fixture.app, at: appDirectory, authority: authority)
         let peer = try await Party.open(fixture.peer, at: peerDirectory, authority: authority)
         let sender = try await Party.open(fixture.sender, at: environment.senderStore, authority: authority)
-        for party in [app, peer, sender] { try await party.bench.encryption.initialize(account: party.account.jid, transport: party.client) }
+        let bulk = try await Party.open(fixture.bulk, at: bulkDirectory, authority: authority)
+        for party in [app, peer, sender, bulk] { try await party.bench.encryption.initialize(account: party.account.jid, transport: party.client) }
         try await app.trust(fixture.peer)
         try await sender.trust(fixture.peer)
+        try await bulk.trust(fixture.peer)
         try await peer.trust(fixture.app)
         try await peer.trust(fixture.sender)
+        try await peer.trust(fixture.bulk)
         for room in fixture.rooms.prefix(2) {
             _ = try await app.bench.encryption.refreshGroupDevices(account: fixture.app.jid, room: room, transport: app.client)
             _ = try await peer.bench.encryption.refreshGroupDevices(account: fixture.peer.jid, room: room, transport: peer.client)
@@ -96,8 +99,13 @@ struct SyncBenchProvisionTests {
         try await sender.close()
         try await app.close()
         try snapshot(appDirectory, as: "catchup", in: environment)
+        try await peer.send(1, to: fixture.bulk)
+        try await bulk.walk()
+        try await bulk.close()
+        try snapshot(bulkDirectory, as: "bulk", in: environment)
 
         try await peer.send(SyncBenchFixture.catchUpMessages, to: fixture.app)
+        try await peer.send(SyncBenchFixture.bulkMessages, to: fixture.bulk)
         try await peer.close()
         app = try await Party.open(fixture.app, at: appDirectory, authority: authority)
         try await app.walk()

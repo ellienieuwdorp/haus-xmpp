@@ -66,6 +66,21 @@ import XMPPProtocol
         }
     }
 
+    // The same with a larger backlog, on an account of its own.
+    @Test(.enabled(if: SyncBenchEnvironment.full)) func catchUpLarge() async throws {
+        try await run("bulk", account: \.bulk, rooms: 0) { session, environment in
+            session.mayDrainOutbox = false
+            try await connectAndSettle(session, "the large catch-up")
+            var result = session.result("catchup-large")
+            let messages = result.values["catchUpMessages"] ?? 0
+            let walk = (result.wallMs["caughtUp"] ?? 0) - (result.wallMs["online"] ?? 0)
+            result.values["entriesPerSecond"] = walk > 0 ? messages * 1000 / walk : 0
+            result.passed = messages >= SyncBenchFixture.bulkMessages
+            try result.write(to: environment.results)
+            #expect(messages >= SyncBenchFixture.bulkMessages)
+        }
+    }
+
     // Five joined rooms, fresh and then resumed.
     @Test(.enabled(if: SyncBenchEnvironment.full)) func rooms() async throws {
         try await run("rooms", account: \.app, rooms: 5) { session, environment in
