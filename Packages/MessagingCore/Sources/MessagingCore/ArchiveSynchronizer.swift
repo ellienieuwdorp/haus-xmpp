@@ -31,9 +31,10 @@ public enum BackfillOutcome: Sendable, Equatable {
 }
 
 /// One bounded page at a time. Ratchet, message or pending-ciphertext commits precede the archive cursor, which
-/// precedes the SM handled acknowledgement. Repeating a partial page is safe: OMEMO replay identity is independent
-/// of the archive and outer stanza identifiers. Without a forward checkpoint a walk starts at the newest page
-/// (`<before/>`) and records a backward cursor that `backfill` pages through on demand.
+/// precedes the SM handled acknowledgement of the page; results held ahead of the walk are acknowledged on arrival.
+/// Repeating a partial page is safe: OMEMO replay identity is independent of the archive and outer stanza
+/// identifiers. Without a forward checkpoint a walk starts at the newest page (`<before/>`) and records a backward
+/// cursor that `backfill` pages through on demand.
 public struct ArchiveSynchronizer: Sendable {
     let store: MessageStore
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
@@ -95,12 +96,14 @@ public struct ArchiveSynchronizer: Sendable {
     // Shared by both walks, so their processing and acknowledgement cannot drift.
     private func productionOperations(account: String, client: XMPPClient, encryption: OMEMOService,
                                       progress: (@Sendable (ArchiveSyncProgress) async -> Void)?) -> ArchiveSyncOperations {
-        ArchiveSyncOperations(
+        let walk = UUID()
+        return ArchiveSyncOperations(
             knownRooms: { Array(try await encryption.knownGroupRooms(account: account).keys).sorted() },
             refreshRoom: { room in _ = try await client.refreshGroupRoom(room) },
-            fetchPage: { bound, room in try await client.fetchArchivePage(bound, limit: 100, room: room) },
+            fetchPage: { bound, room in try await client.fetchArchivePage(bound, limit: 100, room: room, walk: walk) },
             newestEntry: { room in try await client.newestArchiveEntry(room: room) },
             prefetchesPages: true,
+            pagesFromNewest: true,
             process: { archived in try await self.process(account: account, archived: archived, encryption: encryption, transport: client) },
             processPage: { entries in try await self.processPage(account: account, entries: entries, encryption: encryption, transport: client) },
             acknowledge: { tokens in
@@ -212,6 +215,14 @@ public struct ArchiveSynchronizer: Sendable {
         }
     }
 
+    // The connection stays, so nothing fetched ahead may stay unacknowledged on it.
+    private static func endWalk(after error: any Error, room: String?, source: ArchivePageSource, operations: ArchiveSyncOperations) async throws {
+        guard await endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
+        log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(describe(error), privacy: .public)")
+        let ahead = await source.cancel()
+        if !ahead.isEmpty { try await operations.acknowledge(ahead) }
+    }
+
     // Servers compare archive times at whole-second or coarser precision; repeated entries are harmless.
     static let reanchorMargin: TimeInterval = 2
 
@@ -277,8 +288,7 @@ public struct ArchiveSynchronizer: Sendable {
                         Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
                         continue
                     }
-                    guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
-                    Self.log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(Self.describe(error), privacy: .public)")
+                    try await Self.endWalk(after: error, room: room, source: source, operations: operations)
                     return false
                 }
                 // An archive that refuses the re-anchored query too has lost nothing we could still fetch.
@@ -287,7 +297,7 @@ public struct ArchiveSynchronizer: Sendable {
                     lostCursor = nil
                 }
                 let newestFirst = if case .before = bound { true } else { false }
-                source.prefetch(after: page, continuing: newestFirst || !page.complete)
+                source.handed(page, continuing: newestFirst || !page.complete, forward: !newestFirst)
                 try await operations.processEntries(page.messages)
                 try Task.checkCancellation()
                 checkpoint = try await commitCursor(of: page, newestFirst: newestFirst, after: checkpoint, account: account, archive: archive)
@@ -303,7 +313,7 @@ public struct ArchiveSynchronizer: Sendable {
                 if page.complete, !newestFirst { return true }
             }
         } catch {
-            await source.cancel()
+            _ = await source.cancel()
             throw error
         }
     }
@@ -413,25 +423,6 @@ public struct ArchiveSynchronizer: Sendable {
     }
 }
 
-// Test seam for durable-before-cursor and interruption ordering; production adapters delegate provenance and
-// cryptography to their packages.
-struct ArchiveSyncOperations: Sendable {
-    let knownRooms: @Sendable () async throws -> [String]
-    let refreshRoom: @Sendable (String) async throws -> Void
-    let fetchPage: @Sendable (XMPPArchiveBound, String?) async throws -> XMPPArchivePage
-    // A room's newest entry without its content; nil walks every room.
-    var newestEntry: (@Sendable (String) async throws -> XMPPArchiveNewest)? = nil
-    var prefetchesPages = false
-    let process: @Sendable (XMPPArchiveMessage) async throws -> Void
-    // A page's entries in order, durable when it returns; nil processes them one by one.
-    var processPage: (@Sendable ([XMPPArchiveMessage]) async throws -> Void)? = nil
-    let acknowledge: @Sendable ([XMPPInboundToken]) async throws -> Void
-    let disconnect: @Sendable () async -> Void
-    let progress: @Sendable (ArchiveSyncProgress) async -> Void
-    var isOnline: @Sendable () async -> Bool = { true }
-    var ownArchiveWalked: @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void = { _, _ in }
-}
-
 // Counts and milliseconds only, no addresses or content. `fetch` runs from query to `<fin/>`; `other` is mostly cursor
 // commits.
 final class ArchiveWalkTimings: Sendable {
@@ -464,36 +455,4 @@ final class ArchiveWalkTimings: Sendable {
     }
 
     static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
-}
-
-extension ArchiveSyncOperations {
-    func processEntries(_ entries: [XMPPArchiveMessage]) async throws {
-        if let processPage { return try await processPage(entries) }
-        for archived in entries {
-            try Task.checkCancellation()
-            try await process(archived)
-        }
-    }
-
-    func timed(by walk: ArchiveWalkTimings) -> ArchiveSyncOperations {
-        let base = self
-        var processPage: (@Sendable ([XMPPArchiveMessage]) async throws -> Void)?
-        if let page = base.processPage {
-            processPage = { @Sendable entries in try await walk.measure(.process, "process page") { try await page(entries) } }
-        }
-        return ArchiveSyncOperations(
-            knownRooms: base.knownRooms, refreshRoom: base.refreshRoom,
-            fetchPage: { bound, room in
-                let page = try await walk.measure(.fetch, "fetch page") { try await base.fetchPage(bound, room) }
-                walk.fetched(entries: page.messages.count)
-                return page
-            },
-            prefetchesPages: base.prefetchesPages,
-            process: { archived in try await walk.measure(.process, "process entry") { try await base.process(archived) } },
-            processPage: processPage,
-            acknowledge: { tokens in try await walk.measure(.acknowledge, "acknowledge") { try await base.acknowledge(tokens) } },
-            disconnect: base.disconnect,
-            progress: { progress in await walk.measure(.progress, "progress") { await base.progress(progress) } },
-            isOnline: base.isOnline)
-    }
 }
