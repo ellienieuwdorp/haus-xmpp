@@ -11,14 +11,16 @@ import MessagingCore
 @MainActor final class SuspensionLockTests: XCTestCase {
     private let parkingClock = StorageParking.shared.clock
     private let parkStores = StorageParking.shared.parkStores
+    private let remaining = StorageParking.shared.remaining
 
     // A fresh model and its scene in front; at the end of the test it returns to the front and the defaults come back.
     private func start() async throws -> AppScene {
         let scene = try await AppScene()
-        addTeardownBlock { @MainActor [parkingClock, parkStores] in
+        addTeardownBlock { @MainActor [parkingClock, parkStores, remaining] in
             await scene.returnToFront()
             StorageParking.shared.clock = parkingClock
             StorageParking.shared.parkStores = parkStores
+            StorageParking.shared.remaining = remaining
         }
         return scene
     }
@@ -156,12 +158,13 @@ import MessagingCore
         assertNothingLocked(scene, "after a park overlapped by other work")
     }
 
-    // A store that refuses, or a park that outlasts its deadline, keeps the background time: iOS then ends the process
+    // A store that refuses keeps the background time once no time is left to try again: iOS then ends the process
     // rather than suspending it holding SQLite locks. New background time or the front ends the kept time.
-    func testAParkThatFailsOrMissesItsDeadlineKeepsTheBackgroundTime() async throws {
+    func testAParkRefusedWithNoTimeLeftKeepsTheBackgroundTime() async throws {
         let scene = try await start()
         await scene.model.prepare()
         let parkAll = parkStores
+        StorageParking.shared.remaining = { .zero }
         StorageParking.shared.parkStores = { _ = await parkAll(); return false }
         await scene.leave()
         XCTAssertEqual(StorageParking.shared.kept, 1, "a refused park keeps the transition's background time")
@@ -174,22 +177,54 @@ import MessagingCore
         XCTAssertEqual(StorageParking.shared.kept, 2, "its release parks again, and that park is refused too")
         scene.move(to: .inactive)
         XCTAssertEqual(StorageParking.shared.kept, 0, "new background time ends it")
-        scene.move(to: .active)
-        await scene.model.lifecycleSettled()
+    }
 
-        let clock = ManualClock()
+    // A park that outlasts its deadline keeps the time while it runs, and ends it once it completes with nothing open.
+    func testALateParkEndsTheKeptTimeOnceItCompletes() async throws {
+        let scene = try await start()
+        await scene.model.prepare()
+        let parkAll = parkStores, clock = ManualClock()
         StorageParking.shared.clock = clock
+        StorageParking.shared.remaining = { .seconds(25) }
         let asked = expectation(description: "the park is under way")
         StorageParking.shared.parkStores = { asked.fulfill(); await clock.stuck(); return await parkAll() }
         scene.move(to: .inactive)
         scene.move(to: .background)
         await scene.model.lifecycleSettled()
-        await fulfillment(of: [asked, clock.sleeping], timeout: 10)
+        await fulfillment(of: [asked, clock.sleeps(1)], timeout: 10)
         XCTAssertEqual(StorageParking.shared.kept, 1, "nothing ends while the park runs")
+        let awaitingLatePark = clock.sleeps(2)
         clock.advance(by: StorageParking.shared.deadline)
-        await StorageParking.shared.settled()
-        XCTAssertEqual(StorageParking.shared.kept, 1, "the deadline passed: the time is kept")
+        await fulfillment(of: [awaitingLatePark], timeout: 10)
+        XCTAssertEqual(StorageParking.shared.kept, 1, "the deadline passed: the time is kept while the park runs on")
         clock.release()
+        await StorageParking.shared.settled()
+        XCTAssertEqual(StorageParking.shared.kept, 0, "the late park completed with nothing open: the time ends")
+        assertNothingLocked(scene, "after a late park")
+        clock.advance(by: .seconds(60))
+    }
+
+    // A store that refuses while a lease holder finishes is parked on a later attempt within the background time.
+    func testARefusedParkIsRetriedWhileBackgroundTimeLasts() async throws {
+        let scene = try await start()
+        await scene.model.prepare()
+        let holder = try MessageStore(url: scene.database), clock = ManualClock()
+        try await holder.acquireTransportOwnership()
+        StorageParking.shared.clock = clock
+        StorageParking.shared.remaining = { .seconds(25) }
+        scene.move(to: .inactive)
+        scene.move(to: .background)
+        await scene.model.lifecycleSettled()
+        // The first attempt's deadline and the wait before the second.
+        await fulfillment(of: [clock.sleeps(2)], timeout: 10)
+        XCTAssertEqual(StorageParking.shared.kept, 1, "the refusal keeps the time while a retry is due")
+        try await holder.releaseTransportOwnership()
+        clock.advance(by: StorageParking.shared.retryInterval)
+        await StorageParking.shared.settled()
+        XCTAssertEqual(StorageParking.shared.kept, 0, "the retry parked every store: the time ends")
+        assertNothingLocked(scene, "after a retried park")
+        clock.advance(by: .seconds(60))
+        try await holder.close()
     }
 }
 
@@ -227,7 +262,7 @@ import MessagingCore
     }
 }
 
-// Moves only when the test moves it; `sleeping` is fulfilled once something sleeps on it. `lock` guards all state.
+// Moves only when the test moves it; `sleeps(n)` is fulfilled once n sleeps have begun on it. `lock` guards all state.
 private final class ManualClock: Clock, @unchecked Sendable {
     struct Instant: InstantProtocol {
         var offset: Duration
@@ -236,29 +271,41 @@ private final class ManualClock: Clock, @unchecked Sendable {
         static func < (lhs: Instant, rhs: Instant) -> Bool { lhs.offset < rhs.offset }
     }
 
-    let sleeping: XCTestExpectation = {
-        let sleeping = XCTestExpectation(description: "a sleeper")
-        sleeping.assertForOverFulfill = false
-        return sleeping
-    }()
     private let lock = NSLock()
     private var current = Instant(offset: .zero)
     private var sleepers: [(deadline: Instant, continuation: CheckedContinuation<Void, Never>)] = []
     private var held: [CheckedContinuation<Void, Never>] = []
+    private var begun = 0
+    private var awaited: [(count: Int, expectation: XCTestExpectation)] = []
 
     var now: Instant { lock.withLock { current } }
     var minimumResolution: Duration { .zero }
 
     func sleep(until deadline: Instant, tolerance: Duration? = nil) async throws {
         await withCheckedContinuation { continuation in
-            let due = lock.withLock {
-                if deadline <= current { return true }
+            let (due, reached) = lock.withLock {
+                begun += 1
+                let reached = awaited.filter { $0.count <= begun }.map(\.expectation)
+                awaited.removeAll { $0.count <= begun }
+                if deadline <= current { return (true, reached) }
                 sleepers.append((deadline, continuation))
-                return false
+                return (false, reached)
             }
-            if due { continuation.resume() } else { sleeping.fulfill() }
+            reached.forEach { $0.fulfill() }
+            if due { continuation.resume() }
         }
         try Task.checkCancellation()
+    }
+
+    func sleeps(_ count: Int) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "\(count) sleeps begun")
+        let reached = lock.withLock {
+            if begun >= count { return true }
+            awaited.append((count, expectation))
+            return false
+        }
+        if reached { expectation.fulfill() }
+        return expectation
     }
 
     func advance(by duration: Duration) {

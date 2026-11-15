@@ -44,6 +44,7 @@
 		0EF55AE64AB62786BE4F5220 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2A5C546425283FA7DF4F92F8 /* PrivacyInfo.xcprivacy */; };
 		0F272B2D1FAAB3F7BDF2686F /* MacMessageActionsToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7810262DA1DC5F6C17EF68F /* MacMessageActionsToolbar.swift */; };
 		0F55C869FC6866CDDBC5CB73 /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
+		0F8480E6869C49D731AA25F6 /* StorageParking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0542EFEBF2C47D95B56AA1F /* StorageParking.swift */; };
 		106C2F5D77A7AD14FAABBDDC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 721516AB2DE102AB78AB3630 /* RootView.swift */; };
 		10C87C54F49D7C6681BCB316 /* ContactDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FC65A732AA1ECEF720F45E /* ContactDirectory.swift */; };
 		10D3355C58397EE28A011651 /* ChatContactRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F53662704210FC05D02834 /* ChatContactRow.swift */; };
@@ -489,6 +490,7 @@
 		DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */; };
 		DCD8A2F58D1C07EB4795D7C3 /* ConnectionFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */; };
 		DD23B3F92D405219F65EB0D0 /* XMPPNotificationServiceMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EB9DE78DDB637C851451A0A9 /* XMPPNotificationServiceMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DD28F30C79391392CD5BA40B /* StorageParking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0542EFEBF2C47D95B56AA1F /* StorageParking.swift */; };
 		DDA862EB7C763729540D3DDA /* MessageActionMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */; };
 		DE181BB520CFD9CA40C8B389 /* MacPerfProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0128F3074596997403D4F4C /* MacPerfProbe.swift */; };
 		DE945F171D7F6572525A29B9 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
@@ -917,6 +919,7 @@
 		DED03AC2C8C20A692BFCF788 /* LinkPreviewPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewPolicy.swift; sourceTree = "<group>"; };
 		DF786E9F6E5DBCFDF1AD1942 /* DevelopmentEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEndpoint.swift; sourceTree = "<group>"; };
 		DFAC8704EDE56A39688E356B /* LICENSE.libomemo-c */ = {isa = PBXFileReference; path = "LICENSE.libomemo-c"; sourceTree = "<group>"; };
+		E0542EFEBF2C47D95B56AA1F /* StorageParking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageParking.swift; sourceTree = "<group>"; };
 		E07FF36A04F9534010478583 /* FastTokenKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastTokenKeychainTests.swift; sourceTree = "<group>"; };
 		E09AAB9CCD29D09D48DB3B8B /* ShareExtensionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionTests.swift; sourceTree = "<group>"; };
 		E160244791260F63C8CEF3B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -1441,6 +1444,7 @@
 				97458A0AF66A781FDEE95E70 /* SettingsView.swift */,
 				65AE7349FD1FCD92862145CE /* SignInView.swift */,
 				00C1B18785C8674EA1593E42 /* SignOutCleanup.swift */,
+				E0542EFEBF2C47D95B56AA1F /* StorageParking.swift */,
 				535BE8A1F1E6F1BDCA72435B /* Theme.swift */,
 				3F8D56C369489184BC8068FD /* TransferViews.swift */,
 				8EA646B2D3BEC5BEF134632A /* Typing.swift */,
@@ -2013,6 +2017,7 @@
 				C5F3752FF2E9043A3AAA2C61 /* ShorteningDialog.swift in Sources */,
 				75903C047102BA2ECDC5E97E /* SignInView.swift in Sources */,
 				FEF393AFD146F5C75B0CF999 /* SignOutCleanup.swift in Sources */,
+				0F8480E6869C49D731AA25F6 /* StorageParking.swift in Sources */,
 				842F151C6102E91695D4644B /* SuggestedConversation.swift in Sources */,
 				364D130D4D94312A5D5DADDE /* Theme.swift in Sources */,
 				C65AFCB75CCBB857FCD56592 /* ThisDevice.swift in Sources */,
@@ -2433,6 +2438,7 @@
 				CA05BC8ECD16BAD802C7AB11 /* ShorteningDialog.swift in Sources */,
 				C61AEC84C08FD9BEC13BA69A /* SignInView.swift in Sources */,
 				304B4012CB14B8FB28F7CAB8 /* SignOutCleanup.swift in Sources */,
+				DD28F30C79391392CD5BA40B /* StorageParking.swift in Sources */,
 				A2CF9AFB762BA8BCFBB5DFF1 /* SuggestedConversation.swift in Sources */,
 				5A2E885224FE2BE143B4C48D /* Theme.swift in Sources */,
 				1846F51DC8D23B6B56DC880B /* ThisDevice.swift in Sources */,
