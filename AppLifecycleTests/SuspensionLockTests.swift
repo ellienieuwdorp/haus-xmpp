@@ -15,8 +15,8 @@ import MessagingCore
     private let remaining = StorageParking.shared.remaining
 
     // A fresh model and its scene in front; at the end of the test it returns to the front and the defaults come back.
-    private func start() async throws -> AppScene {
-        let scene = try await AppScene()
+    private func start(launchedInBackground: Bool = false) async throws -> AppScene {
+        let scene = try await AppScene(launchedInBackground: launchedInBackground)
         addTeardownBlock { @MainActor [parkingClock, parkStores, remaining] in
             await scene.returnToFront()
             StorageParking.shared.clock = parkingClock
@@ -156,6 +156,23 @@ import MessagingCore
         try await other.close()
     }
 
+    // After a launch into the background the first activation is UIKit's alone, with no scene phase change; it must
+    // count as the front, or parked storage would refuse the app's own work there.
+    func testTheFirstActivationAfterABackgroundLaunchReopensStorage() async throws {
+        let scene = try await start(launchedInBackground: true), model = scene.model
+        await model.prepare()
+        StorageParking.shared.parkIfIdle()
+        await StorageParking.shared.settled()
+        XCTAssertFalse(MessageStore.reopeningAllowed, "a background launch with no background time parks")
+        assertNothingLocked(scene, "launched in the background")
+        scene.lifecycle.firstActivationAfterBackgroundLaunch()
+        await model.lifecycleSettled()
+        XCTAssertTrue(MessageStore.reopeningAllowed)
+        let other = try MessageStore(url: scene.database)
+        _ = try await other.chats(accountID: model.accountID)
+        try await other.close()
+    }
+
     // SwiftUI can report `.active` straight to `.background`, so no departure's background time ends to start a park.
     func testActiveStraightToBackgroundLeavesNoLock() async throws {
         let scene = try await start()
@@ -258,11 +275,12 @@ import MessagingCore
 @MainActor private final class AppScene {
     let model = AppModel()
     let database: URL
-    private let lifecycle: SceneLifecycle
-    private var phase = SceneLifecycleDriver.Phase.active
+    let lifecycle: SceneLifecycle
+    private var phase: SceneLifecycleDriver.Phase
 
-    init() async throws {
-        lifecycle = SceneLifecycle(model: model)
+    init(launchedInBackground: Bool) async throws {
+        lifecycle = SceneLifecycle(model: model, launchedInBackground: { launchedInBackground })
+        phase = launchedInBackground ? .background : .active
         let directory = try await SharedStorage.directory(testSessionID: XCTUnwrap(model.testSessionID), migrate: false)
         database = directory.appending(path: "messages.sqlite")
     }

@@ -52,9 +52,11 @@ struct HausXMPPApp: App {
     // Begun as the scene leaves `.active`: iOS grants background time asynchronously, so it is asked for before
     // suspension. Ends at `.active` again, or at `.background` once the model's transition holds its own.
     private var departure: BackgroundActivity?
+    private let launchedInBackground: @MainActor () -> Bool
 
-    init(model: AppModel) {
+    init(model: AppModel, launchedInBackground: @escaping @MainActor () -> Bool = { PlatformApplication.isInBackground }) {
         self.model = model
+        self.launchedInBackground = launchedInBackground
         model.lifecycleAtLaunch = { [weak self] in self?.launched() ?? [] }
         #if os(iOS)
         let center = NotificationCenter.default
@@ -96,22 +98,25 @@ struct HausXMPPApp: App {
 
     // A launch into the background must not connect, and its first activation counts as a foreground return.
     private func launched() -> [LifecycleUpdate] {
-        let inBackground = PlatformApplication.isInBackground
+        let inBackground = launchedInBackground()
         if inBackground { merge = ScenePhaseMerge(applied: .background) }
         let updates = driver.updates(for: .launched(inBackground: inBackground))
         guard inBackground else { return updates }
         StorageParking.shared.sceneChanged(active: false)
         backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: PlatformApplication.didBecomeActiveNotification,
                                                                           object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if let observer = self.backgroundLaunchObserver { NotificationCenter.default.removeObserver(observer) }
-                self.backgroundLaunchObserver = nil
-                StorageParking.shared.sceneChanged(active: true)
-                self.model.applyLifecycle(self.driver.updates(for: .becameActive))
-            }
+            MainActor.assumeIsolated { self?.firstActivationAfterBackgroundLaunch() }
         }
         return updates
+    }
+
+    // UIKit reports it with no scene phase change, so storage counts as in front from here.
+    func firstActivationAfterBackgroundLaunch() {
+        guard let observer = backgroundLaunchObserver else { return }
+        NotificationCenter.default.removeObserver(observer)
+        backgroundLaunchObserver = nil
+        StorageParking.shared.sceneChanged(active: true)
+        model.applyLifecycle(driver.updates(for: .becameActive))
     }
 }
 
