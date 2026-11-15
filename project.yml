@@ -36,6 +36,9 @@ targets:
       - Shared
       # What the app shares with its share extension.
       - AppShared
+      # The Share extension's model, which the lifecycle tests run against a store and an account of their own.
+      - ShareExtension/ShareModel.swift
+      - ShareExtension/ShareSupport.swift
       # The icon artwork as a plain image too, for the About screen: iOS does not load an app icon set by name.
       - path: App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
         buildPhase: resources
@@ -166,6 +169,7 @@ targets:
       # The Share extension's model and screen, which the Debug-only `-haus-share-sheet` hook (Mac/MacShareDebug.swift)
       # hosts in a window of the signed app.
       - ShareExtension/ShareModel.swift
+      - ShareExtension/ShareSupport.swift
       - ShareExtension/ShareViews.swift
       # Debug-only: the app arms and reads the extension's storage probe.
       - NotificationServiceMac/MacExtensionProbe.swift

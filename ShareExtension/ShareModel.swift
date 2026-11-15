@@ -42,7 +42,7 @@ import AppKit
     private(set) var avatars: [String: PlatformImage] = [:]
 
     private var root: URL?
-    private var store: MessageStore?
+    private(set) var store: MessageStore?
     private var encryption: OMEMOService?
     private var account: NotificationAccount?
     private var accountID = ""
@@ -58,6 +58,9 @@ import AppKit
     private var sessionTask: Task<[String: ShareItemState], Never>?
     private var donation: Task<Void, Never>?
     private var closing = false
+    // Between `suspend` and `resume`.
+    private var away = false
+    private let sources: Sources
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "share")
 
     #if DEBUG
@@ -72,6 +75,8 @@ import AppKit
     // How long an expiring activity waits for the lease release. The socket is closed first, so what is left is
     // joining tasks and SQLite work, which takes milliseconds; the rest is margin for a slow device.
     nonisolated static let expiryWait: Duration = .milliseconds(1500)
+
+    init(sources: Sources = Sources()) { self.sources = sources }
 
     var files: [SharedItem] { items.filter(\.isFile) }
     var hasFiles: Bool { !files.isEmpty }
@@ -114,16 +119,16 @@ import AppKit
     func load(providers: [NSItemProvider], suggestedConversation: String?) async {
         SharedItemIntake.discardAll()
         do {
-            let root = try await SharedStorage.directory(migrate: false)
+            let root = try await sources.directory()
             let account: NotificationAccount
-            switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent()) {
+            switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), load: sources.account) {
             case .success(let current): account = current
             case .failure(let refusal): return unavailable(refusal.message)
             }
             let store: MessageStore
             do { store = try MessageStore(url: root.appending(path: "messages.sqlite"), schema: .currentOnly) }
             catch MessageStoreError.upgradeRequired { return unavailable("Open Haus XMPP once to finish updating, then share again.") }
-            let key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false)
+            let key = try sources.encryptionKey()
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: key))
             self.root = root; self.store = store; self.encryption = encryption; self.account = account
             accountID = account.accountID
@@ -167,7 +172,7 @@ import AppKit
     // Refreshes the account's record so a connection uses the password just saved; a refusal writes nothing.
     private func authorize() -> Bool {
         guard let root else { return false }
-        switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID) {
+        switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID, load: sources.account) {
         case .success(let current):
             account = current
             return true
@@ -285,7 +290,7 @@ import AppKit
         if SharedSession.groupDefaults?.bool(forKey: ShareModel.queueOnlyKey) == true { return await ShareStateReader(store: store, accountID: accountID).states(ids) }
         #endif
         // Expiring, the activity hard-closes the connection and blocks until the lease is released and the store closed.
-        let activity = ExpiringActivity(backstop: Self.expiryWait + .milliseconds(500)) { [weak self] in
+        let activity = ExpiringActivity("Send what was shared", backstop: Self.expiryWait + .milliseconds(500)) { [weak self] in
             Task { @MainActor in self?.cancelSending() }
             _ = await session.expire(within: ShareModel.expiryWait)
             // The lease went back with the session; a failed close leaves only SQLite's connection, which `close` retries.
@@ -295,7 +300,7 @@ import AppKit
         // Signed out, moved or signed in again with other credentials while the lease was awaited: nothing connects, and
         // the rows wait for that account as the app's own queued messages do.
         guard await session.acquireLease(waitingUpTo: Self.leaseWait), !closing,
-              (try? ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID).get()) == account else {
+              (try? ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID, load: sources.account).get()) == account else {
             await session.end()
             return await session.states(ids)
         }
@@ -356,7 +361,7 @@ import AppKit
 
     private func donate(to recipients: [ShareRules.Chat]) {
         guard let root, let store else { return }
-        let account = accountID, groupRoot = root.deletingLastPathComponent()
+        let account = accountID, groupRoot = root.deletingLastPathComponent(), load = sources.account
         // The donation reads each link again (`OutgoingDonation`).
         let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }), links = contactLinks
         let conversations = recipients.map { chat in
@@ -366,16 +371,17 @@ import AppKit
         donation = Task.detached {
             await OutgoingDonation.donate(conversations, store: store,
                                           avatar: { AvatarStore.suggestionImageData(root: root, account: account, hash: $0) },
-                                          allowed: { await Self.mayDonate($0, store: store, groupRoot: groupRoot) })
+                                          allowed: { await Self.mayDonate($0, store: store, groupRoot: groupRoot, load: load) })
         }
     }
 
     // Read afresh on each `OutgoingDonation.donate` call: no lease orders this against the app's deletions (the Mac's
     // sheet never takes it), so asking again keeps a donation from outliving one. A store this sheet already closed
     // reads as not allowed, which deletes rather than keeps.
-    private nonisolated static func mayDonate(_ conversation: OutgoingConversation, store: MessageStore, groupRoot: URL) async -> Bool {
+    private nonisolated static func mayDonate(_ conversation: OutgoingConversation, store: MessageStore, groupRoot: URL,
+                                              load: @Sendable () throws -> NotificationAccount?) async -> Bool {
         let account = conversation.accountID
-        guard case .success = ShareAuthorization.check(groupRoot: groupRoot, accountID: account),
+        guard case .success = ShareAuthorization.check(groupRoot: groupRoot, accountID: account, load: load),
               OutgoingDonation.isAllowed(previews: (try? await store.notificationPreviewsEnabled(accountID: account)) == true,
                                          suggestions: ShareSuggestionSetting.isEnabled(accountID: account)) else { return false }
         return conversation.isGroup || !BlockedAddresses.load(accountID: account).blocks(conversation.chatID)
@@ -390,7 +396,9 @@ import AppKit
             group.cancelAll()
         }
     }
+}
 
+extension ShareModel {
     #if os(iOS)
     // The server pushes nothing for a connected session, so what the share's connection receives alerts as the
     // notification extension would show it, bounded and for the signed-in account only.
@@ -422,46 +430,40 @@ import AppKit
                           leftForeground: SharedSession.leftForeground(), streamProfiles: SharedSession.streamProfiles)
     }
     #endif
-}
 
-private struct ShareStateReader: Sendable {
-    let store: MessageStore
-    let accountID: String
-
-    func states(_ ids: [String]) async -> [String: ShareItemState] {
-        var result: [String: ShareItemState] = [:]
-        for id in ids { result[id] = ShareItemState(try? await store.message(accountID: accountID, messageID: id)) }
-        return result
+    // The host leaving, or the sheet swiped away, ends sending and then closes SQLite under the extension's own
+    // background time, so the process is never suspended holding a lock on the App Group database (0xdead10cc).
+    func suspend() async {
+        away = true
+        cancelSending()
+        #if os(iOS)
+        let store = store, session = session
+        let activity = ExpiringActivity("Close storage before suspension", backstop: Self.expiryWait + .milliseconds(500)) {
+            _ = await session?.expire(within: ShareModel.expiryWait)
+            if let store { await Self.park(store) }
+        }
+        defer { activity.end() }
+        #endif
+        await sendTask?.value
+        await session?.end()
+        if let donation { await Self.wait(for: donation, upTo: Self.donationWait) }
+        guard away, let store else { return }
+        await Self.park(store)
+        if !away { MessageStore.reopeningAllowed = true }
     }
-}
 
-#if os(iOS)
-// `performExpiringActivity` holds its assertion while the first call (expired false) blocks. Before suspension a second
-// call, on another thread, has expired true: it blocks until `expiring` released the lease and closed the store, within
-// `backstop`, then lets the first return. The teardown runs on the cooperative pool, never on these threads.
-private final class ExpiringActivity: @unchecked Sendable {
-    private let done = DispatchSemaphore(value: 0)
-    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "share")
+    // The host is back: the next call reopens the store.
+    func resume() {
+        away = false
+        MessageStore.reopeningAllowed = true
+    }
 
-    init(backstop: Duration, expiring: @escaping @Sendable () async -> Void) {
-        let done = done
-        ProcessInfo.processInfo.performExpiringActivity(withReason: "Send what was shared") { expired in
-            guard expired else {
-                done.wait()
-                return
-            }
-            let stopped = DispatchSemaphore(value: 0)
-            Task.detached {
-                await expiring()
-                stopped.signal()
-            }
-            if stopped.wait(timeout: .now() + .milliseconds(Int(backstop / .milliseconds(1)))) == .timedOut {
-                Self.log.fault("share expiry teardown still running at its backstop")
-            }
-            done.signal()
+    // Nothing in this process reopens it until `resume`. A store that refuses closes for good, lease and SQLite both.
+    private nonisolated static func park(_ store: MessageStore) async {
+        MessageStore.reopeningAllowed = false
+        do { try await store.park() } catch {
+            // Its connection, if that close fails too, closes in its deinit; nothing is left to report the failure to.
+            try? await store.close()
         }
     }
-
-    func end() { done.signal() }
 }
-#endif

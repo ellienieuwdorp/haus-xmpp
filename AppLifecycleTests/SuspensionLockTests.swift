@@ -26,33 +26,6 @@ import MessagingCore
         return scene
     }
 
-    // This process's descriptors on the database and its sidecars. POSIX record locks belong to the process, so a file
-    // it has no descriptor on holds none of its locks. The transport lock file stays open by design and is probed apart.
-    private func sqliteDescriptors(_ database: URL) -> Set<String> {
-        guard let resolved = realpath(database.deletingLastPathComponent().path, nil) else { return [] }
-        let prefix = String(cString: resolved) + "/"
-        free(resolved)
-        var found: Set<String> = []
-        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        for descriptor in 0..<getdtablesize() where fcntl(descriptor, F_GETPATH, &path) != -1 {
-            let name = String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-            if name.hasPrefix(prefix + "messages.sqlite"), !name.hasSuffix(".transport-lock") {
-                found.insert(String(name.dropFirst(prefix.count)))
-            }
-        }
-        return found
-    }
-
-    // flock conflicts between open file descriptions of one process too, so a fresh one sees any store's lease.
-    private func transportLockIsFree(_ database: URL) -> Bool {
-        let descriptor = open(database.path + ".transport-lock", O_RDWR | O_CLOEXEC)
-        guard descriptor >= 0 else { return false }
-        defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return false }
-        flock(descriptor, LOCK_UN)
-        return true
-    }
-
     // What an extension does to the store meanwhile, through its own connection, closed again at once.
     private func execute(_ sql: String, on database: URL) -> Int32 {
         var db: OpaquePointer?
@@ -62,9 +35,9 @@ import MessagingCore
     }
 
     private func assertNothingLocked(_ scene: AppScene, _ moment: String, file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertEqual(sqliteDescriptors(scene.database), [], "\(moment): descriptors left on the store", file: file, line: line)
+        XCTAssertEqual(StorageLockProbe.sqliteDescriptors(scene.database), [], "\(moment): descriptors left on the store", file: file, line: line)
         XCTAssertFalse(MessageStore.processHasOpenConnection, "\(moment): a SQLite connection is still open", file: file, line: line)
-        XCTAssertTrue(transportLockIsFree(scene.database), "\(moment): the transport lock is held", file: file, line: line)
+        XCTAssertTrue(StorageLockProbe.transportLockIsFree(scene.database), "\(moment): the transport lock is held", file: file, line: line)
     }
 
     // The launch is applied and storage is still opening when the scene leaves, as when a link opens another app
@@ -87,11 +60,11 @@ import MessagingCore
     func testInactiveThenBackgroundHandoffLeavesNoLock() async throws {
         let scene = try await start()
         await scene.model.prepare()
-        XCTAssertTrue(sqliteDescriptors(scene.database).contains("messages.sqlite"), "an open store is visible to the probe")
+        XCTAssertTrue(StorageLockProbe.sqliteDescriptors(scene.database).contains("messages.sqlite"), "an open store is visible to the probe")
         scene.move(to: .inactive)
         await scene.model.lifecycleSettled()
         XCTAssertGreaterThan(StorageParking.shared.holders, 0, "inactive keeps background time")
-        XCTAssertTrue(sqliteDescriptors(scene.database).contains("messages.sqlite"), "nothing parks while background time is held")
+        XCTAssertTrue(StorageLockProbe.sqliteDescriptors(scene.database).contains("messages.sqlite"), "nothing parks while background time is held")
         scene.move(to: .active)
         await scene.model.lifecycleSettled()
         await scene.leave()

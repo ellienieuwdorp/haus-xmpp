@@ -7,8 +7,8 @@ import AppKit
 #endif
 
 #if os(iOS)
-// Leaving the host (an app switch, a lock) ends the share's connection and gives the transport lease back before the
-// sheet closes; what was queued stays queued.
+// Leaving the host (an app switch, a lock) or swiping the sheet away ends the share's connection, gives the transport
+// lease back and closes SQLite until the host returns; what was queued stays queued.
 final class ShareViewController: UIViewController {
     private let model = ShareModel()
     private let appearance = AppearanceStore(defaults: SharedSession.groupDefaults ?? .standard)
@@ -26,18 +26,33 @@ final class ShareViewController: UIViewController {
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(host.view)
         host.didMove(toParent: self)
-        for name in [NSNotification.Name.NSExtensionHostDidEnterBackground] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.model.cancelSending() }
-            })
-        }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: .NSExtensionHostDidEnterBackground, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leave() }
+        })
+        observers.append(center.addObserver(forName: .NSExtensionHostWillEnterForeground, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.resume() }
+        })
         let providers = SharedItemIntake.providers(of: extensionContext?.inputItems as? [NSExtensionItem] ?? [])
         // Set only when the user picked one of the share sheet's suggested chats.
         let suggested = (extensionContext?.intent as? INSendMessageIntent)?.conversationIdentifier
         Task { await model.load(providers: providers, suggestedConversation: suggested) }
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        model.resume()
+    }
+
+    // Swiping the sheet away calls nothing else here.
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if !closing { leave() }
+    }
+
     override func accessibilityPerformEscape() -> Bool { finish(); return true }
+
+    private func leave() { Task { await model.suspend() } }
 
     private func finish() {
         guard !closing else { return }
