@@ -70,6 +70,36 @@ final class BackgroundUploadTests: XCTestCase {
         XCTAssertEqual(shownFailed, UploadPlan.Result(stranded: ["m1"], settled: [new]))
     }
 
+    // An HTTP 413 refuses the same bytes on every attempt, so the row's own refused attempt fails it at once; an earlier
+    // attempt's refusal, or one for a file already shown as Not sent, does not.
+    func testATooLargeAnswerToTheRowsOwnAttemptIsMarked() {
+        let old = tag("m1", "https://u/1"), new = tag("m1", "https://u/2")
+        let refused = UploadOutcome(tag: new, succeeded: false, tooLarge: true, finishedAt: finishedAt)
+        let own = UploadPlan.make(account: account, rows: [row("m1", url: new.url, taskID: 1)], tasks: [], outcomes: [refused], detectsStranded: false)
+        XCTAssertEqual(own, UploadPlan.Result(failed: ["m1"], tooLarge: ["m1"], settled: [new]))
+
+        let listed = UploadPlan.make(account: account, rows: [row("m1", url: new.url, taskID: 1)],
+                                     tasks: [UploadTaskState(taskID: 1, tag: new, phase: .finished(succeeded: false, tooLarge: true))],
+                                     outcomes: [], detectsStranded: false)
+        XCTAssertEqual(listed, UploadPlan.Result(failed: ["m1"], tooLarge: ["m1"]))
+
+        let stale = UploadPlan.make(account: account, rows: [row("m1", url: new.url, taskID: 1)], tasks: [],
+                                    outcomes: [UploadOutcome(tag: old, succeeded: false, tooLarge: true, finishedAt: finishedAt),
+                                               outcome(new, succeeded: false)], detectsStranded: false)
+        XCTAssertEqual(stale, UploadPlan.Result(failed: ["m1"], settled: [old, new]))
+
+        let shownFailed = UploadPlan.make(account: account, rows: [row("m1", url: new.url, taskID: 1, queued: false)], tasks: [],
+                                          outcomes: [refused], detectsStranded: false)
+        XCTAssertEqual(shownFailed, UploadPlan.Result(stranded: ["m1"], settled: [new]))
+    }
+
+    func testAJournalEntryWithoutTheTooLargeFlagStillDecodes() throws {
+        let entry = #"[{"tag":{"account":"alice@example.org","messageID":"m1","url":"https://u/1"},"succeeded":false,"finishedAt":0}]"#
+        let decoded = try JSONDecoder().decode([UploadOutcome].self, from: Data(entry.utf8))
+        XCTAssertEqual(decoded.first?.tooLarge, nil)
+        XCTAssertEqual(decoded.first?.succeeded, false)
+    }
+
     // Finished in the session but not yet delivered to the delegate: the task's own result settles the row.
     func testAFinishedTaskTheSessionStillListsSettlesTheRow() {
         let attempt = tag("m1", "https://u/1")

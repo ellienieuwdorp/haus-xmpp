@@ -7,11 +7,13 @@ struct IQReplyScope: Sendable {
     let accountBareJID: String
     let accountFullJID: String
     let serverDomain: String
+    // The caller decodes an error reply itself, application-specific children included.
+    let returnsError: Bool
 
-    init(recipient: String?, accountBareJID: String, accountFullJID: String, serverDomain: String) {
+    init(recipient: String?, accountBareJID: String, accountFullJID: String, serverDomain: String, returnsError: Bool = false) {
         func normal(_ value: String) -> String { JID.normalized(value) ?? value }
         self.recipient = recipient.map(normal); self.accountBareJID = normal(accountBareJID)
-        self.accountFullJID = normal(accountFullJID); self.serverDomain = normal(serverDomain)
+        self.accountFullJID = normal(accountFullJID); self.serverDomain = normal(serverDomain); self.returnsError = returnsError
     }
 
     func accepts(_ node: XMLNode) -> Bool {

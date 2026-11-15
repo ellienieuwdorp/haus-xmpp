@@ -22,6 +22,7 @@ struct ShareRootView: View {
                 }
                 .navigationDestination(for: ShareRoute.self) { _ in ShareReviewView(model: model, close: close) }
         }
+        .shorteningDialog(model.offer) { model.answer($0, accepted: $1) }
         .onChange(of: model.phase) { _, phase in
             // A suggestion opens the review card directly; Back still leads to the picker to add chats.
             if phase == .ready, model.suggested != nil, path.isEmpty { path = [.review] }
@@ -291,7 +292,7 @@ struct ShareFileTile: View {
     private var isProblem: Bool { if case .failed = model.prepared[item.id] { true } else { false } }
     private var status: String {
         switch model.prepared[item.id] {
-        case .preparing?, nil: "Preparing…"
+        case .preparing?, .tooLong?, nil: "Preparing…"
         case .ready(let size)?: ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
         case .failed(let reason)?: reason
         }

@@ -71,6 +71,16 @@ struct ShareSessionTests {
         try FileManager.default.removeItem(at: directory)
     }
 
+    // The app fails refused files; the extension only stops asking once the service refuses everything after them.
+    @Test func aRefusingServiceStopsTheExtensionsUploads() {
+        #expect(ShareSession.stopsUploads(after: XMPPUploadError.notAllowed))
+        #expect(ShareSession.stopsUploads(after: XMPPUploadError.retry(after: Date(timeIntervalSince1970: 1_512_344_525))))
+        #expect(!ShareSession.stopsUploads(after: XMPPUploadError.fileTooLarge(maximumFileSize: 1_000)))
+        #expect(!ShareSession.stopsUploads(after: XMPPUploadError.fileTooLarge(maximumFileSize: nil)))
+        #expect(!ShareSession.stopsUploads(after: XMPPIQError.stanza(condition: "internal-server-error")))
+        #expect(!ShareSession.stopsUploads(after: XMPPClientError.timedOut))
+    }
+
     @Test func onlyTheServersAcknowledgementReadsAsSent() {
         func message(_ state: OutgoingTransportState?) -> StoredMessage {
             var message = StoredMessage(id: "m", accountID: "a", chatID: "b", senderID: "a", body: "x", isOutgoing: true)

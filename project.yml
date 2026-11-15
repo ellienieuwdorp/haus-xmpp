@@ -143,6 +143,7 @@ targets:
           - RootView.swift
           - ChatListView.swift
           - ConversationView.swift
+          - ComposerIntake.swift
           - ConversationTimeline.swift
           - ConversationSearchBar.swift
           - DateChipView.swift

@@ -1299,16 +1299,16 @@ public actor XMPPClient {
         do { return (owner, try AvatarWire.parseMetadata(item.children[0])) } catch { return nil }
     }
 
-    func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString, timeout: Duration = XMPPClient.iqTimeout) async throws -> XMLNode {
+    func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString, timeout: Duration = XMPPClient.iqTimeout,
+                   returnsError: Bool = false) async throws -> XMLNode {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
         if let to {
             guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
                   MessageContent.validXMLText(to) else { throw XMPPClientError.invalidConfiguration }
         }
-        let token = generation
-        let scope = IQReplyScope(recipient: to, accountBareJID: ownBare, accountFullJID: boundJID, serverDomain: domain)
-        let replyDeadline = timeout
+        let token = generation, replyDeadline = timeout
+        let scope = IQReplyScope(recipient: to, accountBareJID: ownBare, accountFullJID: boundJID, serverDomain: domain, returnsError: returnsError)
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
@@ -1336,7 +1336,7 @@ public actor XMPPClient {
         guard let id = node.attributes["id"], let request = iqRequests[id], request.scope.accepts(node) else { return false }
         iqRequests.removeValue(forKey: id); rosterFetchIDs.remove(id); blocklistFetchIDs.remove(id)
         request.timeout.cancel()
-        do { request.continuation.resume(returning: try IQReplyScope.result(node)) }
+        do { request.continuation.resume(returning: request.scope.returnsError ? node : try IQReplyScope.result(node)) }
         catch { request.continuation.resume(throwing: error) }
         return true
     }

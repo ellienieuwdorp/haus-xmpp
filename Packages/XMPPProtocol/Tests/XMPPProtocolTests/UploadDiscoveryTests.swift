@@ -23,17 +23,23 @@ struct UploadDiscoveryTests {
         var info: [String: Answer]
     }
 
-    // Runs `uploadService` against `network` and returns its outcome and how long it took.
-    private func discover(_ network: Network, timeout: Duration) async throws -> (Result<XMPPUploadService?, any Error>, Duration) {
-        let server = try await LoopbackServer.start()
-        defer { Task { await server.stop() } }
+    private static func connected(to server: LoopbackServer) async throws -> XMPPClient {
         let client = server.client()
         async let online: Void = server.connect(client)
         try await server.authenticate(features: "")
         let bind = try await server.next()
-        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        let jid = "<jid>alice@localhost/r</jid>"
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(bindNamespace)'>\(jid)</bind></iq>")
         #expect(try await server.next().name == "presence")
         try await online
+        return client
+    }
+
+    // Runs `uploadService` against `network` and returns its outcome and how long it took.
+    private func discover(_ network: Network, timeout: Duration) async throws -> (Result<XMPPUploadService?, any Error>, Duration) {
+        let server = try await LoopbackServer.start()
+        defer { Task { await server.stop() } }
+        let client = try await Self.connected(to: server)
         let answering = Task {
             while !Task.isCancelled {
                 guard let iq = try? await server.next(within: .seconds(30)), iq.name == "iq", let id = iq.attributes["id"] else { continue }
@@ -91,5 +97,27 @@ struct UploadDiscoveryTests {
         let silent = Network(listed: ["uploads.localhost"], info: ["localhost": .features(""), "uploads.localhost": .silent])
         let (open, _) = try await discover(silent, timeout: .milliseconds(300))
         #expect(throws: XMPPClientError.timedOut) { try open.get() }
+    }
+    // The client hands the slot request's error reply to the decoder instead of reducing it to its condition.
+    @Test func aSlotRefusalArrivesWithItsReason() async throws {
+        let server = try await LoopbackServer.start()
+        defer { Task { await server.stop() } }
+        let client = try await Self.connected(to: server)
+        let service = XMPPUploadService(jid: "uploads.localhost", maximumFileSize: 1_000)
+        let stanzas = "xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'"
+        let tooLarge = "<file-too-large xmlns='urn:xmpp:http:upload:0'><max-file-size>1000</max-file-size></file-too-large>"
+        let answers = ["<error type='modify'><not-acceptable \(stanzas)/>\(tooLarge)</error>",
+                       "<error type='cancel'><internal-server-error \(stanzas)/></error>"]
+        var outcomes: [any Error] = []
+        for answer in answers {
+            async let slot = client.requestUploadSlot(service: service, filename: "a.jpg", size: 1_016, contentType: "application/octet-stream")
+            let request = try await server.next()
+            #expect(request.child("request", namespace: XMPPUploadService.namespace)?.attributes["size"] == "1016")
+            try await server.send("<iq type='error' id='\(request.attributes["id"] ?? "")' from='uploads.localhost'>\(answer)</iq>")
+            do { _ = try await slot; Issue.record("a refusal returned a slot") } catch { outcomes.append(error) }
+        }
+        #expect(outcomes.first as? XMPPUploadError == .fileTooLarge(maximumFileSize: 1_000))
+        #expect(outcomes.last as? XMPPIQError == .stanza(condition: "internal-server-error"))
+        await client.disconnect()
     }
 }

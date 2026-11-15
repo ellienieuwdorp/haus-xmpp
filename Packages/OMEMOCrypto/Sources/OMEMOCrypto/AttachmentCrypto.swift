@@ -14,6 +14,8 @@ public struct EncryptedAttachment: Equatable, Sendable {
   }
 }
 public enum AttachmentCrypto {
+  /// The GCM tag's length: sealed bytes are always this much longer than the plaintext.
+  public static let tagByteCount = 16
   /// Seals in memory, bounded by `maximumBytes`.
   public static func seal(_ plaintext: Data, maximumBytes: Int = 32 * 1024 * 1024) throws
     -> EncryptedAttachment
@@ -33,12 +35,12 @@ public enum AttachmentCrypto {
     throws -> Data
   {
     guard maximumBytes >= 0, attachment.key.count == 32, attachment.iv.count == 12,
-      attachment.ciphertext.count >= 16, attachment.ciphertext.count - 16 <= maximumBytes
+      attachment.ciphertext.count >= tagByteCount, attachment.ciphertext.count - tagByteCount <= maximumBytes
     else { throw OMEMOCryptoError.invalidInput }
     do {
       let box = try AES.GCM.SealedBox(
         nonce: AES.GCM.Nonce(data: attachment.iv),
-        ciphertext: attachment.ciphertext.dropLast(16), tag: attachment.ciphertext.suffix(16))
+        ciphertext: attachment.ciphertext.dropLast(tagByteCount), tag: attachment.ciphertext.suffix(tagByteCount))
       return try AES.GCM.open(box, using: SymmetricKey(data: attachment.key))
     } catch { throw OMEMOCryptoError.authenticationFailed }
   }

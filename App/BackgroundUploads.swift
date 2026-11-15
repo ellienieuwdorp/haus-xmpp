@@ -26,14 +26,21 @@ struct UploadTag: Codable, Hashable, Sendable {
     }
 }
 
+// `tooLarge` is an HTTP 413 answer to the PUT, which refuses the same bytes on every attempt. It is optional so a
+// journal entry without it still decodes.
 struct UploadOutcome: Codable, Equatable, Sendable {
     let tag: UploadTag
     let succeeded: Bool
+    let tooLarge: Bool?
     let finishedAt: Date
+
+    init(tag: UploadTag, succeeded: Bool, tooLarge: Bool = false, finishedAt: Date) {
+        self.tag = tag; self.succeeded = succeeded; self.tooLarge = tooLarge; self.finishedAt = finishedAt
+    }
 }
 
 struct UploadTaskState: Equatable, Sendable {
-    enum Phase: Equatable, Sendable { case live, finished(succeeded: Bool) }
+    enum Phase: Equatable, Sendable { case live, finished(succeeded: Bool, tooLarge: Bool = false) }
     let taskID: Int
     let tag: UploadTag?
     let phase: Phase
@@ -156,8 +163,10 @@ enum UploadPlan {
 
     struct Result: Equatable, Sendable {
         var uploaded: [String: String] = [:]
-        // The row's own attempt failed, which counts against its budget; a stranded slot is cleared uncounted.
+        // The row's own attempt failed, which counts against its budget unless the server refused its size; a stranded
+        // slot is cleared uncounted.
         var failed: Set<String> = []
+        var tooLarge: Set<String> = []
         var stranded: Set<String> = []
         var adopted: [String: Adoption] = [:]
         var resume: Set<Int> = []
@@ -173,12 +182,8 @@ enum UploadPlan {
         // Nothing tells which attempt an untagged task carries; its row takes a new slot instead.
         result.cancel.formUnion(tasks.filter { $0.tag == nil && $0.phase == .live }.map(\.taskID))
         let recorded = outcomes.filter { $0.tag.account == account }
-        var finished: [UploadTag: Bool] = [:]
-        for outcome in recorded { finished[outcome.tag] = finished[outcome.tag] == true || outcome.succeeded }
         let mine = tasks.filter { $0.tag?.account == account }
-        for task in mine {
-            if case .finished(let succeeded) = task.phase, let tag = task.tag { finished[tag] = finished[tag] == true || succeeded }
-        }
+        let (finished, refused) = ends(recorded, mine)
         let live = mine.filter { $0.phase == .live }
         let rowsByID = Dictionary(rows.map { ($0.messageID, $0) }, uniquingKeysWith: { first, _ in first })
         var messageIDs = Set(rows.map(\.messageID))
@@ -209,11 +214,27 @@ enum UploadPlan {
             guard let url = row.url else { continue }
             if ends.keys.contains(where: { $0.url == url }) {
                 if row.queued { result.failed.insert(id) } else { result.stranded.insert(id) }
+                if row.queued, refused.contains(UploadTag(account: account, messageID: id, url: url)) { result.tooLarge.insert(id) }
             } else if detectsStranded {
                 result.stranded.insert(id)
             }
         }
         return result
+    }
+
+    // Each attempt's end, a success of any report winning, and the attempts answered with 413.
+    private static func ends(_ outcomes: [UploadOutcome], _ tasks: [UploadTaskState]) -> (finished: [UploadTag: Bool], refused: Set<UploadTag>) {
+        var finished: [UploadTag: Bool] = [:]
+        var refused: Set<UploadTag> = []
+        var reports = outcomes.map { ($0.tag, $0.succeeded, $0.tooLarge == true) }
+        for task in tasks {
+            if case .finished(let succeeded, let tooLarge) = task.phase, let tag = task.tag { reports.append((tag, succeeded, tooLarge)) }
+        }
+        for (tag, succeeded, tooLarge) in reports {
+            finished[tag] = finished[tag] == true || succeeded
+            if tooLarge { refused.insert(tag) }
+        }
+        return (finished, refused)
     }
 }
 
@@ -222,6 +243,12 @@ struct UploadSettler: Sendable {
     struct Settlement: Equatable, Sendable {
         var uploaded: [String] = []
         var failed: [StoredMessage] = []
+        var tooLarge: Set<String> = []
+
+        // Nil leaves a failed file to its failure budget.
+        func reason(for message: StoredMessage) -> String? {
+            tooLarge.contains(message.id) ? UploadRefusal.tooLarge(maximumFileSize: nil).failure(name: message.attachment?.name ?? "") : nil
+        }
     }
 
     let store: MessageStore
@@ -268,6 +295,7 @@ struct UploadSettler: Sendable {
             do {
                 try await store.setAttachmentUploadTask(accountID: account, messageID: id, taskID: nil, url: nil)
                 if plan.failed.contains(id), let message = messages[id] { settlement.failed.append(message) }
+                if plan.tooLarge.contains(id) { settlement.tooLarge.insert(id) }
             } catch { unwritten.insert(id) }
         }
         await tasks.apply(resume: plan.resume, cancel: plan.cancel)

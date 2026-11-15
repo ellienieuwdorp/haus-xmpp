@@ -14,6 +14,7 @@ import XMPPProtocol
     var attachmentsOpen = false
     @ObservationIgnored let attachmentKeyboard = AttachmentKeyboard()
     var tray: [PendingAttachment] = []
+    let intake = ComposerIntake()
     var dispatching = false
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
     // A rail pick still preparing when Send took the tray stays out of the next message.
@@ -99,13 +100,12 @@ struct PendingAttachment: Identifiable {
 struct ConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
+    // Still in the navigation path: a pushed details screen hides the chat without leaving it.
+    let routed: () -> Bool
     @State private var composerState = ComposerState()
     @State private var showingPhotoPicker = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importingFile = false
-    @State private var attaching = false
-    // Rail picks prepare one after another so the tray keeps tap order.
-    @State private var assetPicks: Task<Void, Never>?
     @State private var query = ""
     @State private var showingSearch = false
     @State private var starredOnly = false
@@ -200,60 +200,18 @@ struct ConversationView: View {
         }
     }
 
-    private func addToTray(_ jobs: [() async throws -> PreparedAttachment]) {
-        guard !jobs.isEmpty, !attaching else { return }
-        let state = composerState
-        let room = ComposerPlan.trayLimit - state.tray.count
-        if jobs.count > room { model.error = "You can attach up to \(ComposerPlan.trayLimit) files at a time." }
-        attaching = true
-        Task {
-            defer { attaching = false }
-            for job in jobs.prefix(max(0, room)) {
-                do {
-                    let prepared = try await job()
-                    state.tray.append(PendingAttachment(prepared: prepared, preview: await AttachmentThumbnails.preview(of: prepared)))
-                } catch {
-                    model.error = (error as? any LocalizedError)?.errorDescription ?? "This file could not be attached."
-                }
-            }
-        }
-    }
-
-    private func attach(asset: PHAsset) async {
-        let state = composerState
-        let limit = model.attachmentLimit
-        let previous = assetPicks
-        let sends = state.sends
-        let pick = Task { @MainActor in
-            await previous?.value
-            // Send took the tray while this pick waited; it must not land in the next message unasked.
-            guard state.sends == sends else { return }
-            guard state.tray.count < ComposerPlan.trayLimit else {
-                model.error = "You can attach up to \(ComposerPlan.trayLimit) files at a time."
-                return
-            }
-            do {
-                let prepared = try await AttachmentPreparer.prepare(asset: asset, limit: limit)
-                let preview = await AttachmentThumbnails.preview(of: prepared)
-                guard state.sends == sends else { return }
-                state.tray.append(PendingAttachment(prepared: prepared, preview: preview, assetIdentifier: asset.localIdentifier))
-            } catch {
-                model.error = (error as? any LocalizedError)?.errorDescription ?? "This photo could not be attached."
-            }
-        }
-        assetPicks = pick
-        await pick.value
-    }
-
     private func attach(capture: CameraCapture) {
-        let limit = model.attachmentLimit
-        addToTray([{ try await AttachmentPreparer.prepare(capture: capture, limit: limit) }])
+        let limit = model.attachmentLimit, camera = CameraJob(capture)
+        composerState.intake.add([{ try await camera.prepare(limit: limit, keepingFirst: $0) }], to: composerState, model: model)
     }
 
     private func attach(files result: Result<[URL], any Error>) {
         guard case .success(let urls) = result else { return }
         let limit = model.attachmentLimit
-        addToTray(urls.map { url in { try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit) } })
+        composerState.intake.add(urls.map { url in { first in
+            try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension),
+                                                 limit: limit, keepingFirst: first)
+        } }, to: composerState, model: model)
     }
 
     var body: some View {
@@ -393,6 +351,7 @@ struct ConversationView: View {
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
+        .shorteningDialog(composerState.intake.offer) { composerState.intake.answer($0, accepted: $1, state: composerState, model: model) }
         .blockConfirmation(model: model, request: $blockRequest)
         .sheet(isPresented: Binding(get: { joiningGroup != nil }, set: { if !$0 { joiningGroup = nil } })) {
             NavigationStack {
@@ -422,26 +381,27 @@ struct ConversationView: View {
             guard !items.isEmpty else { return }
             photoItems = []
             let limit = model.attachmentLimit
-            addToTray(items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit) } })
+            let jobs: [ComposerIntake.Job] = items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit, keepingFirst: $0) } }
+            composerState.intake.add(jobs, to: composerState, model: model)
         }
-        .onChange(of: [chatID, model.accountID]) {
-            composerState.closeAttachments()
-            composerState.tray = []
-        }
+        .onChange(of: [chatID, model.accountID]) { composerState.closeAttachments(); composerState.tray = []; composerState.intake.reset() }
         // The list's search and compose bar goes with the push instead of lingering over the composer after it.
         .toolbarVisibility(.hidden, for: .bottomBar)
         // Before the first frame: a cached page puts the newest messages on screen as the push starts.
         .onAppear { model.prepareChat(chatID) }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
-        .onDisappear { model.closeChat(chatID) }
+        // Leaving the chat drops its composer, so a video still converting for it would only be thrown away.
+        .onDisappear { model.closeChat(chatID); if !routed() { composerState.intake.reset() } }
     }
 
     // Hosted inside the timeline controller, outside this view's environment, so the accent travels with it.
     private var composer: some View {
-        ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
+        ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing,
+                             attaching: composerState.intake.attaching,
                              authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
                              onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true },
-                             onAttachAsset: { await attach(asset: $0) }, onAttachCapture: { attach(capture: $0) })
+                             onAttachAsset: { await composerState.intake.attach(asset: $0, to: composerState, model: model) },
+                             onAttachCapture: { attach(capture: $0) })
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 

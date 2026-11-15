@@ -22,6 +22,15 @@ public struct XMPPUploadService: Sendable, Equatable {
     }
 }
 
+/// A slot request the upload service refused for a reason XEP-0363 §4 names. Any other refusal is
+/// `XMPPIQError.stanza`.
+public enum XMPPUploadError: Error, Sendable, Equatable {
+    /// The service's stated limit, when it gave one.
+    case fileTooLarge(maximumFileSize: Int?)
+    case notAllowed
+    case retry(after: Date)
+}
+
 public struct XMPPUploadSlot: Sendable, Equatable {
     public let put: URL
     /// Only the headers XEP-0363 permits; anything else from the server is dropped.
@@ -29,6 +38,7 @@ public struct XMPPUploadSlot: Sendable, Equatable {
     public let get: URL
 
     static func decode(_ response: XMLNode) throws -> XMPPUploadSlot {
+        if response.attributes["type"] == "error" { throw refusal(response) }
         let slot = try OMEMOWire.singleton(response, "slot", XMPPUploadService.namespace)
         let put = try OMEMOWire.singleton(slot, "put", XMPPUploadService.namespace)
         let get = try OMEMOWire.singleton(slot, "get", XMPPUploadService.namespace)
@@ -41,6 +51,24 @@ public struct XMPPUploadSlot: Sendable, Equatable {
         }
         return XMPPUploadSlot(put: putURL, headers: headers, get: getURL)
     }
+
+    // XEP-0363 §4: `<file-too-large/>` may come with any condition, the stated limit is optional, and only a
+    // `resource-constraint` carries a `<retry/>` stamp.
+    static func refusal(_ reply: XMLNode) -> any Error {
+        let stanza: any Error
+        do { _ = try IQReplyScope.result(reply); return XMPPIQError.malformedResponse } catch { stanza = error }
+        guard case XMPPIQError.stanza(let condition) = stanza, let error = try? OMEMOWire.singleton(reply, "error", "jabber:client") else { return stanza }
+        let namespace = XMPPUploadService.namespace
+        if let tooLarge = error.child("file-too-large", namespace: namespace) {
+            let stated = tooLarge.child("max-file-size", namespace: namespace).flatMap { Int($0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return XMPPUploadError.fileTooLarge(maximumFileSize: stated.flatMap { $0 > 0 ? $0 : nil })
+        }
+        if condition == "not-allowed" { return XMPPUploadError.notAllowed }
+        if condition == "resource-constraint", let stamp = error.child("retry", namespace: namespace)?.attributes["stamp"],
+           let date = ArchiveQuery.timestamp(stamp) { return XMPPUploadError.retry(after: date) }
+        return stanza
+    }
+
     private static func https(_ value: String) -> URL? {
         guard MessageContent.FileSharing.validURL(value) else { return nil }
         return URL(string: value)
@@ -113,10 +141,11 @@ extension XMPPClient {
         } catch { return .failure(error) }
     }
 
+    /// Throws `XMPPUploadError` for a refusal XEP-0363 names.
     public func requestUploadSlot(service: XMPPUploadService, filename: String, size: Int, contentType: String) async throws -> XMPPUploadSlot {
         guard !filename.isEmpty, filename.utf8.count <= 255, !filename.contains("/"), MessageContent.validXMLText(filename),
               size > 0, !contentType.isEmpty, contentType.utf8.count <= 128, MessageContent.validXMLText(contentType) else { throw XMPPClientError.invalidConfiguration }
         let payload = "<request xmlns='\(XMPPUploadService.namespace)' filename='\(xmlEscaped(filename))' size='\(size)' content-type='\(xmlEscaped(contentType))'/>"
-        return try XMPPUploadSlot.decode(try await requestIQ(type: "get", to: service.jid, payload: payload))
+        return try XMPPUploadSlot.decode(try await requestIQ(type: "get", to: service.jid, payload: payload, returnsError: true))
     }
 }

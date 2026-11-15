@@ -25,6 +25,7 @@ import AppKit
     }
 
     typealias Delivery = ShareRules.Delivery
+    typealias Preparation = ShareRules.Preparation
 
     private(set) var phase = Phase.loading
     private(set) var chats: [ShareRules.Chat] = []
@@ -40,12 +41,6 @@ import AppKit
     private(set) var outcomeNote: String?
     private(set) var avatars: [String: PlatformImage] = [:]
 
-    enum Preparation: Equatable {
-        case preparing
-        case ready(size: Int)
-        case failed(String)
-    }
-
     private var root: URL?
     private var store: MessageStore?
     private var encryption: OMEMOService?
@@ -57,7 +52,7 @@ import AppKit
     private var roomMembers: [String: [String]] = [:]
     private var contactLinks: [String: ContactLink] = [:]
     private var preparedFiles: [UUID: PreparedAttachment] = [:]
-    private var preparation: Task<Void, Never>?
+    private let preparation = AttachmentQueue()
     private var sendTask: Task<Void, Never>?
     private var session: ShareSession?
     private var sessionTask: Task<[String: ShareItemState], Never>?
@@ -80,10 +75,11 @@ import AppKit
 
     var files: [SharedItem] { items.filter(\.isFile) }
     var hasFiles: Bool { !files.isEmpty }
-    var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
+    var attachmentLimit: Int { AttachmentTransfer.plaintextLimit(serverMaximum: uploadService?.maximumFileSize) }
     var listedChats: [ShareRules.Chat] { ShareRules.listed(chats, search: search) }
     var selectedChats: [ShareRules.Chat] { selection.compactMap { id in chats.first { $0.id == id } } }
-    var isPreparing: Bool { prepared.values.contains(.preparing) }
+    var isPreparing: Bool { prepared.values.contains(.preparing) || offer != nil }
+    var offer: AttachmentPreparer.Shortening? { files.lazy.compactMap { self.prepared[$0.id]?.offer }.first }
     var canSend: Bool {
         phase == .ready && !isPreparing
             && ShareRules.canSend(files: readyFiles.count, unsendableFiles: unsendableFiles.count, text: text, recipients: selection.count)
@@ -105,6 +101,7 @@ import AppKit
     }
 
     func remove(_ item: SharedItem) {
+        preparation.cancel(item.id)
         items.removeAll { $0.id == item.id }
         prepared[item.id] = nil
         preparedFiles[item.id] = nil
@@ -160,7 +157,8 @@ import AppKit
             selection = [chat.id]
         }
         phase = .ready
-        startPreparation()
+        for item in files { prepared[item.id] = .preparing }
+        prepare(files, keepingFirst: nil)
         await loadEncryption()
     }
 
@@ -213,25 +211,25 @@ import AppKit
         }
     }
 
-    // Re-encodes one file at a time while the user picks a chat, so a file too large for the server shows on the
-    // review card before Send.
-    private func startPreparation() {
-        for item in files { prepared[item.id] = .preparing }
-        let files = files, limit = attachmentLimit
-        preparation = Task {
-            for item in files {
-                guard !Task.isCancelled, let file = item.file else { return }
-                do {
-                    let ready = try await AttachmentPreparer.prepare(fileURL: file, name: item.name, type: item.type, limit: limit)
-                    guard prepared[item.id] != nil else { continue }
-                    preparedFiles[item.id] = ready
-                    prepared[item.id] = .ready(size: ready.data.count)
-                } catch {
-                    guard prepared[item.id] != nil else { continue }
-                    let reason = if case AttachmentPreparer.Failure.tooLarge = error { "Too large for this server" } else { "Can't be read" }
-                    prepared[item.id] = .failed(reason)
-                }
-            }
+    func answer(_ offer: AttachmentPreparer.Shortening, accepted: Bool) {
+        guard let item = files.first(where: { prepared[$0.id] == .tooLong(offer) }) else { return }
+        prepared[item.id] = accepted ? .preparing : .failed(Preparation.declined)
+        if accepted { prepare([item], keepingFirst: offer.seconds) }
+    }
+
+    // Re-encodes each file while the user picks a chat, so a file too large for the account shows on the review card
+    // before Send.
+    private func prepare(_ files: [SharedItem], keepingFirst first: Int?) {
+        let limit = attachmentLimit
+        for item in files {
+            guard let file = item.file else { continue }
+            preparation.enqueue(item.id, {
+                try await AttachmentPreparer.prepare(fileURL: file, name: item.name, type: item.type, limit: limit, keepingFirst: first)
+            }, done: { [weak self] result in
+                guard let self, prepared[item.id] != nil else { return }
+                if case .success(let ready) = result { preparedFiles[item.id] = ready }
+                prepared[item.id] = Preparation(result)
+            })
         }
     }
 
@@ -342,7 +340,7 @@ import AppKit
     // Ends the connection and gives the lease back; the rows stay queued for the app.
     func cancelSending() {
         closing = true
-        preparation?.cancel()
+        preparation.cancelAll()
         sessionTask?.cancel()
     }
 

@@ -67,7 +67,6 @@
       "try? NotificationAccessGate.disable(at: NotificationAccessGate.location())",
       "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
       "try? await Task.sleep(for: .seconds(2))",
-      "try? await Task.sleep(for: UploadFailureBudget.backOff)",
       "try? await Task.sleep(for: duration)",
       "try? await center.add(request)",
       "try? await client.sendSubscription(.subscribed, to: event.from)",

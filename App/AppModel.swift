@@ -250,8 +250,8 @@ final class AppModel {
     private(set) var attachmentFiles: [String: URL] = [:]
     var attachmentDownloads: [String: AttachmentDownloadState] { downloads.states }
     // Persisted per account so the attach button survives launch and reconnect.
-    private var uploadService: XMPPUploadService?
-    private var uploads: UploadServiceMemory {
+    var uploadService: XMPPUploadService?
+    var uploads: UploadServiceMemory {
         UploadServiceMemory(defaults: preferences, mirror: testSessionID == nil ? SharedSession.groupDefaults : nil)
     }
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
@@ -271,9 +271,9 @@ final class AppModel {
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
-    @ObservationIgnored private var uploadFailures = UploadFailureBudget()
+    @ObservationIgnored lazy var uploadHolds = UploadHolds(resume: { [weak self] in self?.startUploads() }, notify: { [weak self] in self?.error = $0 })
     @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
-    var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
+    var attachmentLimit: Int { AttachmentTransfer.plaintextLimit(serverMaximum: uploadService?.maximumFileSize) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
     var canSendAttachments: Bool { isDemo || uploadService != nil }
     @ObservationIgnored let testSessionID = AppModel.launchTestSessionID
@@ -1775,7 +1775,7 @@ final class AppModel {
             guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
             for message in pending where message.attachment?.uploadTaskID == nil {
                 guard let attachment = message.attachment, self?.generation == token else { return }
-                if self?.uploadFailures.isWaiting(message.id) == true { continue }
+                if self?.uploadHolds.isWaiting(message.id) == true { continue }
                 let staged = files.stagingURL(messageID: message.id)
                 guard let size = try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? Int else {
                     // The staged ciphertext is gone (a cleared cache); the message can never be sent as is.
@@ -1796,28 +1796,10 @@ final class AppModel {
                     // A dropped connection is not the server refusing; the reconnect starts uploads again.
                     let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
                     guard let self, self.generation == token, !dropped else { continue }
-                    await self.uploadFailed(message, account: account)
+                    await self.uploadRefused(message, by: UploadRefusal(error, now: .now), service: service, account: account, token: token)
                 }
             }
         }
-    }
-
-    // At the failure budget the file is failed, so it shows Not sent with Retry and stops holding back what was queued
-    // after it.
-    private func uploadFailed(_ message: StoredMessage, account: String) async {
-        guard let store, accountID == account, let name = message.attachment?.name else { return }
-        guard uploadFailures.recordFailure(message.id) else {
-            error = "Could not upload \(name). It will be retried."
-            Task { [weak self] in
-                try? await Task.sleep(for: UploadFailureBudget.backOff)
-                self?.startUploads()
-            }
-            return
-        }
-        guard (try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)) != nil else { return }
-        error = "Could not upload \(name), so it was not sent. Retry it from the message."
-        await refresh()
-        startOutbox()
     }
 
     nonisolated static var uploadScope: String { launchTestSessionID ?? "primary" }
@@ -1831,11 +1813,11 @@ final class AppModel {
         let settled = await settler.settle(account: account, detectsStranded: stranding, now: Date())
         guard accountID == account else { return }
         for id in settled.uploaded {
-            uploadFailures.reset(id)
+            uploadHolds.reset(id)
             // A staged file left behind goes with the cache; the upload is recorded either way.
             try? FileManager.default.removeItem(at: files.stagingURL(messageID: id))
         }
-        for message in settled.failed { await uploadFailed(message, account: account) }
+        for message in settled.failed { await uploadFailed(message, account: account, reason: settled.reason(for: message)) }
         if !settled.uploaded.isEmpty, accountID == account { await refresh(); startOutbox() }
         // A grace held for uploads ends once none is left.
         await graceUploadsChanged()
@@ -2464,7 +2446,7 @@ final class AppModel {
         guard let store else { return }
         do {
             try await store.retryOutgoing(accountID: accountID, messageID: id)
-            uploadFailures.reset(id)
+            uploadHolds.reset(id)
             await refresh()
             // A file that gave up uploading goes back to the uploader; everything else to the outbox.
             startUploads()

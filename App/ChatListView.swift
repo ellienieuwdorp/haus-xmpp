@@ -171,7 +171,7 @@ struct ChatListView: View {
         }
         .navigationDestination(for: ChatRoute.self) { route in
             switch route {
-            case .chat(let chatID): ConversationView(model: model, chatID: chatID)
+            case .chat(let chatID): ConversationView(model: model, chatID: chatID, routed: { [path = $path] in path.wrappedValue.contains(.chat(chatID)) })
             case .details(let chatID): ChatDetailsView(model: model, chatID: chatID)
             case .encryption(let chatID): EncryptionDetailsView(model: model, chatID: chatID)
             case .groupDetails(let room): GroupDetailsView(model: model, room: room)
