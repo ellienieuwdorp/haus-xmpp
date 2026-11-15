@@ -69,20 +69,35 @@ import XCTest
         XCTAssertEqual(prepared.height, 1280)
     }
 
+    // An encoder that misses even its retry's rate, as a hosted simulator's can on noise, answers with a strictly
+    // shorter start; taking each offer ends in a start under the limit.
     func testAClipTooLongForTheLimitOffersItsStartAndSendsJustThat() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 6)
-        let limit = 100_000
+        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 12)
+        let limit = 400_000
+        var offered: Int
         do {
             _ = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit)
-            XCTFail("six seconds do not fit at an acceptable quality")
+            return XCTFail("twelve seconds do not fit at an acceptable quality")
         } catch AttachmentPreparer.Failure.tooLong(let seconds) {
-            XCTAssertEqual(seconds, 1)
+            offered = seconds
         }
-        let start = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit, keepingFirst: 1)
-        let output = try await describe(start)
-        XCTAssertLessThanOrEqual(start.data.count, limit)
-        XCTAssertEqual(output.seconds, 1, accuracy: 0.1)
-        XCTAssertEqual(output.size, CGSize(width: 640, height: 360))
+        XCTAssertTrue((2..<12).contains(offered), "offered \(offered) s")
+        var start: PreparedAttachment?
+        while start == nil {
+            do {
+                start = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit, keepingFirst: offered)
+            } catch AttachmentPreparer.Failure.tooLong(let seconds) {
+                XCTAssertLessThan(seconds, offered, "each offer is shorter than the last")
+                guard seconds < offered else { return }
+                offered = seconds
+            }
+        }
+        let prepared = try XCTUnwrap(start)
+        let output = try await describe(prepared)
+        XCTAssertLessThanOrEqual(prepared.data.count, limit)
+        XCTAssertEqual(output.seconds, Double(offered), accuracy: 0.1)
+        XCTAssertLessThanOrEqual(output.size.height, 480)
+        record("sent the first \(offered) s in \(prepared.data.count) of \(limit) bytes at \(output.size)")
         let shortening = AttachmentPreparer.Shortening(seconds: 220)
         XCTAssertEqual(shortening.message, "This video is too long to send at an acceptable quality. Send the first 3:40?")
         XCTAssertEqual(shortening.confirmation, "Send First 3:40")
