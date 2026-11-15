@@ -42,9 +42,10 @@ import XCTest
         record("planned \(plan.plannedBytes) bytes at 960x540, 30 fps; wrote \(prepared.data.count) of \(limit) at \(output.size), \(output.frameRate) fps")
     }
 
+    // The limit is many times the rung's ceiling, so no encoder's overshoot brings in the retry and its lower rung.
     func testSixtyFramesThatStillLookGoodAtSixtyKeepThem() async throws {
         let clip = try await makeClip(width: 1280, height: 720, frameRate: 60, seconds: 3)
-        let limit = 2_000_000
+        let limit = 20_000_000
         let planned = try await Self.plan(clip, limit: limit)
         let plan = try XCTUnwrap(planned)
         XCTAssertEqual([plan.width, plan.height], [1280, 720])
@@ -57,14 +58,16 @@ import XCTest
         record("planned \(plan.plannedBytes) bytes at 1280x720, 60 fps; wrote \(prepared.data.count) of \(limit) at \(output.size), \(output.frameRate) fps")
     }
 
+    // A 4K source scales down to the top rung, and the limit is many times that rung's ceiling, so no encoder's
+    // overshoot brings in the retry and its lower rung.
     func testARotatedRecordingComesOutUprightAtItsDisplaySize() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 2, transform: CGAffineTransform(rotationAngle: .pi / 2))
-        let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: 400_000)
+        let clip = try await makeClip(width: 3840, height: 2160, frameRate: 30, seconds: 1, transform: CGAffineTransform(rotationAngle: .pi / 2))
+        let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: 20_000_000)
         let output = try await describe(prepared)
-        XCTAssertEqual(output.size, CGSize(width: 540, height: 960))
+        XCTAssertEqual(output.size, CGSize(width: 1080, height: 1920))
         XCTAssertEqual(output.transform, .identity, "the frames themselves are upright")
-        XCTAssertEqual(prepared.width, 540)
-        XCTAssertEqual(prepared.height, 960)
+        XCTAssertEqual(prepared.width, 1080)
+        XCTAssertEqual(prepared.height, 1920)
     }
 
     func testAClipTooLongForTheLimitOffersItsStartAndSendsJustThat() async throws {
