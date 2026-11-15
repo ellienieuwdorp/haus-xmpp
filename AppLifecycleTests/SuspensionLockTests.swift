@@ -1,6 +1,7 @@
 import XCTest
 import Darwin
 import SQLite3
+import UIKit
 import MessageStore
 import MessagingCore
 @testable import HausXMPP
@@ -127,6 +128,31 @@ import MessagingCore
             XCTAssertEqual($0 as? MessageStoreError, .suspended)
         }
         assertNothingLocked(scene, "after the refusals")
+        try await other.close()
+    }
+
+    // A notification action whose background time iOS refuses still opens parked storage for its work, as a reply
+    // must be saved, and its end parks storage again. Refused time has no task to end.
+    func testANotificationActionUnderRefusedTimeReopensAndParksAgain() async throws {
+        let scene = try await start(), model = scene.model
+        await model.prepare()
+        let other = try MessageStore(url: scene.database)
+        await scene.leave()
+        XCTAssertFalse(MessageStore.reopeningAllowed)
+        var ended: [UIBackgroundTaskIdentifier] = []
+        let center = NotificationActionCenter(time: UIKitBackgroundTime(begin: { _ in .invalid }, end: { ended.append($0) }),
+                                              reportRejectedReply: {})
+        center.handler = { _, _ in
+            do { _ = try await other.chats(accountID: model.accountID); return .markedRead } catch { return .unavailable }
+        }
+        let destination = try XCTUnwrap(NotificationDestination(accountID: "alice@example.org", messageID: UUID().uuidString))
+        let outcome = await center.perform(NotificationActionRequest(destination: destination, kind: .markRead))
+        XCTAssertEqual(outcome, .markedRead, "the action read storage under refused time")
+        await StorageParking.shared.settled()
+        XCTAssertEqual(ended, [])
+        XCTAssertFalse(MessageStore.reopeningAllowed, "the action's end parked storage again")
+        XCTAssertEqual(StorageParking.shared.kept, 0)
+        assertNothingLocked(scene, "after a notification action under refused time")
         try await other.close()
     }
 
