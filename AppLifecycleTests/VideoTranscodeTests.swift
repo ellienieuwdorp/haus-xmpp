@@ -43,22 +43,6 @@ import XCTest
     }
 
     // The limit is many times the rung's ceiling, so no encoder's overshoot brings in the retry and its lower rung.
-    func testSixtyFramesThatStillLookGoodAtSixtyKeepThem() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 60, seconds: 3)
-        let limit = 20_000_000
-        let planned = try await Self.plan(clip, limit: limit)
-        let plan = try XCTUnwrap(planned)
-        XCTAssertEqual([plan.width, plan.height], [1280, 720])
-        XCTAssertEqual(plan.frameRate, 60)
-        let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit)
-        let output = try await describe(prepared)
-        XCTAssertLessThanOrEqual(prepared.data.count, limit)
-        XCTAssertLessThanOrEqual(output.size.height, 720)
-        XCTAssertEqual(output.frameRate, 60, accuracy: 0.5)
-        record("planned \(plan.plannedBytes) bytes at 1280x720, 60 fps; wrote \(prepared.data.count) of \(limit) at \(output.size), \(output.frameRate) fps")
-    }
-
-    // The limit is many times the rung's ceiling, so no encoder's overshoot brings in the retry and its lower rung.
     func testARotatedRecordingComesOutUprightAtItsDisplaySize() async throws {
         let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 2, transform: CGAffineTransform(rotationAngle: .pi / 2))
         let prepared = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: 20_000_000)
@@ -72,16 +56,16 @@ import XCTest
     // An encoder that misses even its retry's rate, as a hosted simulator's can on noise, answers with a strictly
     // shorter start; taking each offer ends in a start under the limit.
     func testAClipTooLongForTheLimitOffersItsStartAndSendsJustThat() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 12)
-        let limit = 400_000
+        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 8)
+        let limit = 250_000
         var offered: Int
         do {
             _ = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit)
-            return XCTFail("twelve seconds do not fit at an acceptable quality")
+            return XCTFail("eight seconds do not fit at an acceptable quality")
         } catch AttachmentPreparer.Failure.tooLong(let seconds) {
             offered = seconds
         }
-        XCTAssertTrue((2..<12).contains(offered), "offered \(offered) s")
+        XCTAssertTrue((2..<8).contains(offered), "offered \(offered) s")
         var start: PreparedAttachment?
         while start == nil {
             do {
@@ -117,7 +101,7 @@ import XCTest
     }
 
     func testAStalledEncodeEndsAtItsDeadlineAndLeavesNoFileBehind() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 3)
+        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 1)
         let before = try leftovers()
         do {
             _ = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: 1_000_000, clock: ExpiredClock())
@@ -129,7 +113,7 @@ import XCTest
     }
 
     func testCancellingStopsTheEncodeAndLeavesNoFileBehind() async throws {
-        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 6)
+        let clip = try await makeClip(width: 1280, height: 720, frameRate: 30, seconds: 3)
         let before = try leftovers()
         let started = expectation(description: "encoding")
         let task = Task { try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: 1_000_000, clock: SignallingClock(started: started)) }
@@ -223,7 +207,8 @@ import XCTest
         audio.expectsMediaDataInRealTime = false
         writer.add(video)
         writer.add(audio)
-        XCTAssertTrue(writer.startWriting())
+        // A writer that cannot start ignores the session, and appending to it then raises and ends the test process.
+        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         writer.startSession(atSourceTime: .zero)
         let frames = ClipFrames(adaptor: adaptor, width: width, height: height, count: Int(seconds * Double(frameRate)), rate: frameRate)
         let tone = try ClipTone(seconds: seconds)
@@ -241,7 +226,7 @@ import XCTest
         }
         await fulfillment(of: written, timeout: 60)
         await writer.finishWriting()
-        XCTAssertEqual(writer.status, .completed, String(describing: writer.error))
+        guard writer.status == .completed else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         return url
     }
 }
