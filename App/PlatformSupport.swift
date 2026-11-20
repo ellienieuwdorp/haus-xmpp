@@ -278,6 +278,8 @@ private struct TerminationPermission: NSViewRepresentable {
     #if os(iOS)
     private var task: UIBackgroundTaskIdentifier
     private let onExpire: (@MainActor () -> Void)?
+    // Counted with `StorageParking` from init, even when iOS refused the time.
+    private var ended = false
     #else
     private var activity: (any NSObjectProtocol)?
     #endif
@@ -293,6 +295,7 @@ private struct TerminationPermission: NSViewRepresentable {
         task = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
             MainActor.assumeIsolated { expire(name) }
         }
+        StorageParking.shared.hold(granted: task != .invalid)
         if task == .invalid { Self.log.error("background time refused: \(name, privacy: .public)") }
         else { Self.log.notice("background activity began: \(name, privacy: .public)") }
         #else
@@ -302,6 +305,12 @@ private struct TerminationPermission: NSViewRepresentable {
             self?.end()
         }
         #endif
+    }
+
+    static func during(_ name: String, _ work: () async -> Void) async {
+        let activity = BackgroundActivity(name)
+        defer { activity.end() }
+        await work()
     }
 
     // nil on iOS, where the scene's own lifetime covers this work.
@@ -324,12 +333,18 @@ private struct TerminationPermission: NSViewRepresentable {
     }
     #endif
 
+    // On iOS the last end away from the front waits for `StorageParking`.
     func end() {
         #if os(iOS)
-        guard task != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(task)
-        task = .invalid
-        Self.log.notice("background activity ended: \(self.name, privacy: .public)")
+        guard !ended else { return }
+        ended = true
+        let task = task, name = name
+        self.task = .invalid
+        StorageParking.shared.release {
+            guard task != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(task)
+            Self.log.notice("background activity ended: \(name, privacy: .public)")
+        }
         #else
         guard let activity else { return }
         ProcessInfo.processInfo.endActivity(activity)

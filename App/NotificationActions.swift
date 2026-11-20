@@ -205,11 +205,28 @@ struct BackgroundTaskID: Equatable {
 }
 
 #if os(iOS)
+// Counted with `StorageParking` as `BackgroundActivity` is, refused time included: storage reopens for the action and
+// parks again before its time ends.
 @MainActor final class UIKitBackgroundTime: NotificationActionBackgroundTime {
-    func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
-        UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
+    private let beginTask: @MainActor (@escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier
+    private let endTask: @MainActor (UIBackgroundTaskIdentifier) -> Void
+
+    init(begin: @escaping @MainActor (@escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier = { expiration in
+             UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
+         },
+         end: @escaping @MainActor (UIBackgroundTaskIdentifier) -> Void = { UIApplication.shared.endBackgroundTask($0) }) {
+        beginTask = begin
+        endTask = end
     }
-    func end(_ task: UIBackgroundTaskIdentifier) { UIApplication.shared.endBackgroundTask(task) }
+
+    func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
+        let task = beginTask(expiration)
+        StorageParking.shared.hold(granted: task != .invalid)
+        return task
+    }
+    func end(_ task: UIBackgroundTaskIdentifier) {
+        StorageParking.shared.release { [endTask] in if task != .invalid { endTask(task) } }
+    }
     var remaining: TimeInterval { UIApplication.shared.backgroundTimeRemaining }
 }
 #else
@@ -295,15 +312,16 @@ struct BackgroundTaskID: Equatable {
     }
 }
 
+// Ends what it began exactly once, refused time too, so the time source's own count stays balanced.
 @MainActor private final class ActionBackgroundTask {
     private let time: any NotificationActionBackgroundTime
-    private var id = BackgroundTaskID.invalid
+    private var id: BackgroundTaskID?
     init(time: any NotificationActionBackgroundTime) { self.time = time }
     func begin(expiration: @escaping @MainActor () -> Void) { id = time.begin(expiration: expiration) }
     func end() {
-        guard id != .invalid else { return }
+        guard let id else { return }
+        self.id = nil
         time.end(id)
-        id = .invalid
     }
 }
 

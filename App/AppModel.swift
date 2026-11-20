@@ -421,7 +421,7 @@ final class AppModel {
             store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader.shared(scope: Self.uploadScope)
-            uploader.onFinish { [weak self] in Task { @MainActor in await self?.reconcileUploads(stranding: false) } }
+            uploader.onFinish { [weak self] in Task { @MainActor in await self?.uploadFinished() } }
             self.uploader = uploader
             outboxSender = OutboxSender(store: opened)
             accountID = savedAccount
@@ -1803,6 +1803,12 @@ final class AppModel {
     }
 
     nonisolated static var uploadScope: String { launchTestSessionID ?? "primary" }
+
+    // The upload session reports in the background too; its outcomes are settled under background time, so parked
+    // storage reopens for them and parks again.
+    func uploadFinished() async {
+        await BackgroundActivity.during("Record a finished upload") { await reconcileUploads(stranding: false) }
+    }
 
     // Adopts what the session runs or finished while the app was away. Only a reconcile, once the session delivered
     // that, gives a slot with neither a new one.
@@ -3235,16 +3241,16 @@ final class AppModel {
     // Sends them only if this process owns the transport; without the lease the next connection sends them.
     private func startOutboxRingListener() {
         guard outboxRingListener == nil else { return }
-        let listener = OutboxRing.Listener { [weak self] in
-            guard let self, self.store != nil, !self.isDemo else { return }
-            Task {
-                await self.refresh()
-                self.startUploads()
-                self.startOutbox()
-            }
-        }
+        let listener = OutboxRing.Listener { [weak self] in Task { await self?.outboxRingRang() } }
         if listener.start() { outboxRingListener = listener }
         else { Self.syncLog.error("outbox ring could not be observed") }
+    }
+
+    // Rung by an extension that queued something, possibly while this app is in the background: its own background
+    // time lets parked storage reopen for the refresh, and parks it again as it ends.
+    func outboxRingRang() async {
+        guard store != nil, !isDemo else { return }
+        await BackgroundActivity.during("Read what an extension queued") { await refresh(); startUploads(); startOutbox() }
     }
 
     // Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
@@ -3651,7 +3657,8 @@ final class AppModel {
             let page = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: timelineWindow)
             guard accountID == account, openChatID == selected else { return }
             publishTimeline(page, chat: selected)
-        } catch { self.error = "Could not read local conversations." }
+            // A store parked with no background time throws `suspended` having read nothing; the front reloads.
+        } catch MessageStoreError.suspended { return } catch { self.error = "Could not read local conversations." }
     }
 
     // The chat list does not depend on which chat is open, so only the account fences it.

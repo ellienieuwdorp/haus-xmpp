@@ -353,11 +353,7 @@
       "/// Requests per chat and per run."
     ],
     "unsafe.discarded-try" : [
-      "catch { try? execute(\"ROLLBACK\"); throw error }",
-      "deinit { try? close() }",
-      "for suffix in [\"\", \"-wal\", \"-shm\", \"-journal\"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }",
-      "if case .failure = marked, connection.inTransaction { try? connection.close() }",
-      "} catch { try? connection.execute(\"ROLLBACK\"); throw error }"
+      "for suffix in [\"\", \"-wal\", \"-shm\", \"-journal\"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }"
     ]
   },
   "Packages/MessageStore/Sources/MessageStore/Models.swift" : {
