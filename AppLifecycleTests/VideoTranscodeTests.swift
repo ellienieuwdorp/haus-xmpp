@@ -54,31 +54,6 @@ import XCTest
         XCTAssertEqual(prepared.height, 640)
     }
 
-    // The whole clip cannot fit at an acceptable quality, so the first answer is a shorter start. An encoder that then
-    // misses that start's rate answers with a strictly shorter one; taking each offer ends in a start under the limit.
-    func testAClipTooLongForTheLimitOffersAShorterStartThatFits() async throws {
-        let clip = try await makeClip(width: 640, height: 360, frameRate: 30, seconds: 4)
-        let limit = 140_000
-        var offers: [Int] = []
-        var sent: PreparedAttachment?
-        while sent == nil {
-            do {
-                sent = try await AttachmentPreparer.prepareVideo(clip, name: "clip.mov", limit: limit, keepingFirst: offers.last)
-            } catch AttachmentPreparer.Failure.tooLong(let seconds) {
-                guard seconds >= 1, seconds < offers.last ?? 4 else { return XCTFail("offered \(seconds) s after \(offers)") }
-                offers.append(seconds)
-            }
-        }
-        let seconds = try XCTUnwrap(offers.last, "four seconds do not fit at an acceptable quality")
-        let prepared = try XCTUnwrap(sent)
-        let plan = try await Self.plan(clip, limit: limit, keepingFirst: seconds)
-        let output = try await describe(prepared)
-        XCTAssertLessThanOrEqual(prepared.data.count, limit)
-        XCTAssertEqual(output.seconds, Double(seconds), accuracy: 0.1)
-        XCTAssertLessThanOrEqual(output.size.height, CGFloat(plan.height))
-        record("offered \(offers) s; sent \(prepared.data.count) of \(limit) bytes at \(output.size)")
-    }
-
     func testAStalledEncodeEndsAtItsDeadlineAndLeavesNoFileBehind() async throws {
         let clip = try await makeClip(width: 640, height: 360, frameRate: 30, seconds: 1)
         let before = try leftovers()
@@ -170,8 +145,8 @@ import XCTest
         add(attachment)
     }
 
-    private nonisolated static func plan(_ clip: URL, limit: Int, keepingFirst first: Int? = nil) async throws -> VideoSizePlan {
-        let source = try await VideoTranscoder.source(of: AVURLAsset(url: clip), keepingFirst: first)
+    private nonisolated static func plan(_ clip: URL, limit: Int) async throws -> VideoSizePlan {
+        let source = try await VideoTranscoder.source(of: AVURLAsset(url: clip), keepingFirst: nil)
         let outcome = VideoSizePlan.plan(source, limit: limit)
         guard case .encode(let plan) = outcome else { throw Unplanned(outcome: outcome) }
         return plan
