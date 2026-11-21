@@ -229,8 +229,9 @@ struct DeviceFingerprintSheet: View {
                         Text(name.map { "Ask \($0) to read theirs out loud." } ?? "Compare with the fingerprint shown on that device.")
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         if device.identityChanged {
-                            Label(ChatDeviceReview.identityChangeNote, systemImage: "exclamationmark.shield")
-                                .font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center)
+                            // The symbol sits inline so wrapped lines stay centred under the heading.
+                            Text("\(Image(systemName: "exclamationmark.shield")) \(ChatDeviceReview.identityChangeNote)").font(.subheadline)
+                                .foregroundStyle(.orange).multilineTextAlignment(.center).accessibilityLabel(ChatDeviceReview.identityChangeNote)
                         }
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 8)
