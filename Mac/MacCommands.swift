@@ -82,6 +82,7 @@ import SwiftUI
 
 struct MacChatCommands {
     let selected: MacChatActions?
+    let markAllRead: (() -> Void)?
     let detailsShown: Bool
     let chats: [(id: String, title: String)]
     let selection: String?
@@ -91,6 +92,7 @@ struct MacChatCommands {
     @MainActor init(model: AppModel, window: MacWindowState) {
         let ordered = ChatListOrder.sorted(model.chats)
         selected = window.selection.flatMap { id in ordered.first { $0.id == id } }.map { MacChatActions(chat: $0, model: model, window: window) }
+        markAllRead = model.markAllReadAction
         detailsShown = window.inspectorShown
         chats = ordered.map { ($0.id, $0.displayTitle) }
         selection = window.selection
@@ -132,7 +134,7 @@ struct MacChatMenu: View {
     let commands: MacChatCommands?
 
     var body: some View {
-        MacChatActionsMenu(actions: commands?.selected, placement: .menuBar)
+        MacChatActionsMenu(actions: commands?.selected, placement: .menuBar, markAllRead: commands?.markAllRead)
         Divider()
         Button(commands?.detailsShown == true ? "Hide Chat Details" : "Show Chat Details", systemImage: "info.circle") { commands?.toggleDetails() }
             .keyboardShortcut("i", modifiers: [.command, .option])

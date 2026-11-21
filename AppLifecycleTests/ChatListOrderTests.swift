@@ -25,4 +25,22 @@ final class ChatListOrderTests: XCTestCase {
         XCTAssertEqual(ChatListOrder.neighbour(of: "a", in: ["a"], forward: true), "a")
         XCTAssertNil(ChatListOrder.neighbour(of: nil, in: [], forward: true))
     }
+
+    func testRowTimesAreShortOnScreenAndLongForVoiceOver() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Amsterdam"))
+        let locale = Locale(identifier: "en_GB"), now = Date(timeIntervalSince1970: 1_790_582_400) // Monday 28 September 2026, 10:00
+        let cases: [(seconds: TimeInterval, visible: String, spoken: String, line: UInt)] = [
+            (1_790_577_000, "08:30", "08:30", #line),
+            (1_790_510_700, "Yesterday", "Yesterday at 14:05", #line),
+            (1_790_330_400, "Fri", "Friday", #line),
+            (1_789_984_800, "21/09", "21 September", #line),
+            (1_763_722_800, "21/11", "21 November 2025", #line),
+        ]
+        for c in cases {
+            let date = Date(timeIntervalSince1970: c.seconds)
+            XCTAssertEqual(ChatRow.timeLabel(date, now: now, calendar: calendar, locale: locale), c.visible, line: c.line)
+            XCTAssertEqual(ChatRow.timeLabel(date, now: now, calendar: calendar, locale: locale, spoken: true), c.spoken, line: c.line)
+        }
+    }
 }

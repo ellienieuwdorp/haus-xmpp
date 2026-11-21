@@ -251,3 +251,23 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
         #expect(try await store.pendingNotifications(accountID: account).claimed == [.pending(sender: peer, digest: "p3")])
     }
 }
+
+@Test func markingSeveralChatsReadMovesOnlyThoseOfThisAccount() async throws {
+    try await withEncryptedStore(account: account) { store, _ in
+        let quiet = "quiet@x", elsewhere = "elsewhere@x"
+        try await store.upsertChat(accountID: account, chatID: peer, title: "Peer")
+        try await store.upsertChat(accountID: account, chatID: quiet, title: "Quiet")
+        try await store.upsertChat(accountID: account, chatID: room, title: "Room")
+        try await store.insertMessage(message("p1", at: 1))
+        try await store.insertMessage(message("r1", at: 2, chat: room, sender: "member@x"))
+        try await store.upsertChat(accountID: elsewhere, chatID: peer, title: "Peer")
+        try await store.insertMessage(StoredMessage(id: "e1", accountID: elsewhere, chatID: peer, senderID: peer, body: "Synthetic e1",
+                                                    sentAt: Date(timeIntervalSince1970: 1_800_000_003), isOutgoing: false,
+                                                    encryptionProfile: "modern", wireID: "e1"))
+        #expect(try await store.markChatsRead(accountID: account, chatIDs: [room, quiet, peer]) == [room, peer])
+        #expect(try await store.unreadCounts(accountID: account).isEmpty)
+        #expect(try await store.unreadCounts(accountID: elsewhere) == [peer: 1])
+        #expect(try await store.readPointer(accountID: account, chatID: peer)?.publishPending == true)
+        #expect(try await store.markChatsRead(accountID: account, chatIDs: [room, peer]).isEmpty)
+    }
+}

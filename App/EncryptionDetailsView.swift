@@ -290,7 +290,7 @@ struct DeviceFingerprintSheet: View {
             // A device ID can publish in both versions, each with its own fingerprint encoding: name the one being compared.
             .navigationSubtitle("\(device.jid) · \(versions ?? device.profile.label)")
             .inlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.closeButtonLabel() } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(role: .close) { dismiss() } } }
             .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {
                 Button("Repair session") {
                     dismiss()

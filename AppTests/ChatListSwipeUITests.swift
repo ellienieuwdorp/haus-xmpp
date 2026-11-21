@@ -43,7 +43,8 @@ final class ChatListSwipeUITests: XCTestCase {
             mute.tap()
             let eightHours = app.buttons["For 8 hours"]
             XCTAssertTrue(eightHours.waitForExistence(timeout: 3))
-            XCTAssertTrue(app.buttons["For 1 hour"].exists && app.buttons["For 1 week"].exists && app.buttons["Always"].exists)
+            XCTAssertTrue(app.buttons["For 1 hour"].exists && app.buttons["For 1 day"].exists && app.buttons["For 1 week"].exists
+                          && app.buttons["Always"].exists && app.buttons["Until…"].exists)
             capture(app, "Mute duration dialog")
             XCTAssertFalse((alex.value as? String ?? "").contains("Muted"), "No change before a duration is picked")
             eightHours.tap()
@@ -71,9 +72,41 @@ final class ChatListSwipeUITests: XCTestCase {
         }
     }
 
+    @MainActor func testUntilMutesToAChosenTimeEightTomorrowByDefault() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
+        app.launch()
+
+        let alex = app.buttons["chat.alex@preview.local"]
+        XCTAssertTrue(alex.waitForExistence(timeout: 15))
+        alex.tap()
+        let header = app.buttons["chatDetails"]
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        header.tap()
+        let row = app.buttons["chatNotifications"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        let until = app.buttons["Until…"]
+        XCTAssertTrue(until.waitForExistence(timeout: 3))
+        until.tap()
+        let confirm = app.buttons["muteUntilConfirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirm.isEnabled, "The suggested end lies ahead")
+        capture(app, "Mute until sheet")
+        confirm.tap()
+        XCTAssertTrue(wait(row, prefix: "Muted until tomorrow"), String(describing: row.value))
+    }
+
     // The list applies a pin or mute change a moment after the swipe action or dialog closes.
     @MainActor private func wait(_ element: XCUIElement, value: String, timeout: TimeInterval = 5) -> Bool {
         let predicate = NSPredicate(format: "value == %@", value)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
+    }
+
+    @MainActor private func wait(_ element: XCUIElement, prefix: String, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "value BEGINSWITH %@", prefix)
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
     }
 }

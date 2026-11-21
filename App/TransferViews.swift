@@ -251,6 +251,7 @@ struct RestoreTransferView: View {
     @State private var restoring = false
 
     private var code: TransferCode? { TransferCode(codeText) }
+    private var hasInput: Bool { file != nil || !codeText.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -349,7 +350,7 @@ struct RestoreTransferView: View {
             }
             .groupedFormStyle()
             .inlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(restoring) } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { DiscardingCancelButton(isDirty: hasInput) { dismiss() }.disabled(restoring) } }
             .fileImporter(isPresented: $choosing, allowedContentTypes: [.data]) { result in
                 guard case let .success(url) = result else { return }
                 file = url
@@ -358,7 +359,7 @@ struct RestoreTransferView: View {
                 fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 if scoped { url.stopAccessingSecurityScopedResource() }
             }
-            .interactiveDismissDisabled(restoring)
+            .interactiveDismissDisabled(restoring || hasInput)
         }
         .macSheetSize(width: 440, height: 600)
     }
