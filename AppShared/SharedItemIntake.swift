@@ -87,12 +87,14 @@ enum SharedItemIntake {
         switch kind {
         case .link:
             guard let url = await object(URL.self, from: provider) else { return nil }
-            // A file URL offered as a link is a file.
-            if url.isFileURL { return await copiedFile(at: url, suggestedName: provider.suggestedName) }
-            return SharedItem(id: UUID(), kind: .link, file: nil, name: url.host() ?? "Link", type: .url, text: url.absoluteString, size: nil)
+            return await link(url, suggestedName: provider.suggestedName)
         case .text:
-            guard let text = await text(from: provider), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return SharedItem(id: UUID(), kind: .text, file: nil, name: "Text", type: .plainText, text: text, size: nil)
+            switch await text(from: provider) {
+            case let .link(url): return await link(url, suggestedName: provider.suggestedName)
+            case let .text(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+                return SharedItem(id: UUID(), kind: .text, file: nil, name: "Text", type: .plainText, text: text, size: nil)
+            default: return nil
+            }
         case .image, .video, .file:
             guard let type = preferredType(for: kind, registeredTypes: registered) else { return nil }
             if type.conforms(to: .fileURL) {
@@ -110,6 +112,12 @@ enum SharedItemIntake {
         }
     }
 
+    // A file URL offered as a link is a file.
+    private static func link(_ url: URL, suggestedName: String?) async -> SharedItem? {
+        if url.isFileURL { return await copiedFile(at: url, suggestedName: suggestedName) }
+        return SharedItem(id: UUID(), kind: .link, file: nil, name: url.host() ?? "Link", type: .url, text: url.absoluteString, size: nil)
+    }
+
     private static func item(kind: SharedItem.Kind, file: URL, type: UTType, suggestedName: String?) -> SharedItem {
         let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
         let fallback = switch kind { case .image: "photo"; case .video: "video"; default: "file" }
@@ -125,22 +133,27 @@ enum SharedItemIntake {
         return cleaned.isEmpty ? "file" : cleaned
     }
 
-    // Apps that share text differ: a string, an attributed string or UTF-8 bytes under the text type.
-    private static func text(from provider: NSItemProvider) async -> String? {
-        if let text = await object(String.self, from: provider) { return text }
-        guard let type = preferredType(for: .text, registeredTypes: provider.registeredTypeIdentifiers),
-              let identifier = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: type) == true }) else { return nil }
-        return await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
-                let text: String? = switch item {
-                case let string as String: string
-                case let attributed as NSAttributedString: attributed.string
-                case let data as Data where data.count <= 1 << 20: String(data: data, encoding: .utf8)
-                default: nil
+    private enum TextOrLink: Sendable { case text(String), link(URL) }
+
+    // Apps that share text differ: a string, an attributed string or UTF-8 bytes under the text type, or a URL object
+    // (Google Maps), which goes as the link it is. The item is read first, since a string object may hide the URL.
+    private static func text(from provider: NSItemProvider) async -> TextOrLink? {
+        if let identifier = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .plainText) == true }) {
+            let loaded: TextOrLink? = await withCheckedContinuation { continuation in
+                provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
+                    let value: TextOrLink? = switch item {
+                    case let url as URL: .link(url)
+                    case let string as String: .text(string)
+                    case let attributed as NSAttributedString: .text(attributed.string)
+                    case let data as Data where data.count <= 1 << 20: String(data: data, encoding: .utf8).map(TextOrLink.text)
+                    default: nil
+                    }
+                    continuation.resume(returning: value)
                 }
-                continuation.resume(returning: text)
             }
+            if let loaded { return loaded }
         }
+        return await object(String.self, from: provider).map(TextOrLink.text)
     }
 
     // Copied before the handler returns: the system deletes its own copy then.
