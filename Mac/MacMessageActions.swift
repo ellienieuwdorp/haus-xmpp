@@ -100,7 +100,11 @@ struct MacMessageMenuContent: View {
                 palette.addItem(item)
             }
             palette.addItem(ActionItem(MacMessageMenu.moreReactionsTitle, image: NSImage(systemSymbolName: "plus", accessibilityDescription: nil), action: moreReactions))
-            for item in palette.items { item.isEnabled = menu.message.canReact }
+            for item in palette.items {
+                item.isEnabled = menu.message.canReact
+                // The emoji is the item: macOS 27 hides menu item images unless asked to keep them.
+                if #available(macOS 27, *) { item.preferredImageVisibility = .visible }
+            }
             let holder = NSMenuItem(title: "React", action: nil, keyEquivalent: "")
             holder.submenu = palette
             result.addItem(holder)
