@@ -69,6 +69,18 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: SharedItemIntake.root.path))
     }
 
+    // Google Maps shares its place link as a URL object under plain text.
+    func testAPlainTextItemHoldingAURLIsOneLink() async {
+        let maps = NSItemProvider(item: URL(string: "https://maps.app.goo.gl/x")! as NSURL, typeIdentifier: UTType.plainText.identifier)
+        XCTAssertEqual(SharedItemIntake.kind(of: maps.registeredTypeIdentifiers), .text)
+        let result = await SharedItemIntake.load([maps, NSItemProvider(item: "Look at this" as NSString, typeIdentifier: UTType.plainText.identifier)])
+        XCTAssertEqual(result.unreadable, 0)
+        XCTAssertEqual(result.items.map(\.kind), [.link, .text])
+        XCTAssertEqual(result.items.first?.text, "https://maps.app.goo.gl/x")
+        XCTAssertEqual(result.items.first?.name, "maps.app.goo.gl")
+        XCTAssertEqual(result.items.last?.text, "Look at this")
+    }
+
     // The composer's ImageIO JPEG at the same quality stays within a few percent of `UIImage.jpegData`'s size.
     func testImageIOJPEGMatchesUIKitOutput() throws {
         let image = try XCTUnwrap(Self.gradient(width: 1600, height: 1200))

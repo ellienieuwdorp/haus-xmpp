@@ -25,20 +25,44 @@ enum ChatDeviceReview {
         return current.trust
     }
 
-    static func headline(sendingWaits: Bool, isGroup: Bool, ownDevicesOnly: Bool, title: String) -> String {
+    // A waiting record flagged `identityChanged` kept its device ID but not its key.
+    static func identityChanged(_ waiting: [EncryptionDevice]) -> Bool { waiting.contains(where: \.identityChanged) }
+
+    static func headline(sendingWaits: Bool, isGroup: Bool, ownDevicesOnly: Bool, identityChanged: Bool, title: String) -> String {
+        if identityChanged {
+            return isGroup ? "A device in this group changed its identity"
+                : ownDevicesOnly ? "A device on your account changed its identity" : "\(title)’s device changed its identity"
+        }
         guard sendingWaits else { return "Messages waiting for review" }
         return isGroup ? "Devices need review" : ownDevicesOnly ? "New device on your account" : "\(title) added a new device"
     }
 
-    static func explanation(sendingWaits: Bool) -> String {
-        sendingWaits
+    // Legitimate reinstalls publish a new device ID, so a new key under a known one reads as unusual.
+    static func explanation(sendingWaits: Bool, identityChanged: Bool) -> String {
+        if identityChanged {
+            return sendingWaits
+                ? "That’s unusual: a reinstall adds a new device instead. Compare fingerprints before sending."
+                : "That’s unusual: a reinstall adds a new device instead. Compare fingerprints to read its messages."
+        }
+        return sendingWaits
             ? "Check its fingerprint before sending. Until then, nothing you write here leaves this \(ThisDevice.noun)."
             : "They come from a device you haven’t reviewed yet. Check its fingerprint to read them."
     }
+
+    static let identityChangeNote = "Its identity changed. That’s unusual: a reinstall adds a new device instead."
 
     static func rejectionMessage(for device: EncryptionDevice, account: String, isGroup: Bool) -> String {
         if device.jid == account { return OwnDeviceReview.rejectionMessage }
         if isGroup { return "Nothing it sends will be opened. Blocking another member’s device pauses sending to the whole group." }
         return "Your messages won’t be encrypted for it, and nothing it sends will be opened."
+    }
+}
+
+extension AppModel {
+    // The open chat's card then says a known device ID came back with another key.
+    var encryptionReviewIdentityChanged: Bool {
+        guard let chat = encryptionOverviewChatID else { return false }
+        let stored = groupChats[chat]?.devices ?? encryptionOverview(for: chat)?.devices ?? []
+        return ChatDeviceReview.identityChanged(ChatDeviceReview.devices(stored, account: accountID, isGroup: isGroup(chat)))
     }
 }

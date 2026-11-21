@@ -11,18 +11,19 @@ extension NotificationPlanner {
     /// Skips the chat being read and anything older than `window`, and claims the whole batch: what is not posted is
     /// dismissed. No deferred-chats summary.
     public static func foreground(_ batch: MessageNotification, accountID: String, readingChatID: String?, now: Date,
-                                  window: TimeInterval = foregroundWindow) -> NotificationPlan {
+                                  window: TimeInterval = foregroundWindow, sentTime: NotificationSentTime? = nil) -> NotificationPlan {
         let shown = batch.candidates.filter { $0.chatID != readingChatID && now.timeIntervalSince($0.sentAt) <= window }
         let reactions = batch.reactions.filter { $0.chatID != readingChatID && now.timeIntervalSince($0.reactedAt) <= window }
         let plan = plan(MessageNotification(candidates: shown, claimed: [], previewsEnabled: batch.previewsEnabled, reactions: reactions),
-                        accountID: accountID)
+                        accountID: accountID, sentTime: sentTime)
         return NotificationPlan(requests: plan.requests, claimed: batch.claimed, summarizesDeferredChats: false)
     }
 
     /// Expects one candidate per chat (`pendingNotifications(perChat: 1)`) and posts each whatever its age: one
     /// banner per chat, not per message. Skips the chat being read. A chat's reactions alert only when none of its
     /// messages does, and then only the newest. Chats past the cap get the deferred-chats summary. Claims the batch.
-    public static func caughtUp(_ batch: MessageNotification, accountID: String, readingChatID: String?) -> NotificationPlan {
+    public static func caughtUp(_ batch: MessageNotification, accountID: String, readingChatID: String?,
+                                sentTime: NotificationSentTime? = nil) -> NotificationPlan {
         let shown = batch.candidates.filter { $0.chatID != readingChatID }
         let alerting = Set(shown.map(\.chatID))
         var newestReaction: [String: Int] = [:]
@@ -32,7 +33,7 @@ extension NotificationPlanner {
         let reactions = batch.reactions.enumerated().filter { newestReaction[$0.element.chatID] == $0.offset }.map(\.element)
         return plan(MessageNotification(candidates: shown, claimed: batch.claimed, deferredCount: batch.deferredCount,
                                         deferredChatCount: batch.deferredChatCount, previewsEnabled: batch.previewsEnabled, reactions: reactions),
-                    accountID: accountID)
+                    accountID: accountID, sentTime: sentTime)
     }
 }
 
@@ -49,7 +50,7 @@ extension NotificationPresenter {
         }
         let batch = try await store.pendingNotifications(accountID: accountID).excludingBlocked(blocklist)
         guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
-        let plan = NotificationPlanner.foreground(batch, accountID: accountID, readingChatID: readingChatID, now: now)
+        let plan = NotificationPlanner.foreground(batch, accountID: accountID, readingChatID: readingChatID, now: now, sentTime: sentTime()?.at(now))
         return try await post(plan, batch: batch, store: store, accountID: accountID)
     }
 
@@ -63,7 +64,7 @@ extension NotificationPresenter {
         }
         let batch = try await store.pendingNotifications(accountID: accountID, perChat: 1)
         guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
-        let plan = NotificationPlanner.caughtUp(batch, accountID: accountID, readingChatID: readingChatID)
+        let plan = NotificationPlanner.caughtUp(batch, accountID: accountID, readingChatID: readingChatID, sentTime: sentTime())
         return try await post(plan, batch: batch, store: store, accountID: accountID)
     }
 

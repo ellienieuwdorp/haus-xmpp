@@ -292,9 +292,9 @@ extension OMEMOService {
                 // Context, not ciphertext: stays retained for a validated archive stamp (written below if retention was skipped).
                 throw OMEMOError.invalidContent
             } catch let error as OMEMOCryptoError where error != .invalidSnapshot {
-                // Permanent for this ciphertext: a placeholder, no group reference, no committed ratchet.
-                try await recordGroupDecryptFailure(account: account, message: message, digest: digest, sentAt: retained.sentAt)
-                throw OMEMOError.undecryptable
+                // A placeholder or a wait for review, with no group reference and no committed ratchet.
+                return try await settleGroupDecryptFailure(error, message: message, sentAt: retained.sentAt, in: FailedDecrypt(account: account,
+                    digest: digest, alert: pending == nil ? alert : nil, retain: retentionSkipped ? retain : nil, transport: transport))
             } catch OMEMOError.invalidContent {
                 try await recordGroupDecryptFailure(account: account, message: message, digest: digest, sentAt: retained.sentAt)
                 throw OMEMOError.undecryptable
@@ -362,7 +362,7 @@ extension OMEMOService {
         return false
     }
     // Only for ciphertext this device will never read, never for storage, cancellation or state errors.
-    private func recordGroupDecryptFailure(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date?) async throws {
+    func recordGroupDecryptFailure(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date?) async throws {
         try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: .decryptFailed, sentAt: sentAt,
                                                                  key: .ciphertext(sender: message.sender, digest: digest)))
     }
