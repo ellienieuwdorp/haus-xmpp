@@ -103,11 +103,13 @@ struct BlockedChatBar: View {
         HStack(spacing: 12) {
             Text("You blocked \(name).").font(.subheadline).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Unblock") {
+            // The label carries the height, so the button's hit target and accessibility frame are 44 pt tall.
+            Button {
                 Task { for entry in model.blockEntries(for: chatID) { await model.unblock(entry) } }
+            } label: {
+                Text("Unblock").frame(minHeight: 44).contentShape(Rectangle())
             }
             .font(.subheadline.weight(.semibold))
-            .frame(minHeight: 44)
             .disabled(!model.blockingAvailability.isAvailable)
             .accessibilityIdentifier("unblockFromChat")
         }

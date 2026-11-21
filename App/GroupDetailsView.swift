@@ -141,12 +141,13 @@ struct GroupRemovedBar: View {
                 .font(.subheadline).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if state?.mayRejoin == true {
-                Button("Rejoin") {
+                Button {
                     rejoining = true
                     Task { await model.rejoinGroup(room); rejoining = false }
+                } label: {
+                    Text("Rejoin").frame(minHeight: 44).contentShape(Rectangle())
                 }
                 .font(.subheadline.weight(.semibold))
-                .frame(minHeight: 44)
                 .disabled(rejoining || !(model.isDemo || model.session.isReady))
                 .accessibilityIdentifier("rejoinGroup")
             }
