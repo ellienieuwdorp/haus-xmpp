@@ -261,9 +261,11 @@ private final class MacChatHeaderButton: NSButton {
         set { avatarView.image = newValue }
     }
 
-    private let avatarView = NSImageView()
+    private let avatarView = MacAvatarImageView()
     private let nameField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
+    private var textWidth: CGFloat = 0
+    private var measuredHeight: CGFloat = 0
     private var contentWidth = minimumWidth
     private lazy var minimumWidthConstraint = widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumWidth)
 
@@ -296,6 +298,10 @@ private final class MacChatHeaderButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    // A view that allows vibrancy is drawn vibrant along with its subviews, which turns the avatar grey on the
+    // toolbar's glass.
+    override var allowsVibrancy: Bool { false }
+
     func show(name: String, subtitle: String, detailsShown: Bool) {
         if nameField.stringValue != name { nameField.stringValue = name }
         if subtitleField.stringValue != subtitle { subtitleField.stringValue = subtitle }
@@ -303,22 +309,36 @@ private final class MacChatHeaderButton: NSButton {
         setAccessibilityLabel(subtitle.isEmpty ? name : "\(name), \(subtitle)")
         setAccessibilityHelp(detailsShown ? "Hides the chat's details." : "Shows the chat's details.")
         toolTip = detailsShown ? "Hide the chat's details (⌥⌘I)" : "Show the chat's details (⌥⌘I)"
-        let textWidth = max(nameField.intrinsicContentSize.width, subtitle.isEmpty ? 0 : subtitleField.intrinsicContentSize.width)
-        let textX = Self.avatarFrame(height: intrinsicContentSize.height).maxX + Self.textGap
-        let width = min(Self.maximumWidth, (textX + textWidth + Self.trailingInset).rounded(.up))
-        if width != contentWidth {
-            contentWidth = width
-            minimumWidthConstraint.constant = min(width, Self.minimumWidth)
-            invalidateIntrinsicContentSize()
-        }
+        // Intrinsic text widths are fractional; the extra point keeps a fitting line from truncating after rounding.
+        let width = max(nameField.intrinsicContentSize.width, subtitle.isEmpty ? 0 : subtitleField.intrinsicContentSize.width)
+        textWidth = width.rounded(.up) + 1
+        measure(height: bounds.height > 0 ? bounds.height : naturalHeight)
         needsLayout = true
     }
 
     // The bezel's own height, so the pill lines up with the toolbar's other buttons, unless two lines need more. The
     // height counts the subtitle line even when it is empty, so the pill keeps its height as a subtitle comes and goes.
-    override var intrinsicContentSize: NSSize {
+    private var naturalHeight: CGFloat {
         let lines = nameField.intrinsicContentSize.height + subtitleField.intrinsicContentSize.height
-        return NSSize(width: contentWidth, height: max(super.intrinsicContentSize.height, lines.rounded(.up)))
+        return max(super.intrinsicContentSize.height, lines.rounded(.up))
+    }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: contentWidth, height: naturalHeight) }
+
+    // The toolbar sets the item's height, and the avatar's size and inset follow it, so the width is measured again
+    // for each height the pill gets.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if newSize.height != measuredHeight { measure(height: newSize.height) }
+    }
+
+    private func measure(height: CGFloat) {
+        measuredHeight = height
+        let width = min(Self.maximumWidth, (Self.textX(height: height) + textWidth + Self.trailingInset).rounded(.up))
+        guard width != contentWidth else { return }
+        contentWidth = width
+        minimumWidthConstraint.constant = min(width, Self.minimumWidth)
+        invalidateIntrinsicContentSize()
     }
 
     // Inset the same on every side, so the circle sits concentric in the capsule's leading end.
@@ -328,10 +348,12 @@ private final class MacChatHeaderButton: NSButton {
         return NSRect(x: inset, y: inset, width: side, height: side)
     }
 
+    private static func textX(height: CGFloat) -> CGFloat { avatarFrame(height: height).maxX + textGap }
+
     override func layout() {
         super.layout()
         avatarView.frame = Self.avatarFrame(height: bounds.height)
-        let x = avatarView.frame.maxX + Self.textGap
+        let x = Self.textX(height: bounds.height)
         let width = max(0, bounds.width - x - Self.trailingInset)
         let nameHeight = nameField.intrinsicContentSize.height
         let subtitleHeight = subtitleField.isHidden ? 0 : subtitleField.intrinsicContentSize.height
@@ -346,6 +368,11 @@ private final class MacChatHeaderButton: NSButton {
     override func hitTest(_ point: NSPoint) -> NSView? {
         super.hitTest(point) == nil ? nil : self
     }
+}
+
+// A picture that is not a template draws in colour only outside vibrancy, as the account button's image does.
+private final class MacAvatarImageView: NSImageView {
+    override var allowsVibrancy: Bool { false }
 }
 
 @MainActor enum MacSettingsOpening {
