@@ -134,6 +134,21 @@ final class TimelineCellSemanticsTests: XCTestCase {
         }
     }
 
+    // TextKit adds the font's leading below the last line, so it comes out of the text's bottom inset and then the gap
+    // to the footer, in every script.
+    func testTheFooterFollowsTheLastLineLessTheFontsLeading() throws {
+        let bodies = [("latin", "Ok, see you there"), ("korean", "알겠어요, 거기서 봐요"), ("japanese", "了解、そこで会いましょう")]
+        show(bodies.map { TimelineMessage(id: $0.0, body: $0.1, isOutgoing: false, isStarred: false, sentAt: sentAt) })
+        for (id, _) in bodies {
+            let text = try XCTUnwrap(try speaker(id) as? UITextView, id)
+            let bubble = try XCTUnwrap(text.superview)
+            let footer = try XCTUnwrap(bubble.subviews.first { $0 is UIStackView }, "\(id) has a footer")
+            let leading = max(0, text.font?.leading ?? 0)
+            XCTAssertEqual(text.textContainerInset.bottom, max(0, 3 - leading), accuracy: 0.01, id)
+            XCTAssertEqual(footer.frame.minY - text.frame.maxY, min(0, 3 - leading), accuracy: 0.5, id)
+        }
+    }
+
     // A peer may send a dozen distinct reactions to a short message: the ones that do not fit fold into one "+N" pill
     // that accounts for every reaction.
     func testManyReactionsStayOnScreenAndNeverWidenTheBubble() throws {

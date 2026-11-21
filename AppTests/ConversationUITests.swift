@@ -91,6 +91,69 @@ final class ConversationUITests: XCTestCase {
         }
     }
 
+    // On sample data: far up in history a button returns to the newest message, and the details open in a sheet over
+    // the chat, with encryption pushed inside it.
+    @MainActor func testJumpToNewestAndTheDetailsSheet() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demo-long"]
+        app.isolateMessageStorage()
+        app.launch()
+        let history = app.staticTexts["History"]
+        XCTAssertTrue(history.waitForExistence(timeout: 15))
+        history.tap()
+        let timeline = app.collectionViews["conversation.timeline"]
+        let newest = bubble(250, in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 10))
+
+        XCTContext.runActivity(named: "Far up in history a button returns to the newest message") { _ in
+            let jump = app.buttons["jumpToNewest"]
+            XCTAssertFalse(jump.exists, "a chat opens at its newest message")
+            for _ in 0..<3 where !jump.exists { timeline.swipeDown(velocity: 4000) }
+            XCTAssertTrue(jump.waitForExistence(timeout: 5))
+            XCTAssertEqual(jump.label, "Scroll to Newest Message")
+            XCTAssertGreaterThanOrEqual(jump.frame.width, 44)
+            XCTAssertLessThan(jump.frame.maxY, composer(in: app).frame.minY, "above the composer")
+            capture(app, "Jump to newest")
+            jump.tap()
+            XCTAssertTrue(jump.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(newest.waitForExistence(timeout: 5))
+            XCTAssertTrue(newest.isHittable)
+        }
+
+        let close = app.buttons["closeChatDetails"]
+        XCTContext.runActivity(named: "The header opens the details as a sheet; encryption pushes inside it") { _ in
+            app.buttons["chatDetails"].tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            capture(app, "Chat details sheet")
+            app.buttons["encryptionDetails"].tap()
+            let page = app.navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Devices & Encryption", "Group details"])).firstMatch
+            XCTAssertTrue(page.waitForExistence(timeout: 5))
+            app.navigationBars.buttons["BackButton"].firstMatch.tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            close.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(composer(in: app).exists)
+        }
+
+        XCTContext.runActivity(named: "A swipe down closes the sheet") { _ in
+            app.buttons["chatDetails"].tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        }
+
+        XCTContext.runActivity(named: "Search in the details closes the sheet, then searches the chat") { _ in
+            app.buttons["chatDetails"].tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Search")).firstMatch.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.searchFields["messageSearch"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the field takes the keyboard once the sheet has gone")
+        }
+    }
+
     // One accessibility snapshot; querying each element's frame costs a round trip.
     @MainActor private func bubbleFrames(in timeline: XCUIElement) -> [(text: String, frame: CGRect)] {
         var found: [(text: String, frame: CGRect)] = []

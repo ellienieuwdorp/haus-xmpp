@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 import XCTest
 @testable import HausXMPP
@@ -48,6 +49,44 @@ final class TimelinePositionTests: XCTestCase {
         override var isDecelerating: Bool { coasting }
     }
 
+    // Concentric with the display corners over the home indicator, 8 above a keyboard, inside a side safe area exactly.
+    func testTheComposerFollowsTheDisplayCornersAndTheKeyboard() throws {
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 34), 28, "Face ID portrait")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 21), 21, "Face ID landscape")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 0), 8, "home button")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 83), 91, "something else sits at the bottom")
+        let down = ComposerGeometry.sides(left: nil, right: nil, overlap: 34, width: 402)
+        XCTAssertEqual([down.left, down.right], [28, 28])
+        let up = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 402)
+        XCTAssertEqual([up.left, up.right], [12, 12])
+        let wide = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 440)
+        XCTAssertEqual([wide.left, wide.right], [16, 16])
+        let homeButton = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 375)
+        XCTAssertEqual([homeButton.left, homeButton.right], [12, 12])
+        for overlap in [0, 34] as [CGFloat] {
+            let landscape = ComposerGeometry.sides(left: 62, right: 62, overlap: overlap, width: 874)
+            XCTAssertEqual([landscape.left, landscape.right], [62, 62], "nothing beyond the side safe area")
+            let insetHost = ComposerGeometry.sides(left: 0, right: 0, overlap: overlap, width: 750)
+            XCTAssertEqual([insetHost.left, insetHost.right], [0, 0], "a view already inside the side safe area adds nothing")
+        }
+        // A keyboard dismissed by hand eases the sides without a jump.
+        let steps = stride(from: 0, through: 34, by: 1).map { ComposerGeometry.sides(left: nil, right: nil, overlap: CGFloat($0), width: 402).left }
+        XCTAssertEqual(steps.first, 12)
+        XCTAssertEqual(steps.last, 28)
+        XCTAssertTrue(zip(steps, steps.dropFirst()).allSatisfy { $1 >= $0 && $1 - $0 <= 1 })
+
+        controller.setComposer(AnyView(Color.clear.frame(height: 44)))
+        controller.view.layoutIfNeeded()
+        let host = try XCTUnwrap(controller.children.first?.view)
+        let safeBottom = controller.view.safeAreaInsets.bottom
+        XCTAssertEqual(controller.view.bounds.maxY - host.frame.maxY, ComposerGeometry.bottom(safeBottom: safeBottom), accuracy: 0.5,
+                       "with the keyboard down the composer keeps the corner margin, not the safe area plus a gap")
+        let side = ComposerGeometry.sideSafeAreas(of: controller.view)
+        let jump = try XCTUnwrap(controller.children.last?.view)
+        let trailing = ComposerGeometry.sides(left: side.left, right: side.right, overlap: safeBottom, width: controller.view.bounds.width).right
+        XCTAssertEqual(controller.view.bounds.maxX - jump.frame.maxX, trailing, accuracy: 0.5, "the jump button lines up with the composer's edge")
+    }
+
     // Opening at the newest message, or any other programmatic move, never pages. The threshold is
     // `TimelineScrollPolicyTests`'; this checks the controller asks with the scrolling view's own position and state.
     func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {
@@ -79,6 +118,50 @@ final class TimelinePositionTests: XCTestCase {
             collectionView.delegate?.scrollViewDidScroll?(reader)
             XCTAssertEqual(asked, scroll.asks ? 1 : 0, line: scroll.line)
         }
+    }
+
+    // The threshold is `TimelineScrollPolicyTests`'; this checks the controller asks with its own position and follow
+    // state, and that the button lands on the newest message.
+    func testTheJumpButtonShowsUpInHistoryAndReturnsToTheNewestMessage() throws {
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        XCTAssertFalse(controller.showsJumpToNewest, "a chat opens at its newest message")
+        collectionView.contentOffset.y -= 2000
+        collectionView.layoutIfNeeded()
+        XCTAssertFalse(controller.showsJumpToNewest, "a programmatic move leaves the list following")
+        let reader = ReaderScroll()
+        reader.fingerDown = true
+        collectionView.delegate?.scrollViewDidScroll?(reader)
+        XCTAssertTrue(controller.showsJumpToNewest, "the reader scrolled into history")
+
+        controller.jumpToNewest()
+        let bottom = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+        XCTAssertEqual(collectionView.contentOffset.y, bottom, accuracy: 0.5)
+        XCTAssertFalse(controller.showsJumpToNewest)
+        let newest = try XCTUnwrap(dataSource?.indexPath(for: "m100"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(newest))
+    }
+
+    // While a sheet covers the chat nothing counts as read; what is on screen when it closes does.
+    func testNothingCountsAsDisplayedWhileTheChatIsCovered() throws {
+        var displayed: Set<String> = []
+        var shown = messages(1...3)
+        let show = { self.controller.update(messages: shown, onToggleStar: { _ in }, onDisplayed: { displayed.insert($0) }) }
+        show()
+        collectionView.layoutIfNeeded()
+        XCTAssertTrue(displayed.contains("m2"), "received messages on screen are displayed")
+
+        controller.setCovered(true)
+        displayed = []
+        shown.append(TimelineMessage(id: "arrived", body: "While the details were open", isOutgoing: false, isStarred: false))
+        show()
+        collectionView.layoutIfNeeded()
+        let arrived = try XCTUnwrap(dataSource?.indexPath(for: "arrived"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(arrived))
+        XCTAssertTrue(displayed.isEmpty, "\(displayed)")
+
+        controller.setCovered(false)
+        XCTAssertTrue(displayed.contains("arrived"))
+        XCTAssertFalse(displayed.contains("m3"), "an own message is never marked")
     }
 
     func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {

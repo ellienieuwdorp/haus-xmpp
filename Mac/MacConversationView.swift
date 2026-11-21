@@ -64,7 +64,7 @@ struct MacConversationView: View {
             }
             timeline.onTab = { [weak timeline, composerIntent] in
                 guard let timeline else { return }
-                if timeline.searching || model.isBlocked(chatID) {
+                if timeline.searching || model.composerless(chatID) {
                     timeline.table.view.window?.selectNextKeyView(timeline.table.table)
                 } else {
                     composerIntent.focusComposer()
@@ -103,8 +103,8 @@ struct MacConversationView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if model.isBlocked(chatID) {
-                    BlockedChatBar(model: model, chatID: chatID, name: title)
+                if model.composerless(chatID) {
+                    ComposerStandIn(model: model, chatID: chatID, name: title)
                         .padding(.horizontal, 16).padding(.vertical, 10)
                 } else if timeline?.searching != true {
                     MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
@@ -137,17 +137,13 @@ struct MacConversationView: View {
         // A reply or an edit needs the composer, which search hides; as on the iPhone, it closes search.
         .onChange(of: composerIntent.focusRequests) { _, _ in timeline?.setSearching(false) }
         .blockConfirmation(model: model, request: $blockRequest)
-        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
-            get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
-        ), titleVisibility: .visible, presenting: retryMessageID) { id in
+        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", item: $retryMessageID,
+                            titleVisibility: .visible) { id in
             if retryIsImpossible {
-                Button("OK", role: .cancel) { retryMessageID = nil }
+                Button("OK", role: .cancel) {}
             } else {
-                Button("Send again") {
-                    Task { await model.retryMessage(id) }
-                    retryMessageID = nil
-                }
-                Button("Cancel", role: .cancel) { retryMessageID = nil }
+                Button("Send again") { Task { await model.retryMessage(id) } }
+                Button("Cancel", role: .cancel) {}
             }
         } message: { id in
             if retryIsImpossible {
@@ -158,15 +154,12 @@ struct MacConversationView: View {
                 Text("The recipient may already have it. Sending again could create a duplicate.")
             }
         }
-        .confirmationDialog("Unsend this message?", isPresented: Binding(
-            get: { unsendMessageID != nil }, set: { if !$0 { unsendMessageID = nil } }
-        ), titleVisibility: .visible, presenting: unsendMessageID) { id in
+        .confirmationDialog("Unsend this message?", item: $unsendMessageID, titleVisibility: .visible) { id in
             Button("Unsend", role: .destructive) {
                 Task { await model.unsend(messageID: id) }
                 if composerIntent.editing?.id == id { composerIntent.cancelEditing() }
-                unsendMessageID = nil
             }
-            Button("Cancel", role: .cancel) { unsendMessageID = nil }
+            Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
@@ -191,13 +184,12 @@ struct MacConversationView: View {
         // more than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .environment(\.openURL, linkAction.action)
-        .confirmationDialog(phoneLink?.number ?? "", isPresented: Binding(get: { phoneLink != nil }, set: { if !$0 { phoneLink = nil } }),
-                            titleVisibility: .visible, presenting: phoneLink) { link in
+        .confirmationDialog(phoneLink?.number ?? "", item: $phoneLink, titleVisibility: .visible) { link in
             Button("Call") { NSWorkspace.shared.open(link.call) }
             Button("Send message") { NSWorkspace.shared.open(link.message) }
             Button("Copy") { copy(link.number) }
         }
-        .alert("Copied", isPresented: Binding(get: { copiedReason != nil }, set: { if !$0 { copiedReason = nil } }), presenting: copiedReason) { _ in
+        .alert("Copied", item: $copiedReason) { _ in
             Button("OK") {}
         } message: { Text($0) }
         .sheet(isPresented: Binding(get: { joiningGroup != nil }, set: { if !$0 { joiningGroup = nil } })) {
@@ -374,10 +366,10 @@ private struct MacMessageCommandsSource: View {
                 timeline.reveal(message.id)
                 handlers.react(emoji, message)
             })
-            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, isBlocked: model.isBlocked(chatID), handlers: revealing)
+            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, readOnly: model.composerless(chatID), handlers: revealing)
         }
         let messages = timeline.isFiltered ? presenter.timelineMessages : timeline.rows.map(\.message)
-        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, isBlocked: model.isBlocked(chatID), handlers: handlers)
+        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, readOnly: model.composerless(chatID), handlers: handlers)
     }
 
     var body: some View {

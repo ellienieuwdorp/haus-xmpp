@@ -14,6 +14,7 @@ final class MacTimelineCellTests: XCTestCase {
     override func tearDown() async throws {
         XCTAssertEqual(NSApp.windows.filter(\.isVisible).count, 0, "no window was shown")
         XCTAssertFalse(NSApp.isActive)
+        try await super.tearDown()
     }
 
     private func message(_ id: String = "m", body: String = "Ok", outgoing: Bool, starred: Bool = false,
@@ -92,6 +93,18 @@ final class MacTimelineCellTests: XCTestCase {
                 XCTAssertEqual(part.midY, footer.bounds.midY, accuracy: 0.5, "one line: \(label(outgoing))")
             }
             XCTAssertEqual(try XCTUnwrap(parts.max { $0.maxX < $1.maxX }).maxX, footer.bounds.width, accuracy: 0.5, "trailing-aligned")
+        }
+    }
+
+    // TextKit adds the font's leading below the last line, so the footer follows the last line less that leading, in
+    // every script, and the bubble keeps its bottom padding under it.
+    func testTheFooterFollowsTheLastLineLessTheFontsLeading() throws {
+        let leading = max(0, MacTimelineMetrics.shared.body.leading)
+        for body in ["Ok, see you there", "알겠어요, 거기서 봐요", "了解、そこで会いましょう"] {
+            let layout = record(message(body: body, outgoing: false), width: width)
+            let text = try XCTUnwrap(layout.textFrame, body)
+            XCTAssertEqual(layout.footerFrame.minY, text.maxY - leading + MacTimelineMetrics.partSpacing, accuracy: 0.01, body)
+            XCTAssertEqual(layout.bubbleFrame.maxY, layout.footerFrame.maxY + MacTimelineMetrics.bubbleBottom, accuracy: 0.01, body)
         }
     }
 

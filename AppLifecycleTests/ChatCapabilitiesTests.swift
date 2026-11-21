@@ -50,6 +50,40 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(group(.stored(verified), joined: true, issue: "Old failure", ready: true).encryption, .encrypted(verified: true))
     }
 
+    // A removal holds across disconnects until the room admits us again; only a kick, or a membership read that lists
+    // us again, offers a rejoin.
+    func testARemovalHoldsUntilAJoinAndOnlyAKeptMembershipOffersRejoin() {
+        let me = "me@example.org"
+        var room = GroupChatState(members: [me])
+        room.joined = true
+        room.noteRemoval(.kicked)
+        XCTAssertFalse(room.joined)
+        XCTAssertEqual(room.removal, .kicked)
+        XCTAssertTrue(room.mayRejoin)
+        XCTAssertEqual(room.status(account: me), "You’re not a member of this group")
+        room.joined = false
+        XCTAssertEqual(room.removal, .kicked, "a disconnect keeps it")
+        room.joined = true
+        XCTAssertNil(room.removal, "being admitted ends it")
+        XCTAssertFalse(room.mayRejoin)
+        for removal in [XMPPGroupRemoval.banned, .notMember] {
+            var refused = GroupChatState(members: [me])
+            refused.noteRemoval(removal)
+            XCTAssertFalse(refused.mayRejoin, "\(removal)")
+            refused.noteRemoval(removal)
+            refused.noteMembershipConfirmed()
+            XCTAssertTrue(refused.mayRejoin, "the room lists us again")
+            refused.noteRemoval(removal)
+            XCTAssertTrue(refused.mayRejoin, "the same reason again changes nothing")
+            refused.noteRemoval(.kicked)
+            refused.noteRemoval(removal)
+            XCTAssertFalse(refused.mayRejoin, "a new removal starts over")
+        }
+        var member = GroupChatState(members: [me])
+        member.noteMembershipConfirmed()
+        XCTAssertFalse(member.mayRejoin, "nothing to rejoin without a removal")
+    }
+
     // Groups never show the attach button.
     func testAttachFollowsRememberedUploadsNotTheSocket() {
         XCTAssertFalse(direct(.stored(verified), uploads: false, ready: true).canAttach)

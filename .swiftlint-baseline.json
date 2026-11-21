@@ -127,7 +127,7 @@
   "file_length": [
    [
     "",
-    3613
+    3608
    ]
   ],
   "function_body_length": [
@@ -351,7 +351,7 @@
   "type_body_length": [
    [
     "final class AppModel {",
-    3145
+    3140
    ]
   ]
  },
@@ -523,7 +523,7 @@
   "file_length": [
    [
     "",
-    1760
+    1758
    ]
   ],
   "force_unwrapping": [
@@ -539,7 +539,7 @@
   "function_body_length": [
    [
     "func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,",
-    117
+    116
    ],
    [
     "func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = \"\", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },",
@@ -547,7 +547,7 @@
    ],
    [
     "override func loadView() {",
-    86
+    80
    ],
    [
     "override init(frame: CGRect) {",
@@ -763,7 +763,7 @@
   "type_body_length": [
    [
     "final class ConversationTimelineController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {",
-    574
+    568
    ],
    [
     "private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {",
@@ -925,13 +925,7 @@
   "closure_body_length": [
    [
     "GroupedList {",
-    56
-   ]
-  ],
-  "line_length": [
-   [
-    "let notes = [state.issue != nil || !state.joined ? state.status(account: model.accountID) : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }",
-    0
+    55
    ]
   ]
  },
