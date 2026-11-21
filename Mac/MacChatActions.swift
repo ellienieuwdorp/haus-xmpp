@@ -4,7 +4,7 @@ import SwiftUI
 // The sidebar's right-click menu and the Chat menu both list these through `MacChatActionsMenu`, so the two match.
 struct MacChatActions {
     enum Action: Hashable {
-        case markRead, togglePin, mute(MuteDuration), unmute, block, unblock, report
+        case markRead, togglePin, mute(MuteDuration), muteUntil, unmute, block, unblock, report
         // Shows the details and starts there, where the flow and its confirmations live.
         case contact(ContactRowRequest.Kind)
         case showDetails
@@ -31,6 +31,7 @@ struct MacChatActions {
             case .markRead: Task { await model.markChatRead(chat.id) }
             case .togglePin: Task { await model.togglePin(chat) }
             case .mute(let duration): Task { await model.muteChat(chat.id, for: duration) }
+            case .muteUntil: window.muteEndRequest = MuteEndRequest(chatID: chat.id, account: model.accountID)
             case .unmute: Task { await model.unmuteChat(chat.id) }
             case .block: window.blockRequest = BlockRequest(kind: .block, chatID: chat.id, name: chat.displayTitle)
             case .report: window.blockRequest = BlockRequest(kind: .report, chatID: chat.id, name: chat.displayTitle)
@@ -75,6 +76,7 @@ struct MacChatActionsMenu: View {
                 ForEach(MuteDuration.allCases) { duration in
                     Button(duration.dialogTitle) { actions?.perform(.mute(duration)) }
                 }
+                Button("Until…") { actions?.perform(.muteUntil) }
             }
             .disabled(actions == nil)
         }

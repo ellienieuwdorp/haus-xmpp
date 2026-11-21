@@ -3393,9 +3393,9 @@ final class AppModel {
     }
 
     // Keeps the level, so unmuting a mentions-only group returns to mentions only.
-    func muteChat(_ chatID: String, for duration: MuteDuration) async {
+    func muteChat(_ chatID: String, until end: Date) async {
         var setting = notificationSetting(for: chatID)
-        setting.mutedUntil = duration.until(from: .now)
+        setting.mutedUntil = end
         await setChatNotifications(chatID, setting)
     }
 

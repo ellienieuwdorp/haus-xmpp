@@ -12,6 +12,7 @@ struct ChatListView: View {
     @State private var showingRestore = false
     @State private var newChatDetent: PresentationDetent = .medium
     @State private var muting: String?
+    @State private var choosingMuteEnd: MuteEndRequest?
     @State private var reviewingOwnDevices = false
     // A device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
@@ -77,7 +78,7 @@ struct ChatListView: View {
                     .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
                     .accessibilityValue([chat.isPinned ? "Pinned" : nil, chat.notification.isMuted() ? "Muted" : nil].compactMap { $0 }.joined(separator: ", "))
                     .accessibilityIdentifier("chat.\(chat.id)")
-                    .modifier(MuteDialog(model: model, chat: chat, muting: $muting))
+                    .modifier(MuteDialog(model: model, chat: chat, muting: $muting, choosingEnd: $choosingMuteEnd))
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if chat.unreadCount > 0 {
                             Button("Read", systemImage: "envelope.open") {
@@ -180,6 +181,7 @@ struct ChatListView: View {
         .sheet(isPresented: $showingNewChat) { newChatSheet }
         .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
         .sheet(isPresented: $reviewingOwnDevices) { OwnDeviceReviewSheet(model: model) }
+        .sheet(item: $choosingMuteEnd) { request in MuteUntilSheet(model: model, request: request).themedRoot() }
     }
 
     private var recipientTerm: String { recipient.trimmingCharacters(in: .whitespacesAndNewlines) }
