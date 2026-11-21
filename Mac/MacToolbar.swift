@@ -7,15 +7,20 @@ import SwiftUI
     private let state: MacWindowState
     private var items: [NSToolbarItem.Identifier: NSToolbarItem] = [:]
     private weak var accountButton: MacAccountButton?
-    // Drawn again only when this changes.
+    private weak var window: NSWindow?
+    private lazy var chatHeader = MacChatHeaderButton(target: self, action: #selector(toggleDetails))
+    // Each drawn again only when it changes.
     private var accountPicture: (account: String, image: NSImage?, dimmed: Bool)?
+    private var chatPicture: (chatID: String, initial: Character?, image: NSImage?, isGroup: Bool)?
+    private var avatarRequest: String?
+    // Rolls a relative "Last seen" over while one shows.
+    private var lastSeenTicks: Task<Void, Never>?
 
     private static let account = NSToolbarItem.Identifier("account")
     private static let attention = NSToolbarItem.Identifier("attention")
     private static let newChat = NSToolbarItem.Identifier("newChat")
-    private static let chatPicture = NSToolbarItem.Identifier("chatPicture")
+    private static let chatHeaderItem = NSToolbarItem.Identifier("chatHeader")
     private static let refresh = NSToolbarItem.Identifier("refresh")
-    private static let details = NSToolbarItem.Identifier("details")
 
     init(model: AppModel, state: MacWindowState) {
         self.model = model
@@ -29,12 +34,15 @@ import SwiftUI
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        self.window = window
         MacObservation.track(self) { toolbar in toolbar.update() }
+        // Tracked apart, so typing and presence never rerun the rest of the toolbar.
+        MacObservation.track(self) { toolbar in toolbar.updateChatHeader() }
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.flexibleSpace, Self.account, Self.attention, Self.newChat, .toggleSidebar, .sidebarTrackingSeparator,
-         Self.chatPicture, .flexibleSpace, .inspectorTrackingSeparator, Self.refresh, .flexibleSpace, Self.details]
+         Self.chatHeaderItem, .flexibleSpace, .inspectorTrackingSeparator, Self.refresh]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
@@ -68,27 +76,21 @@ import SwiftUI
             item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "New Chat")
             item.isBordered = true
             item.action = #selector(newChat)
-        case Self.chatPicture:
-            // A fixed size, so the toolbar's tiling on each step of a resize never asks SwiftUI for one.
-            let host = NSHostingView(rootView: MacPane { MacChatHeaderAvatar(model: self.model, window: self.state) })
-            host.sizingOptions = []
-            host.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([host.widthAnchor.constraint(equalToConstant: 28), host.heightAnchor.constraint(equalToConstant: 28)])
-            item.view = host
+        case Self.chatHeaderItem:
+            // Measured and laid out in AppKit, so the toolbar's tiling on each step of a resize never asks SwiftUI for a
+            // size. It is the one control for the details; ⌥⌘I and the Chat menu do the same.
+            item.view = chatHeader
             item.label = "Chat Details"
-            item.isBordered = false
+            item.isBordered = true
             item.isNavigational = true
+            let menuItem = NSMenuItem(title: "Chat Details", action: #selector(toggleDetails), keyEquivalent: "")
+            menuItem.target = self
+            item.menuFormRepresentation = menuItem
         case Self.refresh:
             item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")
             item.label = "Refresh"
             item.isBordered = true
             item.action = #selector(refresh)
-        case Self.details:
-            item.label = "Chat Details"
-            item.toolTip = "Show or hide the chat's details (⌥⌘I)"
-            item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Chat Details")
-            item.isBordered = true
-            item.action = #selector(toggleDetails)
         default:
             return nil
         }
@@ -116,8 +118,6 @@ import SwiftUI
         }
         items[Self.attention]?.isHidden = connecting || !model.connectionNeedsAttention
         items[Self.newChat]?.isEnabled = signedIn
-        items[Self.chatPicture]?.isHidden = state.selection == nil
-        items[Self.details]?.isHidden = state.selection == nil
         let page = state.inspectorShown && state.selection != nil ? state.inspectorPath.last : nil
         switch page {
         case .encryption: items[Self.refresh]?.toolTip = "Refresh devices"
@@ -126,6 +126,48 @@ import SwiftUI
         }
         items[Self.refresh]?.isHidden = refreshRoute(page) == nil
         items[Self.refresh]?.isEnabled = model.session.isReady
+    }
+
+    // The pill carries the chat's name and subtitle, so the window keeps its title for the Window menu, Mission Control
+    // and VoiceOver but draws none in the toolbar while a chat is open.
+    private func updateChatHeader() {
+        let selection = state.selection
+        let visibility: NSWindow.TitleVisibility = selection == nil ? .visible : .hidden
+        if window?.titleVisibility != visibility { window?.titleVisibility = visibility }
+        items[Self.chatHeaderItem]?.isHidden = selection == nil
+        guard let chatID = selection else {
+            lastSeenTicks?.cancel()
+            lastSeenTicks = nil
+            return
+        }
+        let name = model.chatName(for: chatID)
+        chatHeader.show(name: name, subtitle: MacChatSubtitle.text(model: model, chatID: chatID, now: .now), detailsShown: state.inspectorShown)
+        let picture = (chatID: chatID, initial: name.first, image: model.avatar(for: chatID), isGroup: model.isGroup(chatID))
+        if chatPicture?.chatID != picture.chatID || chatPicture?.initial != picture.initial || chatPicture?.image !== picture.image
+            || chatPicture?.isGroup != picture.isGroup {
+            chatPicture = picture
+            chatHeader.avatar = Self.render(ChatAvatar(key: chatID, name: name, image: picture.image, isGroup: picture.isGroup,
+                                                       size: MacChatHeaderButton.avatarSize), label: name)
+        }
+        let request = "\(chatID)|\(model.session.isReady)"
+        if avatarRequest != request {
+            avatarRequest = request
+            let model = model
+            Task { await model.loadAvatar(for: chatID) }
+        }
+        if case .lastSeen = model.openChatLastSeen {
+            guard lastSeenTicks == nil else { return }
+            lastSeenTicks = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard let self, !Task.isCancelled else { return }
+                    self.updateChatHeader()
+                }
+            }
+        } else {
+            lastSeenTicks?.cancel()
+            lastSeenTicks = nil
+        }
     }
 
     private func refreshRoute(_ page: ChatRoute?) -> ChatRoute? {
@@ -204,21 +246,105 @@ private final class MacAccountButton: NSButton {
     }
 }
 
-private struct MacChatHeaderAvatar: View {
-    let model: AppModel
-    let window: MacWindowState
+// One VoiceOver element and one key view: the avatar and the two lines are drawing only. The name truncates as the
+// toolbar narrows the item towards its minimum.
+private final class MacChatHeaderButton: NSButton {
+    static let avatarSize: CGFloat = 28
+    private static let avatarInset: CGFloat = 4
+    private static let textGap: CGFloat = 8
+    private static let trailingInset: CGFloat = 12
+    private static let maximumWidth: CGFloat = 260
+    private static let minimumWidth: CGFloat = 120
 
-    var body: some View {
-        if let chatID = window.selection {
-            Button { window.inspectorShown = true } label: {
-                ChatAvatar(key: chatID, name: model.chatName(for: chatID),
-                           image: model.avatar(for: chatID), isGroup: model.isGroup(chatID), size: 28)
-            }
-            .buttonStyle(.plain)
-            .help("Show the chat's details")
-            .accessibilityLabel("Chat Details")
-            .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
+    var avatar: NSImage? {
+        get { avatarView.image }
+        set { avatarView.image = newValue }
+    }
+
+    private let avatarView = NSImageView()
+    private let nameField = NSTextField(labelWithString: "")
+    private let subtitleField = NSTextField(labelWithString: "")
+    private var contentWidth = minimumWidth
+    private lazy var minimumWidthConstraint = widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumWidth)
+
+    init(target: AnyObject, action: Selector) {
+        super.init(frame: .zero)
+        bezelStyle = .toolbar
+        title = ""
+        imagePosition = .noImage
+        self.target = target
+        self.action = action
+        translatesAutoresizingMaskIntoConstraints = false
+        avatarView.imageScaling = .scaleProportionallyUpOrDown
+        nameField.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        nameField.textColor = .labelColor
+        subtitleField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        subtitleField.textColor = .secondaryLabelColor
+        for field in [nameField, subtitleField] {
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
         }
+        for view in [avatarView, nameField, subtitleField] as [NSView] {
+            view.setAccessibilityElement(false)
+            addSubview(view)
+        }
+        // Hugs its content up to the maximum and, short of room, yields width down to the minimum.
+        setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        minimumWidthConstraint.isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(name: String, subtitle: String, detailsShown: Bool) {
+        if nameField.stringValue != name { nameField.stringValue = name }
+        if subtitleField.stringValue != subtitle { subtitleField.stringValue = subtitle }
+        subtitleField.isHidden = subtitle.isEmpty
+        setAccessibilityLabel(subtitle.isEmpty ? name : "\(name), \(subtitle)")
+        setAccessibilityHelp(detailsShown ? "Hides the chat's details." : "Shows the chat's details.")
+        toolTip = detailsShown ? "Hide the chat's details (⌥⌘I)" : "Show the chat's details (⌥⌘I)"
+        let textWidth = max(nameField.intrinsicContentSize.width, subtitle.isEmpty ? 0 : subtitleField.intrinsicContentSize.width)
+        let textX = Self.avatarFrame(height: intrinsicContentSize.height).maxX + Self.textGap
+        let width = min(Self.maximumWidth, (textX + textWidth + Self.trailingInset).rounded(.up))
+        if width != contentWidth {
+            contentWidth = width
+            minimumWidthConstraint.constant = min(width, Self.minimumWidth)
+            invalidateIntrinsicContentSize()
+        }
+        needsLayout = true
+    }
+
+    // The bezel's own height, so the pill lines up with the toolbar's other buttons, unless two lines need more. The
+    // height counts the subtitle line even when it is empty, so the pill keeps its height as a subtitle comes and goes.
+    override var intrinsicContentSize: NSSize {
+        let lines = nameField.intrinsicContentSize.height + subtitleField.intrinsicContentSize.height
+        return NSSize(width: contentWidth, height: max(super.intrinsicContentSize.height, lines.rounded(.up)))
+    }
+
+    // Inset the same on every side, so the circle sits concentric in the capsule's leading end.
+    private static func avatarFrame(height: CGFloat) -> NSRect {
+        let side = max(0, min(avatarSize, height - 2 * avatarInset))
+        let inset = (height - side) / 2
+        return NSRect(x: inset, y: inset, width: side, height: side)
+    }
+
+    override func layout() {
+        super.layout()
+        avatarView.frame = Self.avatarFrame(height: bounds.height)
+        let x = avatarView.frame.maxX + Self.textGap
+        let width = max(0, bounds.width - x - Self.trailingInset)
+        let nameHeight = nameField.intrinsicContentSize.height
+        let subtitleHeight = subtitleField.isHidden ? 0 : subtitleField.intrinsicContentSize.height
+        let top = (bounds.height - nameHeight - subtitleHeight) / 2
+        func line(from offset: CGFloat, height: CGFloat) -> NSRect {
+            NSRect(x: x, y: isFlipped ? offset : bounds.height - offset - height, width: width, height: height)
+        }
+        nameField.frame = line(from: top, height: nameHeight)
+        subtitleField.frame = line(from: top + nameHeight, height: subtitleHeight)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
     }
 }
 
