@@ -200,4 +200,26 @@ struct ArchiveWalkWireTests {
         for page in pages { #expect(try await page.value.get().complete) }
         await server.stop()
     }
+
+    // An archive result deeper than the limit only because of its wrapper becomes a rejection in its page: the page
+    // completes, both results count, and the stream stays.
+    @Test func anOversizedResultIsARejectionInItsPage() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await online(client, on: server)
+        async let page = client.fetchArchivePage(.after("own-1"))
+        let query = try await server.next()
+        let queryID = try #require(query.child("query", namespace: Self.mam)?.attributes["queryid"])
+        let deep = String(repeating: "<x xmlns='urn:example'>", count: 62) + String(repeating: "</x>", count: 62)
+        try await server.send(result(queryID, "own-2"))
+        try await server.send(result(queryID, "own-3").replacingOccurrences(of: "<body>hi</body>", with: "<body>hi</body>" + deep))
+        try await server.send(fin(query, ["own-2", "own-3"], complete: true))
+        let fetched = try await page
+        #expect(fetched.messages.map(\.archiveID) == ["own-2", "own-3"])
+        #expect(fetched.messages[0].message?.body == "hi" && fetched.messages[0].rejectedContent == nil)
+        #expect(fetched.messages[1].rejectedContent == .oversizedContent && fetched.messages[1].message == nil)
+        #expect(fetched.handledTokens.count == 2)
+        #expect(await client.isOnline)
+        await server.stop()
+    }
 }

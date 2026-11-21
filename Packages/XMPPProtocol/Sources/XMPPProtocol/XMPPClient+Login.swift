@@ -139,6 +139,11 @@ extension XMPPClient {
         try await becomeOnline(token: token)
     }
 
+    static func smCount(_ value: String?) -> UInt32? {
+        guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return UInt32(value)
+    }
+
     // An `<enabled/>`, in order or inside Bind 2's `<bound/>`.
     func enableStreamManagement(_ node: XMLNode) async throws {
         let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")

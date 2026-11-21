@@ -1877,8 +1877,6 @@ public actor MessageStore {
             try connection.execute("DELETE FROM archive_rejections WHERE account_id=? AND sequence NOT IN (SELECT sequence FROM archive_rejections WHERE account_id=? ORDER BY sequence DESC LIMIT 1000)", [.text(accountID), .text(accountID)])
         }
     }
-    // Raw values of every protocol `XMPPArchiveRejection` case.
-    private static let archiveRejectionReasons: Set<String> = ["unverifiableEncryptedGroup", "foreignSender", "unsupportedDirectContent", "malformedEncryptedContent"]
     public func hasArchiveRejection(accountID: String, archiveID: String, messageID: String) throws -> Bool {
         try !connection.query("SELECT 1 FROM archive_rejections WHERE account_id=? AND archive_id=? AND message_id=?", [.text(accountID), .text(archiveID), .text(messageID)]).isEmpty
     }
