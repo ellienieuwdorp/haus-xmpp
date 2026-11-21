@@ -7,7 +7,7 @@ import MessagingCore
 enum AccountResource: CaseIterable {
     case lastAccount, signOutRowsOwed, pushOff, ownAvatar, groupNickname, serverFeatures, carbonsStream, streamProfile, uploadService
     case uploadServiceCheckedAt
-    case blocklist, shareSuggestions, xmppResource, xmppClientID
+    case blocklist, blockDates, shareSuggestions, xmppResource, xmppClientID
     case accountRecord, fastToken, pushRegistration, wrappingKey
     case attachmentFolder, avatarFolder
     case deliveredNotifications, appBadge, donations
@@ -59,6 +59,7 @@ enum AccountResource: CaseIterable {
         case .uploadService: Policy(location: .preference([.app, .group], key: { "uploadService." + $0 }), signOut: .delete, transfer: .copy)
         case .uploadServiceCheckedAt: Policy(location: .preference([.app], key: { "uploadServiceCheckedAt." + $0 }), signOut: .delete, transfer: .copy)
         case .blocklist: Policy(location: .preference([.group], key: { "blocklist." + $0 }), signOut: .delete, transfer: .copy)
+        case .blockDates: Policy(location: .preference([.group], key: { "blockedAt." + $0 }), signOut: .delete, transfer: .copy)
         case .shareSuggestions: Policy(location: .preference([.group], key: { "shareSuggestions." + $0 }), signOut: .delete, transfer: .copy)
         case .xmppResource:
             Policy(location: .preference([.group], key: { "xmppResource." + $0 }),
