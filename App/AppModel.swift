@@ -573,7 +573,7 @@ final class AppModel {
                 group.joined = true
                 group.localDeviceID = 31337
                 group.localFingerprint = OwnDeviceReview.sampleIdentities[0].modern.map { String(format: "%02x", $0) }.joined()
-                groupChats[room] = group
+                groupChats[room] = DemoSamples.removalApplied(to: group)
             }
             #endif
             await refresh()
@@ -2242,7 +2242,7 @@ final class AppModel {
 
     func roomRejoined(_ room: String, joined: Bool) { groupChats[room]?.joined = joined }
 
-    func roomRejoinFailed(_ room: String, error: any Error) { groupChats[room]?.issue = groupFailure(error) }
+    func roomRejoinFailed(_ room: String, error: any Error) { groupChats[room]?.noteFailure(error, issue: groupFailure(error)) }
 
     func rejoinPassEnded(token: UUID, joined: Set<String>) {
         groupRejoinsFinished = token
@@ -2282,7 +2282,7 @@ final class AppModel {
             do { _ = try await client.joinGroupRoom(room, nickname: nickname) }
             catch {
                 guard self.generation == token else { return }
-                self.groupChats[room]?.issue = self.groupFailure(error)
+                self.groupChats[room]?.noteFailure(error, issue: self.groupFailure(error))
             }
         }
     }
@@ -2294,7 +2294,9 @@ final class AppModel {
             guard generation == token else { return }
             if value?.joined == true { await recordJoinBoundary(room, token: token) }
             else if await client.groupRoomRefusedJoin(room) { joinBoundaries[room] = nil }
+            let removal = value?.joined == true ? nil : await client.groupRoomRemoval(room)
             guard generation == token else { return }
+            if let removal { groupChats[room]?.noteRemoval(removal) }
             guard let snapshot = value else { groupChats[room]?.joined = false; return }
             groupChats[room]?.members = snapshot.members
             groupChats[room]?.joined = snapshot.joined
@@ -2304,7 +2306,7 @@ final class AppModel {
         } catch {
             guard generation == token else { return }
             groupChats[room]?.joined = false
-            groupChats[room]?.issue = groupFailure(error)
+            groupChats[room]?.noteFailure(error, issue: groupFailure(error))
         }
     }
 
@@ -2368,7 +2370,7 @@ final class AppModel {
             guard generation == token else { return }
             groupChats[room]?.members = current?.members ?? overview.room.members
             groupChats[room]?.joined = current?.joined == true
-            groupChats[room]?.issue = nil
+            groupChats[room]?.noteMembershipConfirmed()
             let devices = try await encryption.cachedGroupDevices(account: account, room: room)
             guard generation == token, accountID == account else { return }
             groupChats[room]?.devices = devices
@@ -2379,19 +2381,12 @@ final class AppModel {
             encryptionAttention.note(note)
         } catch {
             guard generation == token, accountID == account, !(error is CancellationError) else { return }
+            groupChats[room]?.noteFailure(error)
             encryptionAttention.groupDevices(room, problem: "Last group refresh failed: \(groupFailure(error))")
         }
     }
 
-    private func groupFailure(_ error: any Error) -> String {
-        switch error as? XMPPGroupError {
-        case .unsupportedRoom: return "This group must be members-only and share its members’ addresses."
-        case .incompleteMembership: return "The group could not confirm its complete member list or your membership."
-        case .membershipChanged: return "Group membership changed. Refresh the group and try again."
-        case .notJoined: return "This account has not joined the group yet."
-        default: return (error as? OMEMOError)?.errorDescription ?? "Could not open this group. Check its address and your membership."
-        }
-    }
+    private func groupFailure(_ error: any Error) -> String { GroupChatState.failure(error) }
 
     func createChat(_ recipient: String) async -> String? {
         // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
@@ -2622,7 +2617,7 @@ final class AppModel {
             },
             groupFailed: { [weak self] room, error in
                 guard let self, self.generation == token else { return [] }
-                self.groupChats[room]?.issue = self.groupFailure(error)
+                self.groupChats[room]?.noteFailure(error, issue: self.groupFailure(error))
                 return self.encryptionAttention.hold([room: self.groupFailure(error)], shownChat: self.encryptionShownChatID)
             },
             repliesDropped: { [weak self] _ in

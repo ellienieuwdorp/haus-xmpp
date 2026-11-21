@@ -1,6 +1,27 @@
 import XCTest
 
 final class GroupUITests: XCTestCase {
+    // On sample data: a removed member gets a bar in the composer's place, and rejoining brings the composer back.
+    @MainActor func testARemovedMemberSeesTheBarAndRejoiningRestoresTheComposer() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demo-group", "-demo-group-removed"]
+        app.isolateMessageStorage()
+        app.launch()
+        let room = app.buttons["chat.trail@rooms.preview.local"]
+        XCTAssertTrue(room.waitForExistence(timeout: 15))
+        room.tap()
+        XCTAssertTrue(app.otherElements["groupRemovedBar"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["messageComposer"].exists)
+        let rejoin = app.buttons["rejoinGroup"]
+        XCTAssertTrue(rejoin.exists)
+        XCTAssertGreaterThanOrEqual(rejoin.frame.height, 44)
+        capture(app, "Removed from a group")
+        rejoin.tap()
+        XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.otherElements["groupRemovedBar"].exists)
+    }
+
     @MainActor func testJoinReviewEncryptedGroupAndReaction() throws {
         continueAfterFailure = false
         let lab = try LabFixture(requiring: ["XMPP_GROUP_ROOM"], orSkip: "Requires disposable local encrypted group fixture")

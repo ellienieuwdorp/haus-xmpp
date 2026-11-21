@@ -1,5 +1,6 @@
 import SwiftUI
 import OMEMO
+import XMPPProtocol
 
 struct GroupDetailsView: View {
     @Bindable var model: AppModel
@@ -20,10 +21,9 @@ struct GroupDetailsView: View {
                               color: needsReview ? .orange : .green)
                         .padding(.top, 4)
                     // Read-only: the join state and the last failed device refresh. Neither changes the pill.
-                    let notes = [state.issue != nil || !state.joined ? state.status(account: model.accountID) : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }
                     if !notes.isEmpty {
                         Text(notes.joined(separator: "\n")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            .accessibilityIdentifier("groupDetails.status")
+                            .accessibilityIdentifier(state.removal == nil ? "groupDetails.status" : "groupDetails.notMember")
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -86,6 +86,13 @@ struct GroupDetailsView: View {
         .task { await model.loadGroupDetails(room: room) }
     }
 
+    // A removal stands alone: the refresh failure it caused would only repeat it.
+    private var notes: [String] {
+        let status = state.status(account: model.accountID)
+        if state.removal != nil { return [status] }
+        return [state.issue != nil || !state.joined ? status : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }
+    }
+
     private func status(_ device: EncryptionDevice) -> String {
         guard device.active && device.trust == .rejected else { return device.reviewStatus }
         return device.isLeftOutOfGroups(account: model.accountID) ? "Blocked · left out" : "Blocked · group sending paused"
@@ -103,5 +110,51 @@ private struct GroupLocalFingerprintView: View {
             } footer: { Text("Other members verify this \(ThisDevice.noun) by comparing this fingerprint.") }
         }
         .navigationTitle("Your fingerprint").inlineNavigationTitle()
+    }
+}
+
+// In the composer's place: unblocking, or rejoining a group, brings the composer back.
+struct ComposerStandIn: View {
+    @Bindable var model: AppModel
+    let chatID: String
+    let name: String
+
+    var body: some View {
+        if model.isBlocked(chatID) {
+            BlockedChatBar(model: model, chatID: chatID, name: name)
+        } else {
+            GroupRemovedBar(model: model, room: chatID)
+        }
+    }
+}
+
+// Takes the composer's place while the room no longer counts us, shaped like `BlockedChatBar`.
+struct GroupRemovedBar: View {
+    @Bindable var model: AppModel
+    let room: String
+    @State private var rejoining = false
+
+    var body: some View {
+        let state = model.groupChats[room]
+        HStack(spacing: 12) {
+            Text(state?.removal == .kicked ? "You were removed from this group." : "You’re not a member of this group.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if state?.mayRejoin == true {
+                Button("Rejoin") {
+                    rejoining = true
+                    Task { await model.rejoinGroup(room); rejoining = false }
+                }
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+                .disabled(rejoining || !(model.isDemo || model.session.isReady))
+                .accessibilityIdentifier("rejoinGroup")
+            }
+        }
+        .padding(.leading, 16).padding(.trailing, 12)
+        .frame(minHeight: 48)
+        .glassEffect(.regular, in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("groupRemovedBar")
     }
 }

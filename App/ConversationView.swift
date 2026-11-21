@@ -568,8 +568,8 @@ struct ConversationComposer: View {
 
     // The timeline's controller sets the sides and the bottom, which follow the keyboard and the display corners.
     var body: some View {
-        if model.isBlocked(chatID) {
-            BlockedChatBar(model: model, chatID: chatID, name: model.chatName(for: chatID))
+        if model.composerless(chatID) {
+            ComposerStandIn(model: model, chatID: chatID, name: model.chatName(for: chatID))
                 .padding(.top, 8)
         } else {
             composer

@@ -64,7 +64,7 @@ struct MacConversationView: View {
             }
             timeline.onTab = { [weak timeline, composerIntent] in
                 guard let timeline else { return }
-                if timeline.searching || model.isBlocked(chatID) {
+                if timeline.searching || model.composerless(chatID) {
                     timeline.table.view.window?.selectNextKeyView(timeline.table.table)
                 } else {
                     composerIntent.focusComposer()
@@ -103,8 +103,8 @@ struct MacConversationView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if model.isBlocked(chatID) {
-                    BlockedChatBar(model: model, chatID: chatID, name: title)
+                if model.composerless(chatID) {
+                    ComposerStandIn(model: model, chatID: chatID, name: title)
                         .padding(.horizontal, 16).padding(.vertical, 10)
                 } else if timeline?.searching != true {
                     MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
@@ -374,10 +374,10 @@ private struct MacMessageCommandsSource: View {
                 timeline.reveal(message.id)
                 handlers.react(emoji, message)
             })
-            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, isBlocked: model.isBlocked(chatID), handlers: revealing)
+            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, readOnly: model.composerless(chatID), handlers: revealing)
         }
         let messages = timeline.isFiltered ? presenter.timelineMessages : timeline.rows.map(\.message)
-        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, isBlocked: model.isBlocked(chatID), handlers: handlers)
+        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, readOnly: model.composerless(chatID), handlers: handlers)
     }
 
     var body: some View {
