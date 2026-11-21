@@ -126,6 +126,9 @@ struct ConversationView: View {
     private var lastSeenLabel: String? {
         LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: model.isBlocked(chatID), now: lastSeenClock, calendar: .autoupdatingCurrent)
     }
+    private var headerAccessibilityLabel: String { lastSeenLabel.map { "\(title), \($0)" } ?? title }
+    // Until measured, the narrowest iPhone's width.
+    @State private var barWidth: CGFloat = 375
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
     private var presenter: ConversationPresenter {
@@ -267,6 +270,8 @@ struct ConversationView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
+        // The navigation bar spans this view's width.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .navigationBarTitleDisplayMode(.inline)
         // No toolbar background: a material strip cut messages off flat. The timeline's soft scroll-edge effect dissolves
         // them beneath the bar instead (Reduce Transparency makes it opaque). The adaptive dark flip over a wide sent
@@ -275,22 +280,11 @@ struct ConversationView: View {
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(value: ChatRoute.details(chatID)) {
                     // Name only: trust lives in Chat Details and the review card, so the header never flickers.
-                    HStack(spacing: 9) {
-                        ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup, size: 36)
-                            .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
-                        if let lastSeenLabel {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-                                Text(lastSeenLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    .contentTransition(.opacity)
-                            }
-                            .transition(.opacity)
-                        } else {
-                            Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                                .transition(.opacity)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: lastSeenLabel)
+                    ConversationHeaderPill(
+                        avatar: ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup,
+                                           size: ConversationHeaderPill.avatarSize),
+                        title: title, lastSeen: lastSeenLabel, maxWidth: ConversationHeaderPill.widthLimit(inBar: barWidth))
+                    .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
                     .task(id: model.openChatLastSeen) {
                         lastSeenClock = .now
                         guard case .lastSeen = model.openChatLastSeen else { return }
@@ -299,25 +293,27 @@ struct ConversationView: View {
                             lastSeenClock = .now
                         }
                     }
-                    // Leading toolbar items size to content; give the header a fixed width so the name isn't squeezed out.
-                    .frame(width: 236, height: 44, alignment: .leading)
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(lastSeenLabel.map { "\(title), \($0)" } ?? title)
+                .accessibilityLabel(headerAccessibilityLabel)
                 .accessibilityHint("Shows conversation details")
                 .accessibilityIdentifier("chatDetails")
+                // The header's text size stops at the first accessibility size, so a long press shows it larger.
+                .accessibilityShowsLargeContentViewer { Text(headerAccessibilityLabel) }
             }
+            // The pill draws its own glass, so the bar's shared background stays off.
             .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Search messages", systemImage: "magnifyingglass") { composerState.focused = false; showingSearch = true }
-                    Button("Starred messages", systemImage: "star") { starredOnly = true }
-                    if !model.isDemo { NavigationLink(value: encryptionRoute) { Label(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") } }
-                } label: { Image(systemName: "ellipsis") }
-                .accessibilityLabel("Conversation options")
+            // On iOS 27 the system owns the "…" and its overflow menu; before that a menu of our own stands in for it.
+            if #available(iOS 27, *) {
+                ToolbarOverflowMenu { conversationOptions }
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu { conversationOptions } label: { Image(systemName: "ellipsis") }
+                        .accessibilityLabel("Conversation options")
+                }
             }
         }
+        .modifier(FixedNavigationBar())
         .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
             get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
         ), titleVisibility: .visible, presenting: retryMessageID) { id in
@@ -403,6 +399,15 @@ struct ConversationView: View {
                              onAttachAsset: { await composerState.intake.attach(asset: $0, to: composerState, model: model) },
                              onAttachCapture: { attach(capture: $0) })
             .tint(Color(uiColor: AccentTheme.current.tint))
+    }
+
+    // Buttons, not navigation links: the system overflow menu is a UIKit menu, and a route request pushes from either.
+    @ViewBuilder private var conversationOptions: some View {
+        Button("Search messages", systemImage: "magnifyingglass") { composerState.focused = false; showingSearch = true }
+        Button("Starred messages", systemImage: "star") { starredOnly = true }
+        if !model.isDemo {
+            Button(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") { model.requestRoute(encryptionRoute) }
+        }
     }
 
     private var showsReview: Bool { !model.isDemo && (model.encryptionNeedsReview || model.encryptionIncomingReview) && !reviewDismissed }

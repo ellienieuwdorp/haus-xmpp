@@ -83,7 +83,7 @@ final class ReplyUITests: XCTestCase {
         XCTContext.runActivity(named: "Search hides the composer and the draft survives it") { _ in
             composer.tap()
             composer.typeText("Unsent note")
-            app.buttons["Conversation options"].tap()
+            app.openConversationOptions()
             app.buttons["Search messages"].tap()
             let search = app.searchFields["messageSearch"]
             XCTAssertTrue(search.waitForExistence(timeout: 4))

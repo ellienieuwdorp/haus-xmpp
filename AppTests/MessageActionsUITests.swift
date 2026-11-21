@@ -126,7 +126,7 @@ final class MessageActionsUITests: XCTestCase {
         XCTContext.runActivity(named: "The starred filter lists only starred messages") { _ in
             let unstarred = app.textViews.containing(NSPredicate(format: "value == %@", "See you there!")).firstMatch
             XCTAssertTrue(unstarred.exists)
-            app.buttons["Conversation options"].tap()
+            app.openConversationOptions()
             app.buttons["Starred messages"].tap()
             let showAll = app.buttons["Show all"]
             XCTAssertTrue(showAll.waitForExistence(timeout: 3))
