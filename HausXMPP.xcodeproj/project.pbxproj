@@ -162,6 +162,7 @@
 		3F9CF71CF2E21CDB1FFC638F /* ShareSuggestionSetting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B70CF6E3ACD3112DEA69966 /* ShareSuggestionSetting.swift */; };
 		3FA72D8C923D2D2D0C1609E6 /* MacMainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CB80218584E38C40D21136E /* MacMainWindow.swift */; };
 		3FD2F7BE7712D919EDE6D598 /* MacTimelineCells.swift in Sources */ = {isa = PBXBuildFile; fileRef = D07455D02E8E2D48C5D22B96 /* MacTimelineCells.swift */; };
+		40C7C550B25D7289B6B72C7E /* ComposerDock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BF989D3B40B05B2E3776ED /* ComposerDock.swift */; };
 		40DE7206357BA2B87D9DF4E6 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665ABAF78DE8CC58D961254E /* AvatarStore.swift */; };
 		41926927A121678B2EDB61DF /* BlockingAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9349A585AC7A9915D3300410 /* BlockingAvailabilityTests.swift */; };
 		41C29B242E156C08CC5FEFDE /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
@@ -769,6 +770,7 @@
 		55FB7BEAEAE8818F668762F4 /* OwnDeviceReviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnDeviceReviewTests.swift; sourceTree = "<group>"; };
 		561283550C1F01C510E35500 /* AttachmentIntakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentIntakeTests.swift; sourceTree = "<group>"; };
 		563F6CF8F2D9BE1CAE1F4B50 /* FileReplyGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileReplyGateTests.swift; sourceTree = "<group>"; };
+		56BF989D3B40B05B2E3776ED /* ComposerDock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerDock.swift; sourceTree = "<group>"; };
 		57FD9F248975652A8B384A24 /* account-tables.sql */ = {isa = PBXFileReference; path = "account-tables.sql"; sourceTree = "<group>"; };
 		58E60B640C2EF71B3370C56C /* MessageStatusGlyphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStatusGlyphTests.swift; sourceTree = "<group>"; };
 		5A0FAA76D7E3EC286E943F18 /* MacComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposer.swift; sourceTree = "<group>"; };
@@ -1418,6 +1420,7 @@
 				4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */,
 				0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */,
 				24971C9AFE6065119E87D945 /* CoalescedReload.swift */,
+				56BF989D3B40B05B2E3776ED /* ComposerDock.swift */,
 				D8ACDE5AB323530B99EB083F /* ComposerIntake.swift */,
 				1C33DA2A84BC7E161F7D0ECF /* ConnectionFailure.swift */,
 				39FC65A732AA1ECEF720F45E /* ContactDirectory.swift */,
@@ -1961,6 +1964,7 @@
 				32A4045E4AF6E2FE5C9C8071 /* ChatTrust.swift in Sources */,
 				F025CB0DFFD9C3C7139FE03E /* CircularGlassButtonStyle.swift in Sources */,
 				9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */,
+				40C7C550B25D7289B6B72C7E /* ComposerDock.swift in Sources */,
 				FB4E5C85E01E9F97DC2574E7 /* ComposerIntake.swift in Sources */,
 				4A5356525D8C703155480E40 /* ComposerLinkPreview.swift in Sources */,
 				57981266BBD1EDA970D8B64F /* ComposerPlan.swift in Sources */,

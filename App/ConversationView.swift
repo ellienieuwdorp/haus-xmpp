@@ -566,10 +566,11 @@ struct ConversationComposer: View {
         return (model.attachmentFiles[source.id], attachment.mediaType)
     }
 
+    // The timeline's controller sets the sides and the bottom, which follow the keyboard and the display corners.
     var body: some View {
         if model.isBlocked(chatID) {
             BlockedChatBar(model: model, chatID: chatID, name: model.chatName(for: chatID))
-                .padding(.horizontal, 16).padding(.vertical, 8)
+                .padding(.top, 8)
         } else {
             composer
         }
@@ -628,7 +629,7 @@ struct ConversationComposer: View {
         // Glass that grew past control size keeps the look it had when it grew and an appearance change does not
         // re-resolve it, so it is rebuilt; the draft lives in `state` and focus is handed to the new field below.
         .id(colorScheme)
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(.top, 8)
         .onChange(of: colorScheme) { if focused, !state.attachmentsOpen { Task { focused = true } } }
         .onChange(of: state.focused) { _, wanted in focused = wanted }
         // Opening focuses the field itself, with the panel already its input view, so it comes up in one animation.
