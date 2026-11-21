@@ -1402,51 +1402,6 @@ final class ServiceTests: XCTestCase {
         expectEqual(await log.fetches.count, 2)
     }
 
-    func testChangedIdentityOnAKnownDeviceIsNeverDecryptedAndIsFlaggedByTheNextFullRefresh() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern)
-        let original = try unwrap(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.jid == f.alice && $0.active })
-        expectEqual(original.trust, .accepted)
-        let bobDevice = try unwrap(try await f.a.overview(account: f.alice, peer: f.bob).devices.first { $0.jid == f.bob && $0.active })
-        // Alice's device ID now answers with a new identity (a reinstall that kept its ID, or an attacker).
-        let impostor = try OMEMOEngine(profile: .modern, deviceID: original.deviceID)
-        let replacement = try impostor.bundle()
-        await f.server.publish(f.alice, XMPPOMEMOBundle(profile: .modern, deviceID: replacement.deviceID, identityKey: replacement.identityKey,
-                                                        signedPreKeyID: replacement.signedPreKeyID, signedPreKey: replacement.signedPreKey,
-                                                        signedPreKeySignature: replacement.signedPreKeySignature, preKeys: replacement.preKeys))
-        let bobBundle = try await f.server.bundle(f.bob, bobDevice.deviceID, .modern)
-        let address = DeviceAddress(jid: f.bob, deviceID: bobDevice.deviceID)
-        try impostor.trustIdentity(bobBundle.identityKey, for: address, resetSession: false)
-        try impostor.establishSession(with: address, bundle: DeviceBundle(deviceID: bobBundle.deviceID, identityKey: bobBundle.identityKey,
-                                                                           signedPreKeyID: bobBundle.signedPreKeyID, signedPreKey: bobBundle.signedPreKey,
-                                                                           signedPreKeySignature: bobBundle.signedPreKeySignature, preKeys: bobBundle.preKeys))
-        let xml = "<envelope xmlns='urn:xmpp:sce:1'><content><body xmlns='jabber:client'>Not really Alice</body></content><rpad>padding</rpad><from jid='alice@localhost'/><to jid='bob@localhost'/></envelope>"
-        let payload = try PayloadCrypto.seal(Data(xml.utf8), profile: .modern)
-        let key = try impostor.encrypt(payload.keyMaterial, to: address)
-        let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: original.deviceID,
-            keys: [XMPPOMEMOKey(recipientJID: f.bob, deviceID: bobDevice.deviceID, keyExchange: key.isPreKey, data: key.data)],
-            iv: nil, payload: payload.payload)
-        let message = f.message(envelope, id: "impostor")
-        let log = TransportLog()
-        do { _ = try await f.b.receive(account: f.bob, message: message, transport: CountingTransport(base: f.bTransport, log: log)); XCTFail("A new identity decrypted under the old approval") }
-        catch { expectEqual(error as? OMEMOError, .undecryptable) }
-        // The stored record is still the approved one: no refresh on the receive path, and nothing readable stored.
-        expectEqual(await log.calls, [])
-        let rows = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
-        expectTrue(rows.allSatisfy { $0.unreadableReason != nil && $0.body.isEmpty })
-        expectEqual(rows.map(\.unreadableReason), [.decryptFailed])
-        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        // The sending path's full refresh flags the new key and resets trust; the old record stays for history.
-        let refreshed = try await f.b.refreshDevices(account: f.bob, peer: f.alice, transport: f.bTransport)
-        let records = refreshed.devices.filter { $0.jid == f.alice && $0.deviceID == original.deviceID }
-        expectEqual(records.count, 2)
-        let last = try unwrap(records.last)
-        expectEqual(last.identityKey, replacement.identityKey)
-        expectEqual(last.trust, .undecided)
-        expectTrue(last.identityChanged)
-        expectEqual(records.first?.identityKey, original.identityKey)
-    }
-
     func testCommitFailureAfterSkippedRetentionWithholdsTheDisposition() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)

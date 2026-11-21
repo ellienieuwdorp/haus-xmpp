@@ -1004,10 +1004,9 @@ public actor OMEMOService {
                 // retention was skipped).
                 throw OMEMOError.invalidContent
             } catch let error as OMEMOCryptoError where error != .invalidSnapshot {
-                // A trusted device's ciphertext that fails now always will: record a durable outcome, revert the
-                // engine, commit no ratchet state.
-                guard try await recordDecryptFailure(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt) else { return false }
-                throw OMEMOError.undecryptable
+                // A durable outcome, or a wait for review of a new key under this device ID; the engine reverts.
+                return try await settleDecryptFailure(error, message: message, sentAt: retained.sentAt, in: FailedDecrypt(account: account, digest: digest,
+                    alert: retentionSkipped ? alert : nil, retain: retentionSkipped ? retain : nil, transport: transport))
             } catch OMEMOError.invalidContent {
                 guard try await recordDecryptFailure(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt) else { return false }
                 throw OMEMOError.undecryptable
@@ -1128,7 +1127,7 @@ public actor OMEMOService {
     // Only for ciphertext this device will never read, never for storage, cancellation or state errors. Returns true
     // when a placeholder marks the message.
     @discardableResult
-    private func recordDecryptFailure(account: String, message: XMPPEncryptedMessage, sender: String, digest: String, sentAt: Date?) async throws -> Bool {
+    func recordDecryptFailure(account: String, message: XMPPEncryptedMessage, sender: String, digest: String, sentAt: Date?) async throws -> Bool {
         guard message.envelope.payload != nil else {
             try await store.consumeUndecryptableIncoming(accountID: account, sender: sender, digest: digest)
             return false
