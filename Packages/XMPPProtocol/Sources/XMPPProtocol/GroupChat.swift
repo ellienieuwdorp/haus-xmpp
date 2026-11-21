@@ -2,6 +2,8 @@ import Foundation
 
 public enum XMPPGroupError: Error, Sendable, Equatable {
     case unsupportedRoom, incompleteMembership, membershipChanged, notJoined, unknownOccupant, invalidMessage
+    /// The room's complete affiliation lists, read and agreed, leave the account out.
+    case notMember
 }
 
 extension XMPPGroupError: LocalizedError {
@@ -13,8 +15,20 @@ extension XMPPGroupError: LocalizedError {
         case .notJoined: "Reconnect to this group before sending."
         case .unknownOccupant: "This group message's author could not be verified."
         case .invalidMessage: "This encrypted group message could not be validated."
+        case .notMember: "This account is not a member of the group."
         }
     }
+}
+
+/// The room's own word that it no longer counts us: an XEP-0045 status code on our unavailable self-presence, or the
+/// error to our join. Leaving, a disconnect and a server shutdown are not removals.
+public enum XMPPGroupRemoval: Sendable, Equatable {
+    /// 307: out of the room with the affiliation kept, so a join may succeed.
+    case kicked
+    /// 301, or `forbidden` to a join.
+    case banned
+    /// 321, 322, or `registration-required` to a join.
+    case notMember
 }
 
 /// A complete member/admin/owner union from the authenticated room service. Occupant presence alone is never a
@@ -83,6 +97,7 @@ struct GroupRoomState {
     var joined = false
     // Error presence to our last join (not a member, banned, nickname taken, room gone).
     var joinRefused = false
+    var removal: XMPPGroupRemoval?
     var nickname: String?
     var validatedRevision: UInt64? = nil
     // Occupancy a resume restored (`RetainedGroupRoom`): it routes the stanzas the server held for the session, but
@@ -116,6 +131,7 @@ struct GroupRoomState {
 
     mutating func requestNickname(_ nickname: String) {
         joinRefused = false
+        removal = nil
         // A join over restored occupancy waits for the room's own answer like any other.
         if restored { restored = false; joined = false; revision &+= 1 }
         guard self.nickname != nickname else { return }
@@ -253,7 +269,10 @@ enum GroupChatWire {
               let affiliation = items[0].attributes["affiliation"], ["member", "admin", "owner"].contains(affiliation),
               items.allSatisfy({ $0.attributes["jid"].flatMap(OMEMOWire.bareJID) == jid && $0.attributes["affiliation"] == affiliation }) else {
             state.occupants[occupant] = nil
-            if ownOccupant { state.joined = false; state.restored = false; state.joinRefused = node.attributes["type"] == "error" }
+            if ownOccupant {
+                state.joined = false; state.restored = false; state.joinRefused = node.attributes["type"] == "error"
+                state.removal = removal(node, xs: xs)
+            }
             return
         }
         // A complete membership refresh is still required before this mapping can authorize message routing.
@@ -263,6 +282,30 @@ enum GroupChatWire {
                 $0.name == "status" && $0.namespace == user && $0.attributes["code"] == "110"
             }
             state.restored = false
+            if state.joined { state.removal = nil }
+        }
+    }
+    // A nickname change (303) and a shutdown (332) come with unavailable self-presence too and are not removals.
+    static func removal(_ node: XMLNode, xs: [XMLNode]) -> XMPPGroupRemoval? {
+        switch node.attributes["type"] {
+        case "unavailable":
+            guard xs.count == 1 else { return nil }
+            let codes = Set(xs[0].children.filter { $0.name == "status" && $0.namespace == user }.compactMap { $0.attributes["code"] })
+            guard !codes.contains("303") else { return nil }
+            if codes.contains("301") { return .banned }
+            if codes.contains("321") || codes.contains("322") { return .notMember }
+            if codes.contains("307") { return .kicked }
+            return nil
+        case "error":
+            let errors = node.children("error", namespace: "jabber:client")
+            guard errors.count == 1 else { return nil }
+            switch errors[0].children.first(where: { $0.namespace == XMPPMessageError.stanzasNamespace && $0.name != "text" })?.name {
+            case "forbidden": return .banned
+            case "registration-required": return .notMember
+            default: return nil
+            }
+        default:
+            return nil
         }
     }
     static func outgoing(room: String, envelope: XMPPOMEMOEnvelope, id: String) throws -> String {
@@ -274,6 +317,8 @@ enum GroupChatWire {
 extension XMPPClient {
     /// The room refused our last join; a later join clears this.
     public func groupRoomRefusedJoin(_ room: String) -> Bool { groupRooms[room]?.joinRefused == true }
+    /// Why the room last removed us or refused our join; a later join clears this.
+    public func groupRoomRemoval(_ room: String) -> XMPPGroupRemoval? { groupRooms[room]?.removal }
     public func groupRoomSnapshot(_ room: String) throws -> XMPPGroupRoomSnapshot? {
         guard let state = groupRooms[room], !state.members.isEmpty else { return nil }
         return try .init(room: room, members: state.members, revision: state.revision, joined: state.sendable)
@@ -350,7 +395,7 @@ extension XMPPClient {
                 guard first == second, revision == groupRooms[room]?.revision else { continue }
                 members = first
             }
-            guard members.contains(account) else { throw XMPPGroupError.incompleteMembership }
+            guard members.contains(account) else { throw XMPPGroupError.notMember }
             guard try groupAccount() == account, var state = groupRooms[room] else { throw XMPPGroupError.notJoined }
             state.markValidated(members)
             state.occupants = state.occupants.filter { members.contains($0.value) }
