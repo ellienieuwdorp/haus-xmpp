@@ -80,6 +80,8 @@ struct ChatDetailsView: View {
             }
         }
         .groupedListStyle()
+        // On iOS 27 the automatic edge has its own look instead of resolving to soft.
+        .scrollEdgeEffectStyle(.soft, for: .top)
         .toolbarTitleDisplayMode(.inline)
     }
 
@@ -88,6 +90,7 @@ struct ChatDetailsView: View {
             ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup, size: DetailsHeroMetrics.avatar)
                 .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
             Text(title).font(DetailsHeroMetrics.title).padding(.top, 6)
+                .accessibilityAddTraits(.isHeader)
             Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             if !model.isDemo {
                 let trust = model.trustSummary(for: chatID)
@@ -119,7 +122,8 @@ struct ChatDetailsView: View {
     }
 
     private func tile(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return Button(action: action) {
             // The two symbols differ in height, so the glyph box and tile height are fixed.
             VStack(spacing: 4) {
                 Image(systemName: systemImage).font(.title3.weight(.medium)).frame(height: tileGlyphHeight)
@@ -128,8 +132,8 @@ struct ChatDetailsView: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, minHeight: 60)
             .foregroundStyle(.tint)
-            .background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .glassEffect(.regular.interactive(), in: shape)
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
     }

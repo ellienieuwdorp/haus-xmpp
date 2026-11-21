@@ -51,6 +51,8 @@ struct EncryptionDetailsView: View {
                 Section { Text(text).foregroundStyle(.secondary) }
             }
         }
+        // On iOS 27 the automatic edge has its own look instead of resolving to soft.
+        .scrollEdgeEffectStyle(.soft, for: .top)
         // Stored devices at once; the server is asked at most once per connection unless Refresh is tapped.
         .task { await model.loadEncryptionDetails(for: chatID) }
         .navigationTitle("Devices & Encryption")

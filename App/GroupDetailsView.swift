@@ -12,7 +12,7 @@ struct GroupDetailsView: View {
             Section {
                 VStack(spacing: 6) {
                     ChatAvatar(key: room, name: room, isGroup: true, size: DetailsHeroMetrics.avatar)
-                    Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6)
+                    Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6).accessibilityAddTraits(.isHeader)
                     Text(room).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                     let needsReview = state.needsReview(account: model.accountID)
                     TrustPill(text: needsReview ? "Devices need review" : "Encrypted",
@@ -68,6 +68,8 @@ struct GroupDetailsView: View {
             }
             Section {} footer: { Text("Blocking another member’s device pauses sending to the whole group. Your own blocked devices are left out instead.") }
         }
+        // On iOS 27 the automatic edge has its own look instead of resolving to soft.
+        .scrollEdgeEffectStyle(.soft, for: .top)
         .navigationTitle("Group details").inlineNavigationTitle()
         .toolbar {
             ToolbarItem(placement: .barTrailing) {
