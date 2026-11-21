@@ -463,7 +463,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         loadViewIfNeeded()
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
-        composerDock.edge.isHidden = composer == nil
         jump.ridesComposer(composer != nil)
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.
