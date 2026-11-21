@@ -36,6 +36,11 @@ extension XCUIApplication {
 }
 
 extension XCUIApplication {
+    // From iOS 27 the options sit in the navigation bar's system overflow menu, whose button UIKit labels "More".
+    @MainActor func openConversationOptions() {
+        if #available(iOS 27, *) { navigationBars.buttons["More"].tap() } else { buttons["Conversation options"].tap() }
+    }
+
     @MainActor func allowPhotoAccessIfAsked() {
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
         // Stop at the prompt or the rail's first photo; a prompt shown after the deadline is dismissed by the next tap,

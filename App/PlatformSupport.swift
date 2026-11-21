@@ -67,6 +67,15 @@ extension View {
         #endif
     }
 
+    // A details tile is a control on iPhone, so glass; in the Mac inspector it sits in the content column.
+    func detailsTileSurface(_ shape: some Shape) -> some View {
+        #if os(iOS)
+        glassEffect(.regular.interactive(), in: shape)
+        #else
+        background(Color.secondaryGroupedBackground, in: shape)
+        #endif
+    }
+
     func secondaryActionStyle() -> some View {
         #if os(iOS)
         buttonStyle(.glass)
