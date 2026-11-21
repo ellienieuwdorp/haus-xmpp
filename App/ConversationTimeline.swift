@@ -93,6 +93,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var revision = 0
     private var followsBottom = true
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
+    private let composerDock = ComposerDock()
     var onRestoreComposerFocus: () -> Void = {}
     var onReachTop: () -> Void = {}
     var onAttachmentDisplayed: (String) -> Void = { _ in }
@@ -177,13 +178,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
         composerHost.view.isHidden = true
         addChild(composerHost)
-        container.addSubview(composerHost.view)
-        NSLayoutConstraint.activate([
-            composerHost.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            composerHost.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            composerHost.view.bottomAnchor.constraint(equalTo: container.keyboardLayoutGuide.topAnchor),
-            composerHeight,
-        ])
+        composerDock.install(composerHost.view, height: composerHeight, in: container, under: collectionView)
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
@@ -458,10 +453,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         loadViewIfNeeded()
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
+        composerDock.edge.isHidden = composer == nil
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.
         if let composer {
-            composerHost.rootView = AnyView(composer.fixedSize(horizontal: false, vertical: true)
+            composerHost.rootView = AnyView(composerDock.sides(of: composer).fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [weak self] height in
                     guard let self, abs(composerHeight.constant - height) > 0.5 else { return }
                     composerHeight.constant = height
@@ -484,10 +480,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     // Runs inside the keyboard's animation, so the inset and offset move with it.
     private func updateBottomInset() {
-        let top = composerHost.view.isHidden ? view.keyboardLayoutGuide.layoutFrame.minY : composerHost.view.frame.minY
+        composerDock.followKeyboard(in: view)
+        let keyboardTop = view.keyboardLayoutGuide.layoutFrame.minY
+        // The guide leaves out the home indicator, which still insets the messages when nothing sits above it.
+        let top = composerHost.view.isHidden ? min(keyboardTop, view.bounds.maxY - view.safeAreaInsets.bottom) : composerHost.view.frame.minY
         let inset = max(0, view.bounds.maxY - top)
         // An interactive dismiss starts at the composer's top edge rather than the keyboard's.
-        view.keyboardLayoutGuide.keyboardDismissPadding = composerHost.view.isHidden ? 0 : composerHost.view.bounds.height
+        view.keyboardLayoutGuide.keyboardDismissPadding = composerHost.view.isHidden ? 0 : max(0, keyboardTop - composerHost.view.frame.minY)
         // adjustedContentInset adds the safe area back, so the visible inset is exactly `inset`.
         // UIKit shifts the offset itself when the safe area changes under it, so that counts as an inset change too.
         let content = inset - collectionView.safeAreaInsets.bottom
@@ -511,6 +510,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        composerDock.safeAreaChanged(in: view)
         if followsBottom { followBottom() }
         view.setNeedsLayout()
     }

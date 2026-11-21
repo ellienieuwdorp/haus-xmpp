@@ -50,6 +50,52 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     state.requestNickname("self")
     #expect(!state.joinRefused)
 }
+// XEP-0045 status codes on our own unavailable presence, and the errors to our join, say why the room stopped counting
+// us; leaving, a nickname change and a shutdown are not removals.
+@Test func ownRemovalRecordsTheRoomsReasonUntilTheNextJoin() throws {
+    func leave(_ codes: [String], item: String = "<item affiliation='none' role='none'/>") throws -> XMPPProtocol.XMLNode {
+        try groupNode("<presence from='\(groupRoom)/self' type='unavailable'><x xmlns='\(GroupChatWire.user)'>\(item)"
+                      + (["110"] + codes).map { "<status code='\($0)'/>" }.joined() + "</x></presence>")
+    }
+    func refused(_ condition: String) throws -> XMPPProtocol.XMLNode {
+        try groupNode("<presence from='\(groupRoom)/self' type='error'><error type='auth'>"
+                      + "<\(condition) xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></presence>")
+    }
+    let own = try groupNode("<presence from='\(groupRoom)/self'><x xmlns='\(GroupChatWire.user)'>"
+                            + "<item affiliation='member' jid='\(groupAlice)/phone'/><status code='110'/></x></presence>")
+    let cases: [(XMPPProtocol.XMLNode, XMPPGroupRemoval?)] = [
+        (try leave(["307"], item: "<item affiliation='member' role='none'/>"), .kicked),
+        (try leave(["301"], item: "<item affiliation='outcast' role='none'/>"), .banned),
+        (try leave(["321"]), .notMember),
+        (try leave(["322"]), .notMember),
+        (try refused("forbidden"), .banned),
+        (try refused("registration-required"), .notMember),
+        (try refused("conflict"), nil),
+        (try refused("item-not-found"), nil),
+        (try leave([]), nil),
+        (try leave(["332"]), nil),
+        (try leave(["303"], item: "<item affiliation='member' role='participant' nick='renamed'/>"), nil),
+        (try groupNode("<presence from='\(groupRoom)/self' type='unavailable'/>"), nil),
+    ]
+    for (node, expected) in cases {
+        var state = GroupRoomState(members: [groupAlice], nickname: "self")
+        GroupChatWire.applyPresence(own, room: groupRoom, account: groupAlice, state: &state)
+        #expect(state.joined)
+        GroupChatWire.applyPresence(node, room: groupRoom, account: groupAlice, state: &state)
+        #expect(!state.joined)
+        #expect(state.removal == expected, "\(node)")
+        // Another occupant's removal says nothing about ours.
+        var other = GroupRoomState(members: [groupAlice], nickname: "other")
+        GroupChatWire.applyPresence(node, room: groupRoom, account: groupAlice, state: &other)
+        #expect(other.removal == nil)
+        // A join clears it; the room's own presence admitting us does too.
+        state.requestNickname("self")
+        #expect(state.removal == nil)
+        GroupChatWire.applyPresence(node, room: groupRoom, account: groupAlice, state: &state)
+        GroupChatWire.applyPresence(own, room: groupRoom, account: groupAlice, state: &state)
+        #expect(state.joined && state.removal == nil)
+    }
+}
 @Test func liveGroupRejectsUnknownNicknameAndConflictingRealJID() throws {
     let xml = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g1")
         .replacingOccurrences(of: "to='\(groupRoom)'", with: "from='\(groupRoom)/nick' to='\(groupBob)'")

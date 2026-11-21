@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 import XCTest
 @testable import HausXMPP
@@ -46,6 +47,38 @@ final class TimelinePositionTests: XCTestCase {
         var coasting = false
         override var isDragging: Bool { fingerDown }
         override var isDecelerating: Bool { coasting }
+    }
+
+    // Concentric with the display corners over the home indicator, 8 above a keyboard, inside a side safe area exactly.
+    func testTheComposerFollowsTheDisplayCornersAndTheKeyboard() throws {
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 34), 28, "Face ID portrait")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 21), 21, "Face ID landscape")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 0), 8, "home button")
+        XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 83), 91, "something else sits at the bottom")
+        let down = ComposerGeometry.sides(left: 0, right: 0, overlap: 34, width: 402)
+        XCTAssertEqual([down.left, down.right], [28, 28])
+        let up = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 402)
+        XCTAssertEqual([up.left, up.right], [12, 12])
+        let wide = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 440)
+        XCTAssertEqual([wide.left, wide.right], [16, 16])
+        let homeButton = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 375)
+        XCTAssertEqual([homeButton.left, homeButton.right], [12, 12])
+        for overlap in [0, 34] as [CGFloat] {
+            let landscape = ComposerGeometry.sides(left: 62, right: 62, overlap: overlap, width: 874)
+            XCTAssertEqual([landscape.left, landscape.right], [62, 62], "nothing beyond the side safe area")
+        }
+        // A keyboard dismissed by hand eases the sides without a jump.
+        let steps = stride(from: 0, through: 34, by: 1).map { ComposerGeometry.sides(left: 0, right: 0, overlap: CGFloat($0), width: 402).left }
+        XCTAssertEqual(steps.first, 12)
+        XCTAssertEqual(steps.last, 28)
+        XCTAssertTrue(zip(steps, steps.dropFirst()).allSatisfy { $1 >= $0 && $1 - $0 <= 1 })
+
+        controller.setComposer(AnyView(Color.clear.frame(height: 44)))
+        controller.view.layoutIfNeeded()
+        let host = try XCTUnwrap(controller.children.first?.view)
+        let safeBottom = controller.view.safeAreaInsets.bottom
+        XCTAssertEqual(controller.view.bounds.maxY - host.frame.maxY, ComposerGeometry.bottom(safeBottom: safeBottom), accuracy: 0.5,
+                       "with the keyboard down the composer keeps the corner margin, not the safe area plus a gap")
     }
 
     // Opening at the newest message, or any other programmatic move, never pages. The threshold is

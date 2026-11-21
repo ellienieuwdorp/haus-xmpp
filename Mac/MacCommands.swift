@@ -104,13 +104,13 @@ struct MacChatCommands {
 struct MacMessageCommands {
     let targets: LastMessageTargets
     let isFocused: Bool
-    // A blocked chat has no composer and sends nothing, so it neither replies, edits nor reacts.
-    let isBlocked: Bool
+    // A chat without a composer sends nothing, so it neither replies, edits nor reacts.
+    let readOnly: Bool
     let handlers: MacMessageHandlers
 
-    var reply: TimelineMessage? { isBlocked ? nil : targets.reply }
-    var edit: TimelineMessage? { isBlocked ? nil : targets.edit }
-    var react: TimelineMessage? { isBlocked ? nil : targets.react }
+    var reply: TimelineMessage? { readOnly ? nil : targets.reply }
+    var edit: TimelineMessage? { readOnly ? nil : targets.edit }
+    var react: TimelineMessage? { readOnly ? nil : targets.react }
     var star: TimelineMessage? { targets.star }
 }
 

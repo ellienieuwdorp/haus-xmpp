@@ -22,6 +22,15 @@ enum DemoSamples {
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 
+    // `-demo-group-removed` shows the sample group after a kick, `-demo-group-banned` after a ban.
+    static func removalApplied(to group: GroupChatState) -> GroupChatState {
+        var group = group
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-demo-group-removed") { group.noteRemoval(.kicked) }
+        if arguments.contains("-demo-group-banned") { group.noteRemoval(.banned) }
+        return group
+    }
+
     static func lastSeen(_ chat: String) -> LastSeen? {
         switch chat {
         case alex: .online
