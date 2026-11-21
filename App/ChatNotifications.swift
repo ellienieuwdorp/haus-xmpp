@@ -88,6 +88,8 @@ struct MuteUntilSheet: View {
             Form {
                 DatePicker("Date", selection: $end, in: Date.now..., displayedComponents: .date)
                     .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("muteUntilDate")
                 DatePicker("Time", selection: $end, displayedComponents: .hourAndMinute)
                     .accessibilityIdentifier("muteUntilTime")
@@ -104,7 +106,7 @@ struct MuteUntilSheet: View {
                 }
             }
         }
-        .macSheetSize(width: 360, height: 500)
+        .macSheetSize(width: 360, height: 340)
     }
 
     // The sheet may stay open past the chosen time, so the end is checked again at the tap.
