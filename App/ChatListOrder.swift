@@ -15,3 +15,10 @@ enum ChatListOrder {
         return ids[(index + (forward ? 1 : ids.count - 1)) % ids.count]
     }
 }
+
+extension AppModel {
+    func markChatRead(_ chatID: String) async { await markChatsRead([chatID]) }
+
+    // The current account's chats, so Mark All as Read never reaches another account's.
+    var unreadChatIDs: [String] { chats.filter { $0.unreadCount > 0 }.map(\.id) }
+}

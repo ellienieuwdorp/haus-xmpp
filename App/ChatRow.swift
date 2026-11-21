@@ -12,17 +12,22 @@ struct ChatRow: View {
     var avatarSize: CGFloat = 52
     var isBlocked = false
 
-    private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd/MM"; return f }()
-
-    private var timeLabel: String? {
-        guard let date = chat.lastMessageAt else { return nil }
-        let cal = Calendar.current
-        if cal.isDateInToday(date) { return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) }
-        if cal.isDateInYesterday(date) { return "Yesterday" }
-        if let weekAgo = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: .now)), date >= weekAgo {
-            return date.formatted(.dateTime.weekday(.abbreviated))
+    // Short on screen; VoiceOver says the long form ("Monday" for "Mon", "21 November" for "21/11").
+    static func timeLabel(_ date: Date, now: Date, calendar: Calendar, locale: Locale = .autoupdatingCurrent, spoken: Bool = false) -> String {
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = spoken ? style.hour().minute() : style.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
+        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(time) }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return spoken ? "Yesterday at \(date.formatted(time))" : "Yesterday"
         }
-        return Self.dayMonth.string(from: date)
+        if let weekAgo = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)), date >= weekAgo {
+            return date.formatted(style.weekday(spoken ? .wide : .abbreviated))
+        }
+        guard spoken else {
+            return date.formatted(.verbatim("\(day: .twoDigits)/\(month: .twoDigits)", locale: locale, timeZone: calendar.timeZone, calendar: calendar))
+        }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) { return date.formatted(style.day().month(.wide)) }
+        return date.formatted(style.day().month(.wide).year())
     }
 
     private var lastStatus: TimelineMessage.Status? {
@@ -76,8 +81,10 @@ struct ChatRow: View {
                         Text(Image(systemName: "bell.slash.fill")).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                     }
                     Spacer(minLength: 8)
-                    if let timeLabel {
-                        Text(timeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
+                    if let date = chat.lastMessageAt {
+                        Text(Self.timeLabel(date, now: .now, calendar: .current))
+                            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
+                            .accessibilityLabel(Self.timeLabel(date, now: .now, calendar: .current, spoken: true))
                     }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 8) {

@@ -69,6 +69,7 @@ final class AccountResourceTests: XCTestCase {
     func testTheDeclaredKeysAreTheOnesTheWritersUse() throws {
         let app = try suite("app"), group = try suite("group")
         BlockedAddresses.save(XMPPBlocklist(["spam@example.org"]), accountID: account, defaults: group)
+        BlockedAddresses.recordBlocked("spam@example.org", at: Date(timeIntervalSince1970: 1_800_000_000), accountID: account, defaults: group)
         ShareSuggestionSetting.set(false, accountID: account, defaults: group)
         _ = SharedSession.resource(accountID: account, defaults: group)
         _ = SharedSession.clientID(accountID: account, defaults: group)

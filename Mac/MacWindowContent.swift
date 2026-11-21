@@ -37,6 +37,7 @@ private struct MacChatsPresenter: View {
                 window.selection = nil
                 window.inspectorShown = false
                 window.chatSearch = ""
+                window.muteEndRequest = nil
             }
             .onChange(of: window.selection) { previous, selection in
                 if let previous { model.closeChat(previous) }
@@ -89,6 +90,7 @@ private struct MacChatsPresenter: View {
                     .frame(minWidth: 480, idealWidth: 520, minHeight: 520, idealHeight: 640)
                     .themedRoot()
             }
+            .sheet(item: $window.muteEndRequest) { request in MuteUntilSheet(model: model, request: request).themedRoot() }
     }
 
     private static func route(_ route: ChatRoute, isFor chatID: String?) -> Bool {
@@ -125,7 +127,8 @@ struct MacDetailPane: View {
                     if model.canRestoreTransfer { Button("Restore from a Transfer…") { window.showingRestore = true } }
                 }
             }
-            .navigationTitle("Haus XMPP")
+            // The HIG keeps the app's name out of window titles.
+            .navigationTitle("Chats")
         }
     }
 }

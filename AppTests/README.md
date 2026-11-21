@@ -17,7 +17,7 @@ Run `UISmoke`, plus `-only-testing` for the suites of the screens you touched. R
 | `ConversationUITests` | The long chat: no empty notice on open, the keyboard keeping the history anchor, a growing draft, one older page, search past the loaded pages |
 | `AttachmentPanelUITests` | The panel swapping with the keyboard at the same height; the rail, tray, drag, rotation, leaving, a second chat's panel and the system picker |
 | `MessageActionsUITests` | Compose and send controls, edit and unsend, the bubble-only overlay, star, the starred filter, text selection, an unreadable placeholder |
-| `ChatListSwipeUITests` | The typing row, Pin and Mute swipes, the mute dialog and the details row |
+| `ChatListSwipeUITests` | The typing row, Pin and Mute swipes, the mute dialog, the details row and Until… |
 | `AppearanceUITests` | Accent and scheme changes repainting the open Settings sheet |
 
 Each test runs in named steps (`XCTContext.runActivity`), and every class stops at its first failure, so a red result names the step that broke.

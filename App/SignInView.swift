@@ -12,6 +12,8 @@ struct SignInView: View {
     @State private var consent = false
     @State private var showingAdvanced = false
     @State private var showingRestore = false
+    // What the fields held when the sheet opened (a lab UI test fills them in).
+    private let untouched: [String]
     #if os(macOS)
     @FocusState private var focus: Field?
 
@@ -20,13 +22,19 @@ struct SignInView: View {
 
     init(model: AppModel) {
         self.model = model
+        var address = "", password = ""
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-lab-ui-test") {
-            _address = State(initialValue: ProcessInfo.processInfo.environment["HAUS_LAB_USERNAME"] ?? "")
-            _password = State(initialValue: ProcessInfo.processInfo.environment["HAUS_LAB_PASSWORD"] ?? "")
+            address = ProcessInfo.processInfo.environment["HAUS_LAB_USERNAME"] ?? ""
+            password = ProcessInfo.processInfo.environment["HAUS_LAB_PASSWORD"] ?? ""
         }
         #endif
+        _address = State(initialValue: address)
+        _password = State(initialValue: password)
+        untouched = [address, password, "", ""]
     }
+
+    private var isDirty: Bool { [address, password, server, port] != untouched }
 
     // A bare username has a domain only in DEBUG (the lab's); Release takes full addresses only.
     private var domain: String? {
@@ -154,11 +162,12 @@ struct SignInView: View {
                 }
             }
             .toolbarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { DiscardingCancelButton(isDirty: isDirty) { dismiss() } } }
             .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
             // A restore signs this install in as the transferred account.
             .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
+        .interactiveDismissDisabled(isDirty || model.session.isConnecting)
         #endif
     }
 
@@ -242,7 +251,7 @@ struct SignInView: View {
             .formStyle(.grouped)
             .defaultFocus($focus, .address)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { DiscardingCancelButton(isDirty: isDirty) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(model.session.isConnecting ? "Connecting…" : "Connect", action: connect)
                         .buttonStyle(.borderedProminent)
@@ -266,4 +275,20 @@ struct SignInView: View {
         }
     }
     #endif
+}
+
+// A sheet holding typed input can't be swiped away (`interactiveDismissDisabled`), so Cancel is the way out, and it asks
+// before the input is lost.
+struct DiscardingCancelButton: View {
+    let isDirty: Bool
+    let cancel: () -> Void
+    @State private var confirming = false
+
+    var body: some View {
+        Button("Cancel") { if isDirty { confirming = true } else { cancel() } }
+            .confirmationDialog("Discard changes?", isPresented: $confirming, titleVisibility: .hidden) {
+                Button("Discard Changes", role: .destructive, action: cancel)
+                Button("Keep Editing", role: .cancel) {}
+            }
+    }
 }

@@ -11,6 +11,7 @@ import SwiftUI
     var reviewingOwnDevices = false
     var showingRestore = false
     var blockRequest: BlockRequest?
+    var muteEndRequest: MuteEndRequest?
     var chatSearch = ""
     var searchRequests = 0
     var isKey = false

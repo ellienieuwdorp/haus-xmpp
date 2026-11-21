@@ -25,10 +25,10 @@ private struct BlockConfirmation: ViewModifier {
                                    titleVisibility: .visible, presenting: request) { request in
             switch request.kind {
             case .block:
-                Button("Block", role: .destructive) { Task { await model.block(request.chatID) } }
+                Button("Block", role: .destructive) { Task { await block(request) } }
             case .report:
-                Button("Report Spam", role: .destructive) { Task { await model.block(request.chatID, report: .spam, messageID: request.messageID) } }
-                Button("Report Abuse", role: .destructive) { Task { await model.block(request.chatID, report: .abuse, messageID: request.messageID) } }
+                Button("Report Spam", role: .destructive) { Task { await block(request, report: .spam) } }
+                Button("Report Abuse", role: .destructive) { Task { await block(request, report: .abuse) } }
             }
             Button("Cancel", role: .cancel) {}
         } message: { request in
@@ -41,6 +41,14 @@ private struct BlockConfirmation: ViewModifier {
                                                 serverHandlesReports: model.blockingSupport.reporting || model.isDemo))
             }
         }
+    }
+
+    // The sample conversations keep their blocks in memory only, so they keep no dates either.
+    private func block(_ request: BlockRequest, report: XMPPReportReason? = nil) async {
+        let account = model.accountID
+        guard await model.block(request.chatID, report: report, messageID: report == nil ? nil : request.messageID),
+              !model.isDemo, model.accountID == account else { return }
+        BlockedAddresses.recordBlocked(request.chatID, at: .now, accountID: account, defaults: model.sessionDefaults)
     }
 }
 
@@ -120,8 +128,9 @@ struct BlockedChatBar: View {
 
 struct BlockedContactsView: View {
     @Bindable var model: AppModel
+    @State private var dates: [String: Date] = [:]
 
-    private var entries: [String] { model.blocklist.addresses.sorted() }
+    private var entries: [String] { BlockedAddresses.ordered(model.blocklist.addresses, dates: dates) }
 
     var body: some View {
         List {
@@ -137,6 +146,10 @@ struct BlockedContactsView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(name).lineLimit(1)
                             Text(address).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            if let date = dates[address] {
+                                Text("Blocked on \(date.formatted(date: .abbreviated, time: .omitted))").font(.footnote).foregroundStyle(.secondary)
+                                    .accessibilityLabel("Blocked on \(date.formatted(date: .long, time: .omitted))")
+                            }
                         }
                         .accessibilityElement(children: .combine)
                         Spacer(minLength: 8)
@@ -155,5 +168,11 @@ struct BlockedContactsView: View {
         }
         .navigationTitle("Blocked")
         .toolbarTitleDisplayMode(.inline)
+        // The Mac's Settings window may show this list while a chat is blocked or unblocked.
+        .onChange(of: model.blocklist, initial: true) { _, _ in loadDates() }
+    }
+
+    private func loadDates() {
+        dates = model.isDemo ? [:] : BlockedAddresses.blockDates(accountID: model.accountID, defaults: model.sessionDefaults)
     }
 }

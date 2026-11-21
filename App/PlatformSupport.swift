@@ -93,14 +93,6 @@ extension View {
         #endif
     }
 
-    func closeButtonLabel() -> some View {
-        #if os(iOS)
-        labelStyle(.iconOnly)
-        #else
-        labelStyle(.titleOnly)
-        #endif
-    }
-
     // AppKit refuses to terminate while a modal window's `preventsApplicationTerminationWhenModal` is on, and SwiftUI
     // leaves it on for some sheets: Quit only beeps.
     func allowsQuitWhileOpen() -> some View {

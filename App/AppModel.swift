@@ -3304,10 +3304,10 @@ final class AppModel {
     }
 
     // The peer gets no read marker: nothing was shown.
-    func markChatRead(_ chatID: String) async {
+    func markChatsRead(_ chatIDs: [String]) async {
         guard let store else { return }
         let account = accountID
-        guard (try? await store.markChatRead(accountID: account, chatID: chatID)) == true, accountID == account else { return }
+        guard let moved = try? await store.markChatsRead(accountID: account, chatIDs: chatIDs), !moved.isEmpty, accountID == account else { return }
         await refresh(.chats)
         publishReadState()
     }
@@ -3393,9 +3393,9 @@ final class AppModel {
     }
 
     // Keeps the level, so unmuting a mentions-only group returns to mentions only.
-    func muteChat(_ chatID: String, for duration: MuteDuration) async {
+    func muteChat(_ chatID: String, until end: Date) async {
         var setting = notificationSetting(for: chatID)
-        setting.mutedUntil = duration.until(from: .now)
+        setting.mutedUntil = end
         await setChatNotifications(chatID, setting)
     }
 
