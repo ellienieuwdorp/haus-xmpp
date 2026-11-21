@@ -145,11 +145,13 @@ struct ChatListView: View {
                     ProgressView().controlSize(.small).accessibilityLabel(model.isCatchingUp ? "Catching up" : "Connecting")
                 }
                 .sharedBackgroundVisibility(.hidden)
+                .keptInBar()
             } else if model.connectionNeedsAttention {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingSettings = true } label: { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
                         .accessibilityLabel("Encryption setup needs attention")
                 }
+                .keptInBar()
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
@@ -169,6 +171,7 @@ struct ChatListView: View {
                 .disabled(model.accountID.isEmpty)
             }
             .sharedBackgroundVisibility(.hidden)
+            .keptInBar()
         }
         .navigationDestination(for: ChatRoute.self) { route in
             switch route {
@@ -282,6 +285,13 @@ struct ChatListView: View {
 
 // Must outlast the swipe action's close (~0.30 s on iOS 26.5 plus the highlight fade); not below 300 ms.
 private let pinCommitDelay: Duration = .milliseconds(350)
+
+private extension ToolbarContent {
+    // Compose and connection status: iOS 27 sends lower-priority items to the overflow menu first.
+    @ToolbarContentBuilder func keptInBar() -> some ToolbarContent {
+        if #available(iOS 27, *) { visibilityPriority(.high) } else { self }
+    }
+}
 
 private extension ChatSummary {
     var listIdentity: String { "\(id)|\(isPinned ? 1 : 0)" }
