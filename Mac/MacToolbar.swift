@@ -261,7 +261,7 @@ private final class MacChatHeaderButton: NSButton {
         set { avatarView.image = newValue }
     }
 
-    private let avatarView = MacAvatarImageView()
+    private let avatarView = MacAvatarView()
     private let nameField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
     private var textWidth: CGFloat = 0
@@ -277,7 +277,6 @@ private final class MacChatHeaderButton: NSButton {
         self.target = target
         self.action = action
         translatesAutoresizingMaskIntoConstraints = false
-        avatarView.imageScaling = .scaleProportionallyUpOrDown
         nameField.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
         nameField.textColor = .labelColor
         subtitleField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -298,10 +297,6 @@ private final class MacChatHeaderButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    // A view that allows vibrancy is drawn vibrant along with its subviews, which turns the avatar grey on the
-    // toolbar's glass.
-    override var allowsVibrancy: Bool { false }
-
     func show(name: String, subtitle: String, detailsShown: Bool) {
         if nameField.stringValue != name { nameField.stringValue = name }
         if subtitleField.stringValue != subtitle { subtitleField.stringValue = subtitle }
@@ -309,9 +304,9 @@ private final class MacChatHeaderButton: NSButton {
         setAccessibilityLabel(subtitle.isEmpty ? name : "\(name), \(subtitle)")
         setAccessibilityHelp(detailsShown ? "Hides the chat's details." : "Shows the chat's details.")
         toolTip = detailsShown ? "Hide the chat's details (⌥⌘I)" : "Show the chat's details (⌥⌘I)"
-        // Intrinsic text widths are fractional; the extra point keeps a fitting line from truncating after rounding.
-        let width = max(nameField.intrinsicContentSize.width, subtitle.isEmpty ? 0 : subtitleField.intrinsicContentSize.width)
-        textWidth = width.rounded(.up) + 1
+        // A label's intrinsic width leaves out the padding its cell draws with, so the cell's size is what fits.
+        let width = max(Self.lineWidth(nameField), subtitle.isEmpty ? 0 : Self.lineWidth(subtitleField))
+        textWidth = width.rounded(.up)
         measure(height: bounds.height > 0 ? bounds.height : naturalHeight)
         needsLayout = true
     }
@@ -350,6 +345,8 @@ private final class MacChatHeaderButton: NSButton {
 
     private static func textX(height: CGFloat) -> CGFloat { avatarFrame(height: height).maxX + textGap }
 
+    private static func lineWidth(_ field: NSTextField) -> CGFloat { field.cell?.cellSize.width ?? field.intrinsicContentSize.width }
+
     override func layout() {
         super.layout()
         avatarView.frame = Self.avatarFrame(height: bounds.height)
@@ -370,9 +367,22 @@ private final class MacChatHeaderButton: NSButton {
     }
 }
 
-// A picture that is not a template draws in colour only outside vibrancy, as the account button's image does.
-private final class MacAvatarImageView: NSImageView {
-    override var allowsVibrancy: Bool { false }
+// The picture is the layer's contents: an image view inside the toolbar bezel takes on its vibrant appearance and
+// draws the picture grey.
+private final class MacAvatarView: NSView {
+    var image: NSImage? {
+        didSet { layer?.contents = image }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.contentsGravity = .resizeAspect
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
 }
 
 @MainActor enum MacSettingsOpening {
