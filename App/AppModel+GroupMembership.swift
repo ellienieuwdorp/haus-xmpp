@@ -1,4 +1,5 @@
 import Foundation
+import MessagingCore
 import XMPPProtocol
 
 extension AppModel {
