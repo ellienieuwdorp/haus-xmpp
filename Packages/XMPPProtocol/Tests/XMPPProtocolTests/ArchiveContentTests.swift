@@ -100,6 +100,19 @@ private let plain = "<message xmlns='jabber:client' from='bob@localhost/x' to='a
     #expect(query.messages.last?.archiveID == "2" && query.messages.last?.message == nil && query.messages.last?.rejectedContent == nil)
 }
 
+// A room member's plain message that nests a forward wrapper is inner content: recorded, never a failed page.
+@Test func roomArchiveRecordsANestedWrapperInsteadOfThrowing() throws {
+    let room = "team@rooms.localhost"
+    var query = probeQuery()
+    query.room = room
+    let nested = "<message xmlns='jabber:client' type='groupchat' from='\(room)/bob'><body>x</body><forwarded xmlns='urn:xmpp:forward:0'/></message>"
+    try query.receive(recoveryNode(probe("r1", nested, wrapperFrom: room)))
+    let entry = try #require(query.messages.first)
+    #expect(entry.archiveID == "r1" && query.identifiers == ["r1"])
+    #expect(entry.rejectedContent == .unsupportedDirectContent && entry.rejectionArchive == room && entry.rejectedPeer == nil)
+    #expect(entry.message == nil && entry.encryptedGroupMessage == nil)
+}
+
 private func rejectedNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     var parser = XMLStreamFramer()
     let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))

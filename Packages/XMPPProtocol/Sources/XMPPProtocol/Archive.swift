@@ -7,7 +7,7 @@ public enum XMPPArchiveRejection: String, Sendable, Equatable {
     /// Inner from/to is not user@domain, or neither side is the account (server notice, component, forged actors).
     case foreignSender
     /// Content the client does not implement: EME without an OMEMO envelope, an unknown `urn:xmpp:omemo:*` namespace,
-    /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper.
+    /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper (in a room archive too).
     case unsupportedDirectContent
     /// One OMEMO envelope in a known namespace that `OMEMOWire.parseMessage` refused.
     case malformedEncryptedContent
@@ -175,7 +175,7 @@ struct ArchiveQuery {
             return
         }
         if room != nil {
-            guard !Self.nestsWrapper(inner) else { throw XMPPIQError.malformedResponse }
+            guard !Self.nestsWrapper(inner) else { return reject(.unsupportedDirectContent) }
             // Non-encrypted room events carry no authenticated application content.
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
