@@ -3304,10 +3304,10 @@ final class AppModel {
     }
 
     // The peer gets no read marker: nothing was shown.
-    func markChatRead(_ chatID: String) async {
+    func markChatsRead(_ chatIDs: [String]) async {
         guard let store else { return }
         let account = accountID
-        guard (try? await store.markChatRead(accountID: account, chatID: chatID)) == true, accountID == account else { return }
+        guard let moved = try? await store.markChatsRead(accountID: account, chatIDs: chatIDs), !moved.isEmpty, accountID == account else { return }
         await refresh(.chats)
         publishReadState()
     }

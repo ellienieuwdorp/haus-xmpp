@@ -47,7 +47,10 @@ struct MacChatList: View {
                     .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                     .accessibilityValue([chat.isPinned ? "Pinned" : nil, chat.notification.isMuted() ? "Muted" : nil].compactMap { $0 }.joined(separator: ", "))
                     .accessibilityIdentifier("chat.\(chat.id)")
-                    .contextMenu { MacChatActionsMenu(actions: MacChatActions(chat: chat, model: model, window: window), placement: .contextMenu) }
+                    .contextMenu {
+                        MacChatActionsMenu(actions: MacChatActions(chat: chat, model: model, window: window), placement: .contextMenu,
+                                           markAllRead: model.markAllReadAction)
+                    }
             }
         }
         .listStyle(.sidebar)

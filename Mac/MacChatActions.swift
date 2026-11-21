@@ -55,6 +55,8 @@ struct MacChatActionsMenu: View {
 
     let actions: MacChatActions?
     let placement: Placement
+    // Nil while no chat of the account is unread.
+    var markAllRead: (() -> Void)?
 
     private var menuBar: Bool { placement == .menuBar }
 
@@ -65,6 +67,10 @@ struct MacChatActionsMenu: View {
             Button("Mark as Read", systemImage: "envelope.open") { actions?.perform(.markRead) }
                 .menuShortcut("u", modifiers: [.command, .shift], if: menuBar)
                 .disabled(!unread)
+        }
+        if menuBar || markAllRead != nil {
+            Button("Mark All as Read", systemImage: "envelope.open") { markAllRead?() }
+                .disabled(markAllRead == nil)
         }
         Button(chat?.isPinned == true ? "Unpin" : "Pin", systemImage: chat?.isPinned == true ? "pin.slash" : "pin") { actions?.perform(.togglePin) }
             .disabled(actions == nil)
@@ -121,6 +127,13 @@ struct MacChatActionsMenu: View {
             Button("Report…", systemImage: "exclamationmark.bubble") { actions?.perform(.report) }
                 .disabled(!available || actions?.isBlocked == true)
         }
+    }
+}
+
+extension AppModel {
+    // Every chat of the current account, through the per-chat read path in one go.
+    var markAllReadAction: (() -> Void)? {
+        unreadChatIDs.isEmpty ? nil : { Task { await self.markChatsRead(self.unreadChatIDs) } }
     }
 }
 
