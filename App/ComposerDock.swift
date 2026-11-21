@@ -36,11 +36,23 @@ private struct ComposerSides: View {
 }
 
 @MainActor final class ComposerDock {
+    // Touch-transparent, down to the screen's edge, so the bottom edge effect also covers the margin below the glass.
+    let edge = UIView()
     private let margins = ComposerSideMargins()
     private var aboveCorner: NSLayoutConstraint?
 
     // The guide leaves out the home indicator; the host stops at the higher of the keyboard gap and the corner margin.
-    func install(_ host: UIView, height: NSLayoutConstraint, in container: UIView) {
+    func install(_ host: UIView, height: NSLayoutConstraint, in container: UIView, under scrollView: UIScrollView) {
+        // On iOS 27 automatic is not soft.
+        scrollView.bottomEdgeEffect.style = .soft
+        edge.isUserInteractionEnabled = false
+        edge.translatesAutoresizingMaskIntoConstraints = false
+        edge.isHidden = true
+        let interaction = UIScrollEdgeElementContainerInteraction()
+        interaction.scrollView = scrollView
+        interaction.edge = .bottom
+        edge.addInteraction(interaction)
+        container.addSubview(edge)
         container.addSubview(host)
         container.keyboardLayoutGuide.usesBottomSafeArea = false
         let aboveCorner = host.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -ComposerGeometry.aboveKeyboard)
@@ -52,6 +64,10 @@ private struct ComposerSides: View {
             host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             host.bottomAnchor.constraint(lessThanOrEqualTo: container.keyboardLayoutGuide.topAnchor, constant: -ComposerGeometry.aboveKeyboard),
             aboveCorner, down, height,
+            edge.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            edge.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            edge.topAnchor.constraint(equalTo: host.topAnchor),
+            edge.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
     }
 

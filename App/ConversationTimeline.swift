@@ -178,7 +178,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
         composerHost.view.isHidden = true
         addChild(composerHost)
-        composerDock.install(composerHost.view, height: composerHeight, in: container)
+        composerDock.install(composerHost.view, height: composerHeight, in: container, under: collectionView)
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
@@ -453,6 +453,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         loadViewIfNeeded()
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
+        composerDock.edge.isHidden = composer == nil
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.
         if let composer {
