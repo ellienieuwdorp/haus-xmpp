@@ -306,16 +306,18 @@ private func sentTime(_ locale: String) -> NotificationSentTime {
         candidate("fresh", body: "Fresh", at: now - 60),
         candidate("room", chat: "room@rooms", sender: "bob@x", body: "Hi all", chatTitle: "Book club", senderTitle: "Bob", at: now - 900),
     ]), sentTime: sentTime("en_GB"))
-    let bodies = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.destination?.messageID ?? "", $0.body) })
-    #expect(bodies["late"] == "Sent 22:03 · Late")
-    #expect(bodies["edge"] == "Five minutes" && bodies["fresh"] == "Fresh")
-    #expect(bodies["room"] == "Sent 21:58 · Bob: Hi all")
-    let yesterday = bodies["old"] ?? ""
+    // By request identifier: these message IDs are not UUIDs, so the requests carry no destination.
+    let bodies = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.identifier, $0.body) })
+    func id(_ message: String) -> String { NotificationIdentity.message(accountID: account, messageID: message) }
+    #expect(bodies[id("late")] == "Sent 22:03 · Late")
+    #expect(bodies[id("edge")] == "Five minutes" && bodies[id("fresh")] == "Fresh")
+    #expect(bodies[id("room")] == "Sent 21:58 · Bob: Hi all")
+    let yesterday = bodies[id("old")] ?? ""
     #expect(yesterday.hasPrefix("Sent ") && yesterday.contains("13") && yesterday.contains("Nov") && yesterday.hasSuffix("22:03 · Yesterday"))
     // The communication notification shows its own body: stamped the same, without the sender the system names.
-    let communication = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.destination?.messageID ?? "", $0.communication?.body) })
-    #expect(communication["late"] == "Sent 22:03 · Late" && communication["room"] == "Sent 21:58 · Hi all")
-    #expect(communication["fresh"] == "Fresh")
+    let communication = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.identifier, $0.communication?.body) })
+    #expect(communication[id("late")] == "Sent 22:03 · Late" && communication[id("room")] == "Sent 21:58 · Hi all")
+    #expect(communication[id("fresh")] == "Fresh")
 }
 
 @Test func theSentTimeFollowsTheLocalesHourCycle() {

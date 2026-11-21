@@ -117,7 +117,10 @@ struct CatchUpFixture {
         catchUp.roomsAfterPost = roomsAfterPost
         if let giveWay { catchUp.giveWay = giveWay }
         try await catchUp.run(store: store, deadline: clock.now + budget, clock: clock, progress: progress, presentation: { store, stage in
-            try await NotificationPresenter(posting: posting, clock: clock).present(store: store, accountID: account, progress: progress, stage: stage)
+            var presenter = NotificationPresenter(posting: posting, clock: clock)
+            // The fixture's messages carry fixed past send times; these runs assert unstamped bodies.
+            presenter.sentTime = { nil }
+            try await presenter.present(store: store, accountID: account, progress: progress, stage: stage)
         })
     }
 }

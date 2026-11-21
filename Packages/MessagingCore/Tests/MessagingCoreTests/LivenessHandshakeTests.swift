@@ -251,8 +251,9 @@ struct LivenessHandshakeTests {
             #expect(try await app.pendingNotifications(accountID: account).candidates.count == 1)
             try await receive(app, chat: "carol@example.org", body: "Sent before the sleep", at: now - 8 * 3_600)
             let posting = FakePosting()
-            let posted = try await NotificationPresenter(posting: posting)
-                .presentCaughtUp(store: app, accountID: account, readingChatID: nil, presents: true)
+            var presenter = NotificationPresenter(posting: posting)
+            presenter.sentTime = { nil }
+            let posted = try await presenter.presentCaughtUp(store: app, accountID: account, readingChatID: nil, presents: true)
             #expect(posted == 2)
             #expect(Set(await posting.added.map(\.body)) == ["Held while catching up", "Sent before the sleep"])
         }
