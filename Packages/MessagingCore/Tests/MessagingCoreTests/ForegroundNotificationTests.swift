@@ -161,12 +161,15 @@ struct CaughtUpNotificationTests {
             let carol = try await receive(store, chat: "carol@example.org", body: "Third", at: now - 3_400)
             try await receive(store, chat: "bob@example.org", body: "Being read", at: now - 60)
             let posting = FakePosting()
-            let posted = try await NotificationPresenter(posting: posting)
-                .presentCaughtUp(store: store, accountID: account, readingChatID: "bob@example.org", presents: true)
+            var presenter = NotificationPresenter(posting: posting)
+            presenter.sentTime = { NotificationSentTime(now: Date(timeIntervalSince1970: now), locale: Locale(identifier: "en_GB"), timeZone: .gmt) }
+            let posted = try await presenter.presentCaughtUp(store: store, accountID: account, readingChatID: "bob@example.org", presents: true)
             let added = await posting.added
             #expect(posted == 2)
             #expect(added.map(\.threadIdentifier) == ["erin@example.org", "carol@example.org"].map { NotificationIdentity.thread(accountID: account, chatID: $0) })
-            #expect(added.map(\.body) == ["Two days ago", "Third\nand 2 more"])
+            // Both are late, so each names when it was sent.
+            #expect(added.allSatisfy { $0.body.hasPrefix("Sent ") })
+            #expect(added.map { $0.body.components(separatedBy: " · ").last } == ["Two days ago", "Third\nand 2 more"])
             #expect(added.last?.destination == NotificationDestination(accountID: account, messageID: carol.id), "a tap opens the newest message's chat")
             #expect(added.map(\.playsSound) == [false, true], "one sound for the whole catch-up")
             // Everything is claimed, the chat being read included: a later catch-up cannot alert for any of it again.

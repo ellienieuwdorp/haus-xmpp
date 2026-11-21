@@ -312,11 +312,12 @@ public struct PresentationStage: Sendable {
 /// and the run commits; a failed or slow `add` throws, which means fallback.
 public struct NotificationPresenter: Sendable {
     public let posting: any NotificationPosting
-    public var addTimeout: Duration
-    public var cleanupTimeout: Duration
+    public var addTimeout, cleanupTimeout: Duration
     public var withdrawDonations: @Sendable (_ conversation: String) async -> Void = { await CommunicationHistory.deleteConversations([$0]) }
     /// Times the add and cleanup limits.
     public var clock: any Clock<Duration>
+    /// What a run's late messages are stamped against; nil leaves bodies unstamped.
+    public var sentTime: @Sendable () -> NotificationSentTime? = { NotificationSentTime(now: Date()) }
 
     public init(posting: any NotificationPosting, addTimeout: Duration = .seconds(4), cleanupTimeout: Duration = .seconds(3),
                 clock: any Clock<Duration> = ContinuousClock()) {
@@ -355,7 +356,7 @@ public struct NotificationPresenter: Sendable {
         let batch = try await store.pendingNotifications(accountID: accountID).excludingBlocked(blocklist)
         // An unknown badge leaves the icon as it is rather than failing the run.
         let badge = try? await NotificationBadge.count(store: store, accountID: accountID, blocklist: blocklist)
-        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: !progress.hasPlayedSound)
+        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: !progress.hasPlayedSound, sentTime: sentTime())
         if plan.requests.isEmpty {
             if progress.report.posted == 0, let unfinished = stage.unfinished { throw unfinished }
             if !stage.isFinal { return }
