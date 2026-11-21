@@ -194,12 +194,12 @@ public struct ArchiveSynchronizer: Sendable {
         return true
     }
 
-    // Nil: a foreign sender has no conversation and a group rejection has no verified author.
+    // Nil: no conversation or verified author is known for a foreign sender, a group or an oversized entry.
     static func unreadableReason(for rejection: XMPPArchiveRejection) -> UnreadableReason? {
         switch rejection {
         case .unsupportedDirectContent: .unsupportedEncryption
         case .malformedEncryptedContent: .malformedContent
-        case .foreignSender, .unverifiableEncryptedGroup: nil
+        case .foreignSender, .unverifiableEncryptedGroup, .oversizedContent: nil
         }
     }
 

@@ -99,3 +99,26 @@ private let plain = "<message xmlns='jabber:client' from='bob@localhost/x' to='a
     try query.receive(recoveryNode(probe("2", "", forwardedExtra: stanzaID)))
     #expect(query.messages.last?.archiveID == "2" && query.messages.last?.message == nil && query.messages.last?.rejectedContent == nil)
 }
+
+private func rejectedNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
+    var parser = XMLStreamFramer()
+    let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))
+    guard case .rejected(let node) = frames.last else { throw XMPPIQError.malformedResponse }
+    return node
+}
+
+// Past the depth limit only the server's wrapper is read: the entry is a rejection, its provenance still checked.
+@Test func oversizedArchiveResultIsARejectionUnderItsWrapper() throws {
+    // The wrapper takes three levels and the inner message a fourth, so 62 more pass live but not here.
+    let deep = String(repeating: "<x xmlns='urn:example'>", count: 62) + String(repeating: "</x>", count: 62)
+    let inner = "<message xmlns='jabber:client' from='bob@localhost/x' to='alice@localhost' type='chat' id='d'><body>hi</body>\(deep)</message>"
+    var query = probeQuery()
+    try query.receiveOversized(rejectedNode(probe("o1", inner)))
+    let entry = try #require(query.messages.first)
+    #expect(entry.archiveID == "o1" && entry.rejectedContent == .oversizedContent && entry.rejectionArchive == account)
+    #expect(entry.rejectedPeer == nil && entry.message == nil && entry.encryptedMessage == nil)
+    #expect(entry.timestamp == Date(timeIntervalSince1970: 1_788_256_800))
+    #expect(throws: XMPPIQError.malformedResponse) { try query.receiveOversized(rejectedNode(probe("o2", inner, queryID: "other"))) }
+    #expect(throws: XMPPIQError.malformedResponse) { try query.receiveOversized(rejectedNode(probe("o1", inner))) }
+    #expect(query.messages.count == 1)
+}

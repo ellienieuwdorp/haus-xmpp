@@ -3473,7 +3473,7 @@
   "file_length": [
    [
     "",
-    2442
+    2441
    ]
   ],
   "force_unwrapping": [
@@ -3720,10 +3720,6 @@
     0
    ],
    [
-    "private static let archiveRejectionReasons: Set<String> = [\"unverifiableEncryptedGroup\", \"foreignSender\", \"unsupportedDirectContent\", \"malformedEncryptedContent\"]",
-    0
-   ],
-   [
     "public func enqueueReceipt(accountID: String, chatID: String, targetMessageID: String, kind: StoredUpdate.Kind, createdAt: Date = Date()) throws -> String? {",
     0
    ],
@@ -3931,7 +3927,7 @@
   "type_body_length": [
    [
     "public actor MessageStore {",
-    2165
+    2164
    ]
   ]
  },
@@ -6261,26 +6257,12 @@
   "cyclomatic_complexity": [
    [
     "mutating func receive(_ node: XMLNode) throws {",
-    17
-   ]
-  ],
-  "function_body_length": [
-   [
-    "mutating func receive(_ node: XMLNode) throws {",
-    64
+    13
    ]
   ],
   "line_length": [
    [
-    "guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child(\"forwarded\", namespace: Carbons.forwarding) == nil else { throw XMPPGroupError.invalidMessage }",
-    0
-   ],
-   [
     "inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children, attributePrefixes: inner.attributePrefixes)",
-    0
-   ],
-   [
-    "messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: .unverifiableEncryptedGroup, rejectionArchive: archiveOwner))",
     0
    ],
    [
@@ -6547,27 +6529,13 @@
   "cyclomatic_complexity": [
    [
     "mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {",
-    27
+    22
    ]
   ],
   "force_unwrapping": [
    [
     "guard token == \"</\\(streamQName!)>\" else { throw XMLStreamError.unexpectedStream }",
     0
-   ],
-   [
-    "let root = try NodeParser.parse(streamOpening! + xml + \"</\\(streamQName!)>\")",
-    0
-   ],
-   [
-    "let root = try NodeParser.parse(streamOpening! + xml + \"</\\(streamQName!)>\")",
-    0
-   ]
-  ],
-  "function_body_length": [
-   [
-    "mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {",
-    63
    ]
   ]
  },
@@ -6589,7 +6557,7 @@
   "file_length": [
    [
     "",
-    1195
+    1192
    ]
   ],
   "force_unwrapping": [
@@ -6661,7 +6629,7 @@
   "type_body_length": [
    [
     "public actor XMPPClient {",
-    1082
+    1079
    ]
   ]
  },

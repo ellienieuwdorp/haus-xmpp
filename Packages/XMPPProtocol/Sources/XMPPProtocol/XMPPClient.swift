@@ -203,12 +203,12 @@ public actor XMPPClient {
     private var announcedClientActive = true
     // Lets the reader tell whether a stanza produced any event.
     private var emittedEvents: UInt64 = 0
-    private struct IQRequest {
+    struct IQRequest {
         let scope: IQReplyScope
         let continuation: CheckedContinuation<XMLNode, any Error>
         let timeout: Task<Void, Never>
     }
-    private var iqRequests: [String: IQRequest] = [:]
+    private(set) var iqRequests: [String: IQRequest] = [:]
     // Page queries by query ID. One caller at a time; only the queries of one walk (`ArchiveQuery.walk`) overlap.
     var archiveQueries: [String: ArchiveQuery] = [:]
     // `newestArchiveEntry` queries, by query ID; they never hand out content, so they may run beside page queries.
@@ -235,7 +235,7 @@ public actor XMPPClient {
     // Kept through a refused resume.
     private var stampFloor: Date?
     // Open from going online until the server's initial catch-up is over.
-    private var stampWindow: ServerStampWindow?
+    var stampWindow: ServerStampWindow?
     var smOffered = false
     var csiOffered = false
     let writeGate = XMPPAsyncGate()
@@ -608,6 +608,7 @@ public actor XMPPClient {
                     case .opened: break
                     case .closed: throw XMPPClientError.connectionClosed
                     case .element(let node): if !takesPostAuthenticationFeatures(node) { try await handle(node, token: token) }
+                    case .rejected(let node): try await handleRejected(node)
                     }
                 }
             }
@@ -774,11 +775,6 @@ public actor XMPPClient {
     /// After a lost connection every pending query fails with `timedOut`; a query that timed out while this is still
     /// true hit its own deadline.
     public var isOnline: Bool { phase == .online }
-
-    static func smCount(_ value: String?) -> UInt32? {
-        guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
-        return UInt32(value)
-    }
 
     func becomeOnline(token: UUID, resumed: Bool = false) async throws {
         pipelined = false
@@ -1341,7 +1337,7 @@ public actor XMPPClient {
         return true
     }
 
-    private func failIQ(_ id: String, error: any Error) {
+    func failIQ(_ id: String, error: any Error) {
         rosterFetchIDs.remove(id); blocklistFetchIDs.remove(id)
         guard let request = iqRequests.removeValue(forKey: id) else { return }
         request.timeout.cancel()

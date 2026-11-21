@@ -240,6 +240,30 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
+    // A stanza past the depth or attribute limit is counted and dropped, and a request among them is refused, so the
+    // stream survives and the server has nothing to redeliver.
+    @Test func oversizedStanzasAreCountedAndTheStreamStays() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        try await bindFresh(client, on: server)
+        let deep = String(repeating: "<x xmlns='urn:example'>", count: 70) + String(repeating: "</x>", count: 70)
+        let wide = (1...129).map { " a\($0)='v'" }.joined()
+        try await server.send("<message from='bob@localhost/phone' to='alice@localhost/r' type='chat' id='m1'><body>hi</body>\(deep)</message>"
+            + "<iq from='bob@localhost/phone' to='alice@localhost/r' type='get' id='q1'><query\(wide)/></iq>"
+            + "<r xmlns='urn:xmpp:sm:3'/>")
+        let refusal = try await server.next()
+        #expect(refusal.name == "iq" && refusal.attributes["type"] == "error" && refusal.attributes["id"] == "q1")
+        #expect(refusal.attributes["to"] == "bob@localhost/phone")
+        let condition = refusal.child("error", namespace: "jabber:client")?.child("policy-violation", namespace: "urn:ietf:params:xml:ns:xmpp-stanzas")
+        #expect(condition != nil && refusal.child("error", namespace: "jabber:client")?.attributes["type"] == "modify")
+        let ack = try await server.next()
+        #expect(ack.name == "a" && ack.attributes["h"] == "2")
+        #expect(await client.isOnline)
+        await client.disconnect()
+        await server.stop()
+    }
+
     // A deadline cannot wait for the farewell: abort cancels the socket without the actor, and the stream ends as for
     // any socket failure, so a disconnect still reaches the consumer.
     @Test func abortEndsTheStreamWithoutAFarewell() async throws {
