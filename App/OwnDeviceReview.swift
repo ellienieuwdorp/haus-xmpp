@@ -169,7 +169,7 @@ struct OwnDeviceReviewSheet: View {
             .navigationTitle("Your Devices")
             .inlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.closeButtonLabel() }
+                ToolbarItem(placement: .cancellationAction) { Button(role: .close) { dismiss() } }
             }
             .sheet(item: $comparing) { candidate in
                 // The comparison sheet names one record; a decision there applies to all of this device's records.
