@@ -466,9 +466,9 @@ struct ConversationView: View {
                     // With no send waiting, only reading waits: the messages came from a device in the OMEMO version
                     // this chat does not send with.
                     Text(ChatDeviceReview.headline(sendingWaits: model.encryptionNeedsReview, isGroup: isGroup,
-                                                   ownDevicesOnly: model.encryptionReviewIsOwnDevice, title: title))
+                        ownDevicesOnly: model.encryptionReviewIsOwnDevice, identityChanged: model.encryptionReviewIdentityChanged, title: title))
                         .font(.subheadline.weight(.semibold))
-                    Text(ChatDeviceReview.explanation(sendingWaits: model.encryptionNeedsReview))
+                    Text(ChatDeviceReview.explanation(sendingWaits: model.encryptionNeedsReview, identityChanged: model.encryptionReviewIdentityChanged))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

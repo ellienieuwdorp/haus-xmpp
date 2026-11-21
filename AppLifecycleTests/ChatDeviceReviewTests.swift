@@ -7,10 +7,30 @@ final class ChatDeviceReviewTests: XCTestCase {
     private let account = "me@example.org", contact = "alex@example.org", member = "maya@example.org"
 
     private func device(_ jid: String, _ id: UInt32, _ profile: XMPPOMEMOProfile = .modern, trust: DeviceTrust = .undecided,
-                        active: Bool = true) -> EncryptionDevice {
+                        active: Bool = true, changed: Bool = false) -> EncryptionDevice {
         let keys = OwnDeviceReview.sampleIdentities[Int(id % 2)]
         return EncryptionDevice(jid: jid, profile: profile, deviceID: id, identityKey: profile == .legacy ? keys.legacy : keys.modern,
-                                trust: trust, active: active, identityChanged: false)
+                                trust: trust, active: active, identityChanged: changed)
+    }
+
+    // A new key under a known device ID is called out as unusual; a new device keeps the plain wording.
+    func testCardCallsOutAChangedIdentity() {
+        let waiting = ChatDeviceReview.devices([device(contact, 4, changed: true), device(contact, 5)], account: account, isGroup: false)
+        XCTAssertTrue(ChatDeviceReview.identityChanged(waiting))
+        XCTAssertFalse(ChatDeviceReview.identityChanged([device(contact, 5)]))
+        XCTAssertFalse(ChatDeviceReview.identityChanged(ChatDeviceReview.devices([device(contact, 4, active: false, changed: true)],
+                                                                                 account: account, isGroup: false)))
+        XCTAssertEqual(ChatDeviceReview.headline(sendingWaits: true, isGroup: false, ownDevicesOnly: false, identityChanged: true, title: "Alex"),
+                       "Alex’s device changed its identity")
+        XCTAssertEqual(ChatDeviceReview.headline(sendingWaits: true, isGroup: false, ownDevicesOnly: true, identityChanged: true, title: "Alex"),
+                       "A device on your account changed its identity")
+        XCTAssertEqual(ChatDeviceReview.headline(sendingWaits: false, isGroup: true, ownDevicesOnly: false, identityChanged: true, title: "Room"),
+                       "A device in this group changed its identity")
+        XCTAssertEqual(ChatDeviceReview.headline(sendingWaits: true, isGroup: false, ownDevicesOnly: false, identityChanged: false, title: "Alex"),
+                       "Alex added a new device")
+        XCTAssertTrue(ChatDeviceReview.explanation(sendingWaits: true, identityChanged: true).hasPrefix("That’s unusual"))
+        XCTAssertTrue(ChatDeviceReview.explanation(sendingWaits: false, identityChanged: true).hasSuffix("to read its messages."))
+        XCTAssertTrue(ChatDeviceReview.explanation(sendingWaits: true, identityChanged: false).hasPrefix("Check its fingerprint"))
     }
 
     // Sending waits on one version, reading on the other; decided and no longer advertised devices are not asked about.
