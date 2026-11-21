@@ -319,24 +319,28 @@ private struct MacEmptyNotice: View {
     }
 }
 
-// The trust state stays in the details and the review banner, so the line never flickers between the two. Its own
-// view: typing and presence change often and must not rerun the conversation's body.
+// Typing first, then last seen. The trust state stays in the details and the review banner, so the line never flickers
+// between the two.
+@MainActor enum MacChatSubtitle {
+    static func text(model: AppModel, chatID: String, now: Date) -> String {
+        let isGroup = model.isGroup(chatID), isBlocked = model.isBlocked(chatID)
+        if !isBlocked, let typing = model.typing[chatID], !typing.isEmpty { return TypingTracker.description(typing, isGroup: isGroup) }
+        return LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: isBlocked, now: now, calendar: .autoupdatingCurrent) ?? ""
+    }
+}
+
+// The window's own subtitle, which the toolbar's chat header hides along with the title. Its own view: typing and
+// presence change often and must not rerun the conversation's body.
 private struct MacConversationSubtitle: View {
     let model: AppModel
     let chatID: String
     // Ticks so a relative "Last seen" rolls over on its own.
     @State private var clock = Date.now
 
-    private var subtitle: String {
-        let isGroup = model.isGroup(chatID), isBlocked = model.isBlocked(chatID)
-        if !isBlocked, let typing = model.typing[chatID], !typing.isEmpty { return TypingTracker.description(typing, isGroup: isGroup) }
-        return LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: isBlocked, now: clock, calendar: .autoupdatingCurrent) ?? ""
-    }
-
     var body: some View {
         Color.clear
             .accessibilityHidden(true)
-            .navigationSubtitle(subtitle)
+            .navigationSubtitle(MacChatSubtitle.text(model: model, chatID: chatID, now: clock))
             .task(id: model.openChatLastSeen) {
                 clock = .now
                 guard case .lastSeen = model.openChatLastSeen else { return }
