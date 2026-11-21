@@ -55,20 +55,22 @@ final class TimelinePositionTests: XCTestCase {
         XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 21), 21, "Face ID landscape")
         XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 0), 8, "home button")
         XCTAssertEqual(ComposerGeometry.bottom(safeBottom: 83), 91, "something else sits at the bottom")
-        let down = ComposerGeometry.sides(left: 0, right: 0, overlap: 34, width: 402)
+        let down = ComposerGeometry.sides(left: nil, right: nil, overlap: 34, width: 402)
         XCTAssertEqual([down.left, down.right], [28, 28])
-        let up = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 402)
+        let up = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 402)
         XCTAssertEqual([up.left, up.right], [12, 12])
-        let wide = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 440)
+        let wide = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 440)
         XCTAssertEqual([wide.left, wide.right], [16, 16])
-        let homeButton = ComposerGeometry.sides(left: 0, right: 0, overlap: 0, width: 375)
+        let homeButton = ComposerGeometry.sides(left: nil, right: nil, overlap: 0, width: 375)
         XCTAssertEqual([homeButton.left, homeButton.right], [12, 12])
         for overlap in [0, 34] as [CGFloat] {
             let landscape = ComposerGeometry.sides(left: 62, right: 62, overlap: overlap, width: 874)
             XCTAssertEqual([landscape.left, landscape.right], [62, 62], "nothing beyond the side safe area")
+            let insetHost = ComposerGeometry.sides(left: 0, right: 0, overlap: overlap, width: 750)
+            XCTAssertEqual([insetHost.left, insetHost.right], [0, 0], "a view already inside the side safe area adds nothing")
         }
         // A keyboard dismissed by hand eases the sides without a jump.
-        let steps = stride(from: 0, through: 34, by: 1).map { ComposerGeometry.sides(left: 0, right: 0, overlap: CGFloat($0), width: 402).left }
+        let steps = stride(from: 0, through: 34, by: 1).map { ComposerGeometry.sides(left: nil, right: nil, overlap: CGFloat($0), width: 402).left }
         XCTAssertEqual(steps.first, 12)
         XCTAssertEqual(steps.last, 28)
         XCTAssertTrue(zip(steps, steps.dropFirst()).allSatisfy { $1 >= $0 && $1 - $0 <= 1 })
@@ -79,9 +81,9 @@ final class TimelinePositionTests: XCTestCase {
         let safeBottom = controller.view.safeAreaInsets.bottom
         XCTAssertEqual(controller.view.bounds.maxY - host.frame.maxY, ComposerGeometry.bottom(safeBottom: safeBottom), accuracy: 0.5,
                        "with the keyboard down the composer keeps the corner margin, not the safe area plus a gap")
-        let safe = controller.view.safeAreaInsets
+        let side = ComposerGeometry.sideSafeAreas(of: controller.view)
         let jump = try XCTUnwrap(controller.children.last?.view)
-        let trailing = ComposerGeometry.sides(left: safe.left, right: safe.right, overlap: safe.bottom, width: controller.view.bounds.width).right
+        let trailing = ComposerGeometry.sides(left: side.left, right: side.right, overlap: safeBottom, width: controller.view.bounds.width).right
         XCTAssertEqual(controller.view.bounds.maxX - jump.frame.maxX, trailing, accuracy: 0.5, "the jump button lines up with the composer's edge")
     }
 

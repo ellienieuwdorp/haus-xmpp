@@ -14,11 +14,20 @@ enum ComposerGeometry {
         return min(corner, safeBottom)
     }
 
-    // `overlap`: the bottom safe area the composer still covers, eased through so a dismiss by hand never jumps.
-    static func sides(left: CGFloat, right: CGFloat, overlap: CGFloat, width: CGFloat) -> (left: CGFloat, right: CGFloat) {
+    // A side safe area beyond the view wins (nil: none); else eased by `overlap`, so a dismiss by hand never jumps.
+    static func sides(left: CGFloat?, right: CGFloat?, overlap: CGFloat, width: CGFloat) -> (left: CGFloat, right: CGFloat) {
         let open: CGFloat = width >= 430 ? 16 : 12
         let free = max(open, min(corner, overlap))
-        return (left > 0 ? left : free, right > 0 ? right : free)
+        return (left ?? free, right ?? free)
+    }
+
+    // SwiftUI stops the chat at a side safe area, so its view reports none; the window says whether one is there.
+    @MainActor static func sideSafeAreas(of view: UIView) -> (left: CGFloat?, right: CGFloat?) {
+        let window = view.window
+        let safe = window?.safeAreaInsets ?? view.safeAreaInsets
+        let frame = window.map { view.convert(view.bounds, to: $0) } ?? view.bounds
+        let width = window?.bounds.width ?? view.bounds.width
+        return (safe.left > 0 ? max(0, safe.left - frame.minX) : nil, safe.right > 0 ? max(0, safe.right - (width - frame.maxX)) : nil)
     }
 }
 
@@ -73,7 +82,8 @@ private struct ComposerSides: View {
     func followKeyboard(in view: UIView) {
         let safe = view.safeAreaInsets
         let keyboard = max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
-        let sides = ComposerGeometry.sides(left: safe.left, right: safe.right, overlap: max(0, safe.bottom - keyboard), width: view.bounds.width)
+        let side = ComposerGeometry.sideSafeAreas(of: view)
+        let sides = ComposerGeometry.sides(left: side.left, right: side.right, overlap: max(0, safe.bottom - keyboard), width: view.bounds.width)
         let rightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
         let leading = rightToLeft ? sides.right : sides.left, trailing = rightToLeft ? sides.left : sides.right
         guard abs(leading - margins.leading) > 0.5 || abs(trailing - margins.trailing) > 0.5 else { return }
