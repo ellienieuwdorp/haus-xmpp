@@ -523,7 +523,7 @@
   "file_length": [
    [
     "",
-    1759
+    1758
    ]
   ],
   "force_unwrapping": [
@@ -763,7 +763,7 @@
   "type_body_length": [
    [
     "final class ConversationTimelineController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {",
-    569
+    568
    ],
    [
     "private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {",
