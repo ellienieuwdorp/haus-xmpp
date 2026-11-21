@@ -127,7 +127,8 @@ struct MacDetailPane: View {
                     if model.canRestoreTransfer { Button("Restore from a Transfer…") { window.showingRestore = true } }
                 }
             }
-            .navigationTitle("Haus XMPP")
+            // The HIG keeps the app's name out of window titles.
+            .navigationTitle("Chats")
         }
     }
 }

@@ -25,7 +25,7 @@ import SwiftUI
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: true)
         window.identifier = NSUserInterfaceItemIdentifier(MacAppDelegate.mainWindowID)
-        window.title = "Haus XMPP"
+        window.title = "Chats"
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         // Tab goes from the sidebar's search field to the chats, the timeline and the composer, as the panes are
