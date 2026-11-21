@@ -11,9 +11,10 @@ final class MacTimelineCellTests: XCTestCase {
     private let width: CGFloat = 700
     private let side = MacTimelineMetrics.sidePadding
 
-    override func tearDown() async {
+    override func tearDown() async throws {
         XCTAssertEqual(NSApp.windows.filter(\.isVisible).count, 0, "no window was shown")
         XCTAssertFalse(NSApp.isActive)
+        try await super.tearDown()
     }
 
     private func message(_ id: String = "m", body: String = "Ok", outgoing: Bool, starred: Bool = false,
