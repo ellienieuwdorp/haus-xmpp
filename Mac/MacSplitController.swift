@@ -362,7 +362,8 @@ import SwiftUI
             field.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
         ])
         self.view = view
-        if #available(macOS 26.1, *) { preferredScrollEdgeEffectStyle = .soft }
+        // Before macOS 27 the automatic style switches between soft and hard; from 27 it resolves an edge of its own.
+        if #unavailable(macOS 27) { if #available(macOS 26.1, *) { preferredScrollEdgeEffectStyle = .soft } }
         MacObservation.track(self) { search in search.update() }
     }
 
