@@ -14,18 +14,22 @@ extension XCUIApplication {
         let row = buttons["encryptionDetails"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
-        // A device row tapped mid-transition is swallowed, so wait for the push to land.
+        // The row pushes inside the details sheet; a device row tapped mid-transition is swallowed, so wait for the
+        // push to land.
         let page = navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Devices & Encryption", "Group details"])).firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))
     }
 
+    // Back to the chat's details inside their sheet, then the sheet's close button back to the chat.
     func closeEncryptionDetails() {
-        for _ in 0..<2 {
-            let back = navigationBars.buttons["BackButton"].firstMatch
-            XCTAssertTrue(back.waitForExistence(timeout: 5))
-            back.tap()
-        }
+        let back = navigationBars.buttons["BackButton"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        let close = buttons["closeChatDetails"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
     }
 }
 

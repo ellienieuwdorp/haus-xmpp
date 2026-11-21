@@ -43,8 +43,9 @@ final class ContactLinkUITests: XCTestCase {
         XCTAssertEqual(row.value as? String, "Not linked", "Nothing is linked until a contact is chosen")
 
         // A room is never linked to a contact.
-        app.navigationBars.buttons.firstMatch.tap()
-        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["closeChatDetails"].tap()
+        XCTAssertTrue(app.buttons["closeChatDetails"].waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].firstMatch.tap()
         let room = app.buttons["chat.trail@rooms.preview.local"]
         XCTAssertTrue(room.waitForExistence(timeout: 10))
         room.tap()

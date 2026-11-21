@@ -33,6 +33,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onOpenChat: (String) -> Void = { _ in }
     var onOpenGroup: (String) -> Bool = { _ in false }
     var attachmentKeyboard: AttachmentKeyboard? = nil
+    // A sheet over the chat: its messages are not being read meanwhile.
+    var covered = false
     // Observed so a stored accent change re-renders visible bubbles.
     private var accent: String { AccentTheme.current.rawValue }
 
@@ -51,6 +53,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         controller.onOpenGroup = onOpenGroup
         controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onReport: onReport,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
+        controller.setCovered(covered)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
         controller.attachmentKeyboard = attachmentKeyboard
@@ -93,6 +96,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var revision = 0
     private var followsBottom = true { didSet { updateJumpToNewest() } }
     private let jump = JumpToNewestControl()
+    private var covered = false
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
     var onRestoreComposerFocus: () -> Void = {}
     var onReachTop: () -> Void = {}
@@ -542,7 +546,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
         if row.message.wantsLinkPreview { onLinkPreviewDisplayed(id) }
         if let attachment = row.message.attachment, attachment.localURL == nil, !row.message.showsPlaceholder { onAttachmentDisplayed(id) }
-        guard !row.message.isOutgoing else { return }
+        guard !row.message.isOutgoing, !covered else { return }
         onDisplayed(id)
     }
 
@@ -763,6 +767,17 @@ extension ConversationTimelineController {
         // VoiceOver's focus was on the button, which goes; it lands on the newest message instead.
         guard UIAccessibility.isVoiceOverRunning, let id = rows.last?.message.id, let path = dataSource.indexPath(for: id) else { return }
         UIAccessibility.post(notification: .layoutChanged, argument: collectionView.cellForItem(at: path))
+    }
+
+    // Nothing counts as read while another screen covers the chat; what is on screen when it uncovers does.
+    func setCovered(_ covered: Bool) {
+        guard covered != self.covered else { return }
+        self.covered = covered
+        guard !covered, isViewLoaded else { return }
+        for path in collectionView.indexPathsForVisibleItems.sorted() {
+            guard let id = dataSource.itemIdentifier(for: path), rowsByID[id]?.message.isOutgoing == false else { continue }
+            onDisplayed(id)
+        }
     }
 }
 

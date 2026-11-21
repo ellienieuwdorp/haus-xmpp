@@ -102,6 +102,29 @@ final class TimelinePositionTests: XCTestCase {
         XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(newest))
     }
 
+    // While a sheet covers the chat nothing counts as read; what is on screen when it closes does.
+    func testNothingCountsAsDisplayedWhileTheChatIsCovered() throws {
+        var displayed: Set<String> = []
+        var shown = messages(1...3)
+        let show = { self.controller.update(messages: shown, onToggleStar: { _ in }, onDisplayed: { displayed.insert($0) }) }
+        show()
+        collectionView.layoutIfNeeded()
+        XCTAssertTrue(displayed.contains("m2"), "received messages on screen are displayed")
+
+        controller.setCovered(true)
+        displayed = []
+        shown.append(TimelineMessage(id: "arrived", body: "While the details were open", isOutgoing: false, isStarred: false))
+        show()
+        collectionView.layoutIfNeeded()
+        let arrived = try XCTUnwrap(dataSource?.indexPath(for: "arrived"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(arrived))
+        XCTAssertTrue(displayed.isEmpty, "\(displayed)")
+
+        controller.setCovered(false)
+        XCTAssertTrue(displayed.contains("arrived"))
+        XCTAssertFalse(displayed.contains("m3"), "an own message is never marked")
+    }
+
     func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })
