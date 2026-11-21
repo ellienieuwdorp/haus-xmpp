@@ -34,21 +34,23 @@ extension AppModel {
 }
 
 extension ChatNotificationSetting {
-    func summary(isGroup: Bool, now: Date = .now, calendar: Calendar = .current) -> String {
+    // `spoken` names weekdays and months in full, for VoiceOver.
+    func summary(isGroup: Bool, now: Date = .now, calendar: Calendar = .current, spoken: Bool = false) -> String {
         if let until = mutedUntil, isMuted(at: now) {
             if isMutedAlways { return "Muted" }
-            return "Muted until " + Self.untilText(until, now: now, calendar: calendar)
+            return "Muted until " + Self.untilText(until, now: now, calendar: calendar, spoken: spoken)
         }
         return level == .mentions && isGroup ? "Mentions only" : "All messages"
     }
 
-    static func untilText(_ date: Date, now: Date, calendar: Calendar) -> String {
+    static func untilText(_ date: Date, now: Date, calendar: Calendar, spoken: Bool = false) -> String {
         let time = date.formatted(.dateTime.hour().minute())
         if calendar.isDate(date, inSameDayAs: now) { return time }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) { return "tomorrow, \(time)" }
-        if date.timeIntervalSince(now) < 6 * 86_400 { return date.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
-        if calendar.isDate(date, equalTo: now, toGranularity: .year) { return date.formatted(.dateTime.day().month(.abbreviated).hour().minute()) }
-        return date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute())
+        if date.timeIntervalSince(now) < 6 * 86_400 { return date.formatted(.dateTime.weekday(spoken ? .wide : .abbreviated).hour().minute()) }
+        let day = Date.FormatStyle.dateTime.day().month(spoken ? .wide : .abbreviated)
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) { return date.formatted(day.hour().minute()) }
+        return date.formatted(day.year().hour().minute())
     }
 }
 
@@ -188,7 +190,7 @@ struct ChatNotificationRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Notifications")
-        .accessibilityValue(setting.summary(isGroup: isGroup))
+        .accessibilityValue(setting.summary(isGroup: isGroup, spoken: true))
         .accessibilityIdentifier("chatNotifications")
         .sheet(item: $choosingEnd) { request in MuteUntilSheet(model: model, request: request).themedRoot() }
     }

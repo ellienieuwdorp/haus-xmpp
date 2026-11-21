@@ -45,6 +45,9 @@ final class ChatMuteSummaryTests: XCTestCase {
         XCTAssertTrue(ChatNotificationSetting(mutedUntil: now + 86_400).summary(isGroup: false, now: now, calendar: calendar).hasPrefix("Muted until tomorrow, "))
         XCTAssertTrue(ChatNotificationSetting(mutedUntil: now + 120 * 86_400).summary(isGroup: false, now: now, calendar: calendar).contains("2027"))
         XCTAssertFalse(ChatNotificationSetting(mutedUntil: now + 30 * 86_400).summary(isGroup: false, now: now, calendar: calendar).contains("2026"))
+        let inThreeDays = ChatNotificationSetting(mutedUntil: now + 3 * 86_400)
+        XCTAssertGreaterThan(inThreeDays.summary(isGroup: false, now: now, calendar: calendar, spoken: true).count,
+                             inThreeDays.summary(isGroup: false, now: now, calendar: calendar).count, "VoiceOver hears the weekday in full")
         // An expired mute reads as the level again.
         XCTAssertEqual(ChatNotificationSetting(level: .mentions, mutedUntil: now - 1).summary(isGroup: true, now: now, calendar: calendar), "Mentions only")
     }
