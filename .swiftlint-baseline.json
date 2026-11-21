@@ -539,7 +539,7 @@
   "function_body_length": [
    [
     "func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,",
-    117
+    116
    ],
    [
     "func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = \"\", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },",
@@ -763,7 +763,7 @@
   "type_body_length": [
    [
     "final class ConversationTimelineController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {",
-    573
+    569
    ],
    [
     "private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {",
