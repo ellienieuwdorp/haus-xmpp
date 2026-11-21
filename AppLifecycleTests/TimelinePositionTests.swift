@@ -79,6 +79,10 @@ final class TimelinePositionTests: XCTestCase {
         let safeBottom = controller.view.safeAreaInsets.bottom
         XCTAssertEqual(controller.view.bounds.maxY - host.frame.maxY, ComposerGeometry.bottom(safeBottom: safeBottom), accuracy: 0.5,
                        "with the keyboard down the composer keeps the corner margin, not the safe area plus a gap")
+        let safe = controller.view.safeAreaInsets
+        let jump = try XCTUnwrap(controller.children.last?.view)
+        let trailing = ComposerGeometry.sides(left: safe.left, right: safe.right, overlap: safe.bottom, width: controller.view.bounds.width).right
+        XCTAssertEqual(controller.view.bounds.maxX - jump.frame.maxX, trailing, accuracy: 0.5, "the jump button lines up with the composer's edge")
     }
 
     // Opening at the newest message, or any other programmatic move, never pages. The threshold is

@@ -492,6 +492,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     // Runs inside the keyboard's animation, so the inset and offset move with it.
     private func updateBottomInset() {
         composerDock.followKeyboard(in: view)
+        jump.alignTrailing(composerDock.trailingMargin, in: view)
         let keyboardTop = view.keyboardLayoutGuide.layoutFrame.minY
         // The guide leaves out the home indicator, which still insets the messages when nothing sits above it.
         let top = composerHost.view.isHidden ? min(keyboardTop, view.bounds.maxY - view.safeAreaInsets.bottom) : composerHost.view.frame.minY

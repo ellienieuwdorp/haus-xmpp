@@ -5,14 +5,13 @@ import UIKit
 // hides the composer it sits above the keyboard. The host is the button's own size and ignores touches while hidden,
 // so it never takes one from the timeline.
 @MainActor final class JumpToNewestControl {
-    // The composer's side padding, so the circle lines up with the composer's trailing edge.
-    static let trailingInset: CGFloat = 16
     static let side: CGFloat = 44
 
     private let state = JumpToNewestState()
     private lazy var host = UIHostingController(rootView: JumpToNewestButton(state: state))
     private var aboveComposer: NSLayoutConstraint?
     private var aboveKeyboard: NSLayoutConstraint?
+    private var trailing: NSLayoutConstraint?
 
     var isShown: Bool { state.shown }
 
@@ -27,13 +26,22 @@ import UIKit
         let above = host.view.bottomAnchor.constraint(equalTo: composer.topAnchor)
         aboveComposer = above
         aboveKeyboard = host.view.bottomAnchor.constraint(equalTo: container.keyboardLayoutGuide.topAnchor, constant: -8)
+        let trailing = host.view.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -ComposerSideMargins().trailing)
+        self.trailing = trailing
         NSLayoutConstraint.activate([
-            above,
-            host.view.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -Self.trailingInset),
+            above, trailing,
             host.view.widthAnchor.constraint(equalToConstant: Self.side),
             host.view.heightAnchor.constraint(equalToConstant: Self.side),
         ])
         host.didMove(toParent: parent)
+    }
+
+    // The composer's trailing margin, so the circle lines up with its edge. Laid out at once, so inside the keyboard's
+    // animation the circle moves with it.
+    func alignTrailing(_ margin: CGFloat, in container: UIView) {
+        guard let trailing, abs(trailing.constant + margin) > 0.5 else { return }
+        trailing.constant = -margin
+        container.layoutIfNeeded()
     }
 
     func ridesComposer(_ rides: Bool) {

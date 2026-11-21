@@ -71,6 +71,8 @@ private struct ComposerSides: View {
         ])
     }
 
+    var trailingMargin: CGFloat { margins.trailing }
+
     func sides(of composer: AnyView) -> some View { ComposerSides(margins: margins, content: composer) }
 
     func safeAreaChanged(in view: UIView) {
