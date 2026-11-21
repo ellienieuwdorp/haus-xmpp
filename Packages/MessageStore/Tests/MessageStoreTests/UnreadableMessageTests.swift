@@ -147,7 +147,8 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
     try await store.acquireTransportOwnership()
-    for (index, reason) in ["unverifiableEncryptedGroup", "foreignSender", "unsupportedDirectContent", "malformedEncryptedContent"].enumerated() {
+    let reasons = ["unverifiableEncryptedGroup", "foreignSender", "unsupportedDirectContent", "malformedEncryptedContent", "oversizedContent"]
+    for (index, reason) in reasons.enumerated() {
         try await store.recordArchiveRejection(accountID: account, archiveID: account, messageID: "r\(index)", reason: reason)
         #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "r\(index)"))
     }

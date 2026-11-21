@@ -210,7 +210,7 @@ struct OwnDeviceReviewSheet: View {
                     // Not a Label: in a List row a Label pads its icon column to body metrics.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: "exclamationmark.shield")
-                        Text("Its identity changed since you last reviewed it")
+                        Text(ChatDeviceReview.identityChangeNote)
                     }
                     .font(.footnote.weight(.semibold)).foregroundStyle(.orange)
                 }

@@ -288,3 +288,53 @@ private func reaction(_ emoji: [String], chat: String = "peer@example.org", acto
     budget.spend(.milliseconds(400))
     #expect(budget.next(maximum: .milliseconds(2500)) == nil)
 }
+
+// 2023-11-14 22:13:20 UTC.
+private let planned = Date(timeIntervalSince1970: 1_700_000_000)
+
+private func sentTime(_ locale: String) -> NotificationSentTime {
+    NotificationSentTime(now: planned, locale: Locale(identifier: locale), timeZone: .gmt)
+}
+
+// The system dates a banner by delivery, so a message held more than five minutes names when it was sent.
+@Test func lateMessagesStartWithTheirSentTime() {
+    let now = planned.timeIntervalSince1970
+    let plan = NotificationPlanner.plan(batch([
+        candidate("old", body: "Yesterday", at: now - 86_400 - 600),
+        candidate("late", body: "Late", at: now - 600),
+        candidate("edge", body: "Five minutes", at: now - 300),
+        candidate("fresh", body: "Fresh", at: now - 60),
+        candidate("room", chat: "room@rooms", sender: "bob@x", body: "Hi all", chatTitle: "Book club", senderTitle: "Bob", at: now - 900),
+    ]), sentTime: sentTime("en_GB"))
+    // By request identifier: these message IDs are not UUIDs, so the requests carry no destination.
+    let bodies = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.identifier, $0.body) })
+    func id(_ message: String) -> String { NotificationIdentity.message(accountID: account, messageID: message) }
+    #expect(bodies[id("late")] == "Sent 22:03 · Late")
+    #expect(bodies[id("edge")] == "Five minutes" && bodies[id("fresh")] == "Fresh")
+    #expect(bodies[id("room")] == "Sent 21:58 · Bob: Hi all")
+    let yesterday = bodies[id("old")] ?? ""
+    #expect(yesterday.hasPrefix("Sent ") && yesterday.contains("13") && yesterday.contains("Nov") && yesterday.hasSuffix("22:03 · Yesterday"))
+    // The communication notification shows its own body: stamped the same, without the sender the system names.
+    let communication = Dictionary(uniqueKeysWithValues: plan.requests.map { ($0.identifier, $0.communication?.body) })
+    #expect(communication[id("late")] == "Sent 22:03 · Late" && communication[id("room")] == "Sent 21:58 · Hi all")
+    #expect(communication[id("fresh")] == "Fresh")
+}
+
+@Test func theSentTimeFollowsTheLocalesHourCycle() {
+    let plan = NotificationPlanner.plan(batch([candidate("late", body: "Late", at: planned.timeIntervalSince1970 - 600)]),
+                                        sentTime: sentTime("en_US"))
+    let body = plan.requests[0].body
+    #expect(body.hasPrefix("Sent 10:03") && body.contains("PM") && body.hasSuffix(" · Late"))
+}
+
+// When a message was sent is itself something previews off keep hidden.
+@Test func hiddenPreviewsAndPlaceholdersOfLateMessages() {
+    let now = planned.timeIntervalSince1970
+    let late = [candidate("late", body: "Secret", at: now - 600),
+                candidate("p", body: "", at: now - 600, key: .pending(sender: "peer@example.org", digest: "d")).withContent(.pendingEncrypted)]
+    let hidden = NotificationPlanner.plan(batch(late, previews: false), sentTime: sentTime("en_GB"))
+    #expect(hidden.requests.map(\.body) == [NotificationPlanner.hiddenBody, NotificationPlanner.hiddenBody])
+    let shown = NotificationPlanner.plan(batch(late), sentTime: sentTime("en_GB"))
+    #expect(shown.requests.map(\.body) == ["Sent 22:03 · Secret", "Sent 22:03 · " + NotificationPlanner.reviewBody])
+    #expect(NotificationPlanner.plan(batch(late)).requests.map(\.body) == ["Secret", NotificationPlanner.reviewBody])
+}

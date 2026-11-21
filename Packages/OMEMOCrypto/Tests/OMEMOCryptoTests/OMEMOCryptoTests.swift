@@ -48,6 +48,27 @@ func unknownAndChangedIdentityAreRejected(profile: CryptoProfile) throws {
   try alice.trustIdentity(impostor.identityKey, for: address, resetSession: true)
   #expect(!alice.hasSession(with: address))
 }
+// A prekey message under a trusted address but another identity is refused by name, leaving the session as it was.
+@Test(arguments: CryptoProfile.allCases)
+func prekeyMessageFromAnotherIdentityIsRefusedAndKeepsTheSession(profile: CryptoProfile) throws {
+  let alice = try OMEMOEngine(profile: profile, deviceID: 111, preKeyCount: 3)
+  let bob = try OMEMOEngine(profile: profile, deviceID: 222, preKeyCount: 3)
+  let impostor = try OMEMOEngine(profile: profile, deviceID: 111, preKeyCount: 3)
+  let a = DeviceAddress(jid: "alice@example.org", deviceID: 111)
+  let b = DeviceAddress(jid: "bob@example.org", deviceID: 222)
+  try alice.trustIdentity(bob.identityKey, for: b)
+  try bob.trustIdentity(alice.identityKey, for: a)
+  try alice.establishSession(with: b, bundle: bob.bundle(), preKeyID: 1)
+  #expect(try bob.decrypt(alice.encrypt(Data("first".utf8), to: b), from: a) == Data("first".utf8))
+  try impostor.trustIdentity(bob.identityKey, for: b)
+  try impostor.establishSession(with: b, bundle: bob.bundle(), preKeyID: 2)
+  let forged = try impostor.encrypt(Data("forged".utf8), to: b)
+  #expect(forged.isPreKey)
+  let before = try bob.snapshot()
+  #expect(throws: OMEMOCryptoError.untrustedIdentity) { try bob.decrypt(forged, from: a) }
+  #expect(try bob.snapshot() == before)
+  #expect(try bob.decrypt(alice.encrypt(Data("second".utf8), to: b), from: a) == Data("second".utf8))
+}
 @Test(arguments: CryptoProfile.allCases)
 func payloadAuthenticationBeforePlaintext(profile: CryptoProfile) throws {
   let body = Data("hello 🔐".utf8)

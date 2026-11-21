@@ -76,9 +76,10 @@ struct MacDeviceReviewBanner: View {
 
     private var message: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(ChatDeviceReview.headline(sendingWaits: sendingWaits, isGroup: isGroup, ownDevicesOnly: ownDevicesOnly, title: title))
+            Text(ChatDeviceReview.headline(sendingWaits: sendingWaits, isGroup: isGroup, ownDevicesOnly: ownDevicesOnly,
+                                           identityChanged: ChatDeviceReview.identityChanged(waiting), title: title))
                 .font(.callout.weight(.semibold))
-            Text(ChatDeviceReview.explanation(sendingWaits: sendingWaits))
+            Text(ChatDeviceReview.explanation(sendingWaits: sendingWaits, identityChanged: ChatDeviceReview.identityChanged(waiting)))
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -236,7 +237,7 @@ struct MacDeviceReviewSheet: View {
                 if outcome == nil {
                     // Plain HStacks, not Labels: in a form row a Label pads its icon column to body metrics.
                     if device.identityChanged {
-                        note("exclamationmark.shield", "Its identity changed since you last reviewed it", color: .orange)
+                        note("exclamationmark.shield", ChatDeviceReview.identityChangeNote, color: .orange)
                     } else if blocked {
                         note("hand.raised", "Blocked · sending to this group is paused", color: .red)
                     } else if readingOnly {

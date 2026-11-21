@@ -246,16 +246,22 @@ public final class OMEMOEngine {
     }
     return RatchetCiphertext(data: bytes, isPreKey: prekey != 0)
   }
+  /// Throws `untrustedIdentity` for a prekey message whose identity differs from the one trusted for `address`;
+  /// nothing about the engine changes then.
   public func decrypt(_ ciphertext: RatchetCiphertext, from address: DeviceAddress) throws -> Data {
     guard valid(address), !ciphertext.data.isEmpty, ciphertext.data.count <= 1_048_576 else {
       throw OMEMOCryptoError.invalidInput
     }
-    return try withDataPointers([ciphertext.data]) { p in
-      try output {
-        om_decrypt(
-          engine, address.jid, address.deviceID, p[0], ciphertext.data.count,
-          ciphertext.isPreKey ? 1 : 0, $0)
+    do {
+      return try withDataPointers([ciphertext.data]) { p in
+        try output {
+          om_decrypt(
+            engine, address.jid, address.deviceID, p[0], ciphertext.data.count,
+            ciphertext.isPreKey ? 1 : 0, $0)
+        }
       }
+    } catch OMEMOCryptoError.upstream(let code) where code == untrustedIdentityCode {
+      throw OMEMOCryptoError.untrustedIdentity
     }
   }
   /// Explicit application trust decision. A changed fingerprint requires resetSession true.
@@ -307,6 +313,8 @@ public final class OMEMOEngine {
   }
 }
 func checked(_ code: Int32) throws { if code < 0 { throw OMEMOCryptoError.upstream(code) } }
+// SG_ERR_UNTRUSTED_IDENTITY in the vendored signal_protocol.h, which the bridge header does not export.
+private let untrustedIdentityCode: Int32 = -1010
 func output(_ body: (UnsafeMutablePointer<om_bytes>) -> Int32) throws -> Data {
   var buffer = om_bytes(data: nil, length: 0)
   defer { om_bytes_free(&buffer) }

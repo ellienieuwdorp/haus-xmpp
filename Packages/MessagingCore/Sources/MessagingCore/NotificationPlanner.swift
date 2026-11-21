@@ -105,8 +105,10 @@ public enum NotificationPlanner {
     public static let hiddenReactionBody = "Reacted to your message"
 
     /// `accountID` names the deferred-chats summary's account; it defaults to the batch's. A nil `badge` leaves the
-    /// icon badge as it is. Pass `playsSound: false` when the run already played its sound.
-    public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true) -> NotificationPlan {
+    /// icon badge as it is. Pass `playsSound: false` when the run already played its sound. `sentTime` stamps late
+    /// messages, only while previews show: the stamp would say when a hidden message was sent.
+    public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true,
+                            sentTime: NotificationSentTime? = nil) -> NotificationPlan {
         var requests: [PlannedNotification] = []
         // Chats beyond the cap are older than every selected message, so their summary goes first and never takes the
         // sound from a newer message. Settling without it would hide that those chats have news.
@@ -131,7 +133,8 @@ public enum NotificationPlanner {
             }
             let earlier = candidate.earlierCount + (carried.removeValue(forKey: candidate.chatID) ?? 0)
             let more = earlier > 0 ? "\nand \(earlier) more" : ""
-            let body = (previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody) + more
+            let sent = previews ? sentTime?.prefix(sentAt: candidate.sentAt) ?? "" : ""
+            let body = (previews ? sent + (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody) + more
             let destination: NotificationDestination?, reference: NotificationReference?
             // Only an authenticated message makes its sender a communication partner: the system must not learn an
             // unauthenticated sender for suggestions or priority.
@@ -154,13 +157,21 @@ public enum NotificationPlanner {
                                                         isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,
                                                                                                                     avatarHash: candidate.senderAvatarHash,
                                                                                                                     contactIdentifier: candidate.senderContactIdentifier),
-                                                        members: candidate.groupMembers, body: text + more) : nil,
+                                                        members: candidate.groupMembers, body: sent + text + more) : nil,
                 reference: reference, badge: badge)))
         }
-        for reaction in batch.reactions {
+        timed += reactionRequests(batch.reactions, previews: previews, badge: badge)
+        requests += timed.enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element.request)
+        if playsSound, let newest = requests.popLast() { requests.append(newest.withSound()) }
+        return NotificationPlan(requests: requests, claimed: batch.claimed, summarizesDeferredChats: summarizes)
+    }
+
+    private static func reactionRequests(_ batch: [ReactionNotificationCandidate], previews: Bool,
+                                         badge: Int?) -> [(at: Date, request: PlannedNotification)] {
+        batch.map { reaction in
             let thread = NotificationIdentity.thread(accountID: reaction.accountID, chatID: reaction.chatID)
             let chatName = clean(displayName(reaction.chatID, title: reaction.chatTitle), limit: 80, maximumBytes: 320)
-            timed.append((reaction.reactedAt, PlannedNotification(
+            return (reaction.reactedAt, PlannedNotification(
                 identifier: NotificationIdentity.reaction(accountID: reaction.accountID, chatID: reaction.chatID, actorID: reaction.actor.id,
                                                           targetMessageID: reaction.target.id),
                 threadIdentifier: thread, categoryIdentifier: NotificationIdentity.reactionCategory,
@@ -169,11 +180,8 @@ public enum NotificationPlanner {
                 communication: previews ? communication(accountID: reaction.accountID, thread: thread, chatName: chatName, chatAvatarHash: reaction.chatAvatarHash,
                                                         isGroup: reaction.isGroup, sender: reaction.actor, members: reaction.groupMembers,
                                                         body: reactionBody(reaction, namingActor: false)) : nil,
-                reference: .reaction(accountID: reaction.accountID, targetMessageID: reaction.target.id), badge: badge)))
+                reference: .reaction(accountID: reaction.accountID, targetMessageID: reaction.target.id), badge: badge))
         }
-        requests += timed.enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element.request)
-        if playsSound, let newest = requests.popLast() { requests.append(newest.withSound()) }
-        return NotificationPlan(requests: requests, claimed: batch.claimed, summarizesDeferredChats: summarizes)
     }
 
     // "Reacted 👍 to “Lunch?”", or "Bob reacted 👍 to “Lunch?”" in a room unless the system already names the actor.

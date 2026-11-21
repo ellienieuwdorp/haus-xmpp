@@ -51,5 +51,7 @@ public struct SealedPayload: Equatable, Sendable {
 }
 public enum OMEMOCryptoError: Error, Equatable {
   case invalidInput, invalidSnapshot, missingPreKey, authenticationFailed
+  /// A prekey message carries an identity other than the one trusted for its sender address.
+  case untrustedIdentity
   case upstream(Int32)
 }

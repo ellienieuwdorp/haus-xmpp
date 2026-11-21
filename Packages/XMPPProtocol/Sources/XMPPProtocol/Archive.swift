@@ -7,10 +7,12 @@ public enum XMPPArchiveRejection: String, Sendable, Equatable {
     /// Inner from/to is not user@domain, or neither side is the account (server notice, component, forged actors).
     case foreignSender
     /// Content the client does not implement: EME without an OMEMO envelope, an unknown `urn:xmpp:omemo:*` namespace,
-    /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper.
+    /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper (in a room archive too).
     case unsupportedDirectContent
     /// One OMEMO envelope in a known namespace that `OMEMOWire.parseMessage` refused.
     case malformedEncryptedContent
+    /// The result went past the stream's element depth or attribute count; nothing inside its wrapper is read.
+    case oversizedContent
 }
 
 public struct XMPPArchiveMessage: Sendable, Equatable {
@@ -121,7 +123,8 @@ struct ArchiveQuery {
         node.children.contains { $0.name == "result" && $0.namespace.hasPrefix("urn:xmpp:mam:") }
     }
 
-    mutating func receive(_ node: XMLNode) throws {
+    // The archive ID, time and inner message of a result whose outer provenance holds; throws otherwise.
+    private func entry(_ node: XMLNode) throws -> (id: String, timestamp: Date, inner: XMLNode?) {
         guard node.name == "message", node.namespace == "jabber:client",
               (room == nil && node.attributes["from"] == nil) || node.attributes["from"] == archiveOwner,
               node.attributes["to"] == nil || node.attributes["to"] == accountFullJID else { throw XMPPIQError.malformedResponse }
@@ -134,40 +137,54 @@ struct ArchiveQuery {
         guard let stamp = delay.attributes["stamp"], let timestamp = Self.timestamp(stamp) else { throw XMPPIQError.malformedResponse }
         let innerMessages = forwarded.children("message", namespace: "jabber:client")
         guard innerMessages.count <= 1 else { throw XMPPIQError.malformedResponse }
-        guard var inner = innerMessages.first else {
+        return (id, timestamp, innerMessages.first)
+    }
+
+    // A result past the stream's depth or attribute limit: only its outer wrapper is read.
+    mutating func receiveOversized(_ node: XMLNode) throws {
+        let (id, timestamp, _) = try entry(node)
+        messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: .oversizedContent,
+                              rejectionArchive: archiveOwner))
+        identifiers.insert(id)
+    }
+
+    mutating func receive(_ node: XMLNode) throws {
+        let (id, timestamp, innerMessage) = try entry(node)
+        // Above: outer provenance, which throws. Below: inner content, which becomes a rejected entry recorded before
+        // the cursor advances.
+        func reject(_ reason: XMPPArchiveRejection, peer: String? = nil, outgoing: Bool = false) {
+            messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: reason,
+                                  rejectionArchive: archiveOwner, rejectedPeer: peer, rejectedOutgoing: outgoing))
+            identifiers.insert(id)
+        }
+        guard var inner = innerMessage else {
             // XEP-0313 allows a redacted archive entry to retain only its timestamp and UID.
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
         }
         if inner.attributes["type"] == "groupchat", OMEMOWire.hasEncryptedContent(inner) {
             do {
-                guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil else { throw XMPPGroupError.invalidMessage }
+                guard !Self.nestsWrapper(inner) else { throw XMPPGroupError.invalidMessage }
                 let group = try GroupChatWire.archivedMessage(inner, account: accountBareJID, archiveRoom: room, knownRooms: knownRooms, archiveID: id)
                 messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, encryptedGroupMessage: group))
+                identifiers.insert(id)
             } catch {
                 // Valid outer provenance: record the rejection instead of blocking unrelated DMs.
-                messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: .unverifiableEncryptedGroup, rejectionArchive: archiveOwner))
+                reject(.unverifiableEncryptedGroup)
             }
-            identifiers.insert(id); return
+            return
         }
         if room != nil {
-            guard !Self.nestsWrapper(inner) else { throw XMPPIQError.malformedResponse }
+            guard !Self.nestsWrapper(inner) else { return reject(.unsupportedDirectContent) }
             // Non-encrypted room events carry no authenticated application content.
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
         }
-        // Above: outer provenance, which throws. Below: inner content, which becomes a rejected entry recorded before
-        // the cursor advances.
         if inner.attributes["to"] == nil {
             // Prosody stores incoming/self messages without their local recipient; ejabberd includes it. Normalized
             // only after the own-archive wrapper is authenticated.
             var attributes = inner.attributes; attributes["to"] = accountBareJID
             inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children, attributePrefixes: inner.attributePrefixes)
-        }
-        func reject(_ reason: XMPPArchiveRejection, peer: String? = nil, outgoing: Bool = false) {
-            messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: reason,
-                                  rejectionArchive: archiveOwner, rejectedPeer: peer, rejectedOutgoing: outgoing))
-            identifiers.insert(id)
         }
         guard let from = inner.attributes["from"], let sender = OMEMOWire.bareJID(from),
               let to = inner.attributes["to"], let recipient = OMEMOWire.bareJID(to),
@@ -249,14 +266,14 @@ extension XMPPClient {
     static let archiveProbeLimit = 32
 
     // A result belongs to the page query or a probe by its query ID; any other is handled at once and dropped.
-    func receiveArchiveResult(_ node: XMLNode, inbound: XMPPInboundToken?) async throws {
+    func receiveArchiveResult(_ node: XMLNode, inbound: XMPPInboundToken?, oversized: Bool = false) async throws {
         let queryID = node.child("result", namespace: ArchiveQuery.namespace)?.attributes["queryid"]
         if let queryID, var query = archiveQueries[queryID] {
-            try query.receive(node)
+            try oversized ? query.receiveOversized(node) : query.receive(node)
             if let inbound { query.handledTokens.append(inbound) }
             archiveQueries[queryID] = query
         } else if let queryID, var probe = archiveProbes[queryID] {
-            try probe.receive(node)
+            try oversized ? probe.receiveOversized(node) : probe.receive(node)
             if let inbound { probe.handledTokens.append(inbound) }
             archiveProbes[queryID] = probe
         } else if let inbound { try await streamManagement?.handled(inbound) }

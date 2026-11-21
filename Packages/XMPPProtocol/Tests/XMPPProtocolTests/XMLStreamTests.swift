@@ -47,9 +47,61 @@ private let opening = "<s:stream xmlns:s='http://etherx.jabber.org/streams' xmln
     _ = try parser.feed(Data(opening.utf8))
     _ = try parser.feed(Data("<message>".utf8))
     #expect(throws: XMLStreamError.limitExceeded) { try parser.feed(Data(repeating: 65, count: 256)) }
-    var deep = XMLStreamFramer()
+    // The byte cap counts what the depth limit skips, which is never buffered: a deep stanza still ends the stream.
+    var deep = XMLStreamFramer(maximumBytes: 512)
     _ = try deep.feed(Data(opening.utf8))
-    #expect(throws: XMLStreamError.limitExceeded) { try deep.feed(Data(String(repeating: "<a>", count: 65).utf8)) }
+    _ = try deep.feed(Data(String(repeating: "<a>", count: 65).utf8))
+    #expect(throws: XMLStreamError.limitExceeded) { for _ in 0..<200 { _ = try deep.feed(Data("<a>".utf8)) } }
+}
+
+private func nested(_ levels: Int) -> String { String(repeating: "<a>", count: levels) + String(repeating: "</a>", count: levels) }
+
+@Test func overDeepStanzaIsRejectedAloneAndTheStreamGoesOn() throws {
+    // The message is level 1, so its 69 nested levels reach 70.
+    let xml = opening + "<message id='deep'><body>x</body>\(nested(69))</message><message id='next'/>"
+    var parser = XMLStreamFramer()
+    var frames: [XMLStreamFrame] = []
+    for chunk in Array(xml.utf8).chunked(7) { frames += try parser.feed(Data(chunk)) }
+    #expect(frames.count == 3)
+    guard case .rejected(let rejected) = frames[1], case .element(let next) = frames[2] else { Issue.record("Expected a rejection, then next"); return }
+    #expect(rejected.name == "message" && rejected.attributes["id"] == "deep")
+    // Only what lies within the limit is kept.
+    #expect(rejected.depth == XMLStreamFramer.maximumDepth)
+    #expect(next.attributes["id"] == "next")
+    #expect(!parser.hasBufferedInput)
+    // Exactly at the limit is a stanza.
+    var atLimit = XMLStreamFramer()
+    let frames64 = try atLimit.feed(Data((opening + "<message>\(nested(63))</message>").utf8))
+    guard case .element(let full) = frames64.last else { Issue.record("Expected a stanza"); return }
+    #expect(full.depth == 64)
+}
+
+@Test func overWideElementIsRejectedAloneAndTheStreamGoesOn() throws {
+    func attributes(_ count: Int) -> String { (1...count).map { " a\($0)='v'" }.joined() }
+    var parser = XMLStreamFramer()
+    _ = try parser.feed(Data(opening.utf8))
+    let frames = try parser.feed(Data("""
+        <message id='wide'><x\(attributes(129))><y/>text</x><body>kept</body></message><iq\(attributes(129))><z/></iq>\
+        <message id='edge'><x\(attributes(128))/></message><message id='next'/>
+        """.utf8))
+    #expect(frames.count == 4)
+    guard case .rejected(let wide) = frames[0], case .rejected(let root) = frames[1], case .element(let edge) = frames[2],
+          case .element(let next) = frames[3] else { Issue.record("Unexpected frames \(frames)"); return }
+    // An over-wide element keeps only its name and namespace.
+    let husk = try #require(wide.child("x", namespace: "jabber:client"))
+    #expect(husk.attributes.isEmpty && husk.children.isEmpty && husk.text.isEmpty)
+    #expect(wide.attributes["id"] == "wide")
+    #expect(root.name == "iq" && root.namespace == "jabber:client" && root.attributes.isEmpty && root.children.isEmpty)
+    #expect(edge.children.first?.attributes.count == 128)
+    #expect(next.attributes["id"] == "next")
+    // Outside a stream the limit still fails the parse.
+    #expect(throws: XMLStreamError.invalidXML) { try XMLNode.parse(standalone: Data("<x xmlns='urn:test'\(attributes(129))/>".utf8)) }
+}
+
+private extension Array {
+    func chunked(_ size: Int) -> [ArraySlice<Element>] {
+        stride(from: 0, to: count, by: size).map { self[$0..<Swift.min($0 + size, count)] }
+    }
 }
 
 @Test func rejectsWrongStreamNamespaceAndUnframedText() throws {
