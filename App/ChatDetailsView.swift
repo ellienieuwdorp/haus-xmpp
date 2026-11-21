@@ -132,7 +132,7 @@ struct ChatDetailsView: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, minHeight: 60)
             .foregroundStyle(.tint)
-            .glassEffect(.regular.interactive(), in: shape)
+            .detailsTileSurface(shape)
             .contentShape(shape)
         }
         .buttonStyle(.plain)
