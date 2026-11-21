@@ -91,7 +91,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
-    private var followsBottom = true
+    private var followsBottom = true { didSet { updateJumpToNewest() } }
+    private let jump = JumpToNewestControl()
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
     var onRestoreComposerFocus: () -> Void = {}
     var onReachTop: () -> Void = {}
@@ -432,6 +433,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         reservedPopGesture = nil
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        jump.install(in: self, container: view, riding: composerHost.view) { [weak self] in self?.jumpToNewest() }
+    }
+
     // After the push settles, so the first "+" finds the panel built.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -458,6 +464,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         loadViewIfNeeded()
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
+        jump.ridesComposer(composer != nil)
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.
         if let composer {
@@ -552,6 +559,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         if abs(collectionView.safeAreaInsets.bottom - knownSafeBottom) < 0.5 { recordBottomEdge() }
         // Before the guard: page loads and inset changes move a chip that is already up, without ever raising it.
         updateDateChip()
+        updateJumpToNewest()
         // Deceleration crawls for a second or more below a point a frame; the chip's second starts when the eye sees rest.
         if scrollView.isDecelerating, abs(scrollView.contentOffset.y - dateChipMovingY) >= 0.5 {
             dateChipMovingY = scrollView.contentOffset.y
@@ -722,7 +730,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     // A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
     private func followBottom() { if !sliding { scrollToBottom() } }
+}
 
+extension ConversationTimelineController {
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height. A cell that
         // self-sizes as it comes on screen changes that height again, so settle until it holds (usually at once).
@@ -739,6 +749,21 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         recordBottomEdge()
     }
 
+    var showsJumpToNewest: Bool { jump.isShown }
+
+    // Every assignment to `followsBottom` comes after the view loaded.
+    private func updateJumpToNewest() {
+        jump.show(TimelineScrollPolicy.showsJumpToNewest(in: viewport, followsBottom: followsBottom))
+    }
+
+    // A jump, as on the Mac: a slide from up in history would cross cells that were never drawn.
+    func jumpToNewest() {
+        followsBottom = true
+        scrollToBottom()
+        // VoiceOver's focus was on the button, which goes; it lands on the newest message instead.
+        guard UIAccessibility.isVoiceOverRunning, let id = rows.last?.message.id, let path = dataSource.indexPath(for: id) else { return }
+        UIAccessibility.post(notification: .layoutChanged, argument: collectionView.cellForItem(at: path))
+    }
 }
 
 @MainActor

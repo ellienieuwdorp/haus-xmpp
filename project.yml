@@ -149,6 +149,7 @@ targets:
           - ConversationHeader.swift
           - ComposerIntake.swift
           - ConversationTimeline.swift
+          - JumpToNewestButton.swift
           - LoadingEarlierCell.swift
           - ConversationSearchBar.swift
           - DateChipView.swift

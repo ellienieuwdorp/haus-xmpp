@@ -82,6 +82,21 @@ final class TimelineScrollPolicyTests: XCTestCase {
                        [TimelineItems.loadingEarlierID, "a", "b", TimelineItems.typingID])
         XCTAssertEqual(TimelineItems.identifiers(rows: rows, loadingEarlier: false, typing: false), ["a", "b"])
     }
+
+    // The iPhone's viewport runs under the bars and the composer; half of what lies between them is the threshold.
+    func testTheIPhoneJumpButtonMeasuresBetweenTheBarsAndWaitsWhileTheListFollows() {
+        func viewport(offset: CGFloat) -> TimelineViewport {
+            TimelineViewport(offset: offset, height: 874, contentHeight: 5000, insetTop: 120, insetBottom: 54)
+        }
+        let bottom = viewport(offset: 0).maximumOffset
+        XCTAssertEqual(viewport(offset: bottom).visibleHeight, 700)
+        XCTAssertEqual(viewport(offset: bottom - 351).distanceFromBottom, 351)
+        XCTAssertFalse(TimelineScrollPolicy.showsJumpToNewest(in: viewport(offset: bottom), followsBottom: false))
+        XCTAssertFalse(TimelineScrollPolicy.showsJumpToNewest(in: viewport(offset: bottom - 350), followsBottom: false))
+        XCTAssertTrue(TimelineScrollPolicy.showsJumpToNewest(in: viewport(offset: bottom - 351), followsBottom: false))
+        XCTAssertFalse(TimelineScrollPolicy.showsJumpToNewest(in: viewport(offset: bottom - 351), followsBottom: true), "a slide to the newest is under way")
+        XCTAssertTrue(TimelineScrollPolicy.showsJumpToNewest(in: viewport(offset: -120), followsBottom: false), "the top of a long window")
+    }
 }
 
 final class DesktopTimelineScrollPolicyTests: XCTestCase {

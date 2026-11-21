@@ -81,6 +81,27 @@ final class TimelinePositionTests: XCTestCase {
         }
     }
 
+    // The threshold is `TimelineScrollPolicyTests`'; this checks the controller asks with its own position and follow
+    // state, and that the button lands on the newest message.
+    func testTheJumpButtonShowsUpInHistoryAndReturnsToTheNewestMessage() throws {
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        XCTAssertFalse(controller.showsJumpToNewest, "a chat opens at its newest message")
+        collectionView.contentOffset.y -= 2000
+        collectionView.layoutIfNeeded()
+        XCTAssertFalse(controller.showsJumpToNewest, "a programmatic move leaves the list following")
+        let reader = ReaderScroll()
+        reader.fingerDown = true
+        collectionView.delegate?.scrollViewDidScroll?(reader)
+        XCTAssertTrue(controller.showsJumpToNewest, "the reader scrolled into history")
+
+        controller.jumpToNewest()
+        let bottom = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+        XCTAssertEqual(collectionView.contentOffset.y, bottom, accuracy: 0.5)
+        XCTAssertFalse(controller.showsJumpToNewest)
+        let newest = try XCTUnwrap(dataSource?.indexPath(for: "m100"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(newest))
+    }
+
     func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })

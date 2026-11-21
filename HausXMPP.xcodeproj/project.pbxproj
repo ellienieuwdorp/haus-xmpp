@@ -568,6 +568,7 @@
 		FCCA0FA293EE23C03F63E581 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
 		FCD437DB794170FDB8A4BB47 /* MacAttachmentTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BBAF79A1300DD08A16F1B62 /* MacAttachmentTray.swift */; };
 		FD40D41A62D4373AFD8FD5C6 /* AttachmentQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C6E846805A0F51785E3D3AC /* AttachmentQueue.swift */; };
+		FDA9556C8F03AC2C58CD0D38 /* JumpToNewestButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C49529BCF13D0E7E6D6F1E0 /* JumpToNewestButton.swift */; };
 		FDAA8A4DADF9E019C39FAFEA /* OutboxRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 630E29706D39C1EE83DEC25C /* OutboxRing.swift */; };
 		FDAD705B28D5D197446B7C1C /* DeliveredNotificationCleanerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 921322F2680A7D27A742491B /* DeliveredNotificationCleanerTests.swift */; };
 		FDEBB1AB1EACB0E1029DC6DD /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 326445DDD8708439602DE414 /* ConversationView.swift */; };
@@ -842,6 +843,7 @@
 		8AA1A9DC89B1B377FCD45950 /* LinkPreviewHead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewHead.swift; sourceTree = "<group>"; };
 		8ADA11CACE298D38E00B7372 /* HausXMPPMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HausXMPPMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BBAF79A1300DD08A16F1B62 /* MacAttachmentTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAttachmentTray.swift; sourceTree = "<group>"; };
+		8C49529BCF13D0E7E6D6F1E0 /* JumpToNewestButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JumpToNewestButton.swift; sourceTree = "<group>"; };
 		8D3E9557976E9312C2E16874 /* ComposerSendTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerSendTextTests.swift; sourceTree = "<group>"; };
 		8EA646B2D3BEC5BEF134632A /* Typing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typing.swift; sourceTree = "<group>"; };
 		8EF039A38BC671DF02393E41 /* PreviousVersionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviousVersionViews.swift; sourceTree = "<group>"; };
@@ -1439,6 +1441,7 @@
 				64553F11D282035E206DBCE1 /* GroupJoinView.swift */,
 				2816754130CFCCD50BC0B19E /* HausXMPPApp.swift */,
 				E160244791260F63C8CEF3B6 /* Info.plist */,
+				8C49529BCF13D0E7E6D6F1E0 /* JumpToNewestButton.swift */,
 				78365EB9C0FD315465BADD51 /* KeyRecovery.swift */,
 				429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */,
 				CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */,
@@ -1993,6 +1996,7 @@
 				346851E8F1AB356F12B683AF /* GroupJoinView.swift in Sources */,
 				C387F76E617B284E3BFA4AE3 /* GroupMailbox.swift in Sources */,
 				616A12EE27893BF18D827676 /* HausXMPPApp.swift in Sources */,
+				FDA9556C8F03AC2C58CD0D38 /* JumpToNewestButton.swift in Sources */,
 				1E75E35902DA72E991C2D25C /* KeyRecovery.swift in Sources */,
 				25322A9E1808973855DE6B10 /* KeyRecoveryView.swift in Sources */,
 				31556A85ACB8EA6B64AB1606 /* KeychainQuery.swift in Sources */,

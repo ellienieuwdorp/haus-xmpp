@@ -10,6 +10,9 @@ struct TimelineViewport: Equatable {
     var minimumOffset: CGFloat { -insetTop }
     var maximumOffset: CGFloat { max(minimumOffset, contentHeight - height + insetBottom) }
     var distanceFromTop: CGFloat { offset + insetTop }
+    var distanceFromBottom: CGFloat { maximumOffset - offset }
+    // Between the bars and the composer.
+    var visibleHeight: CGFloat { max(0, height - insetTop - insetBottom) }
     var isNearBottom: Bool { contentHeight + insetBottom - offset - height < TimelineScrollPolicy.nearBottomDistance }
 
     func clamped(_ value: CGFloat) -> CGFloat { min(maximumOffset, max(minimumOffset, value)) }
@@ -110,6 +113,11 @@ extension TimelineScrollPolicy {
 
     static func showsJumpToNewest(distanceFromBottom: CGFloat, viewportHeight: CGFloat) -> Bool {
         distanceFromBottom > max(nearBottomDistance, viewportHeight / 2)
+    }
+
+    // The iPhone's: a list that follows the newest message is on its way there.
+    static func showsJumpToNewest(in viewport: TimelineViewport, followsBottom: Bool) -> Bool {
+        !followsBottom && showsJumpToNewest(distanceFromBottom: viewport.distanceFromBottom, viewportHeight: viewport.visibleHeight)
     }
 
     struct PlacedRow: Equatable {
