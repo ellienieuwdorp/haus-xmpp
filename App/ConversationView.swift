@@ -314,17 +314,13 @@ struct ConversationView: View {
             }
         }
         .modifier(FixedNavigationBar())
-        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
-            get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
-        ), titleVisibility: .visible, presenting: retryMessageID) { id in
+        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", item: $retryMessageID,
+                            titleVisibility: .visible) { id in
             if retryIsImpossible {
-                Button("OK", role: .cancel) { retryMessageID = nil }
+                Button("OK", role: .cancel) {}
             } else {
-                Button("Send again") {
-                    Task { await model.retryMessage(id) }
-                    retryMessageID = nil
-                }
-                Button("Cancel", role: .cancel) { retryMessageID = nil }
+                Button("Send again") { Task { await model.retryMessage(id) } }
+                Button("Cancel", role: .cancel) {}
             }
         } message: { id in
             if retryIsImpossible {
@@ -335,15 +331,12 @@ struct ConversationView: View {
                 Text("The recipient may already have it. Sending again could create a duplicate.")
             }
         }
-        .confirmationDialog("Unsend this message?", isPresented: Binding(
-            get: { unsendMessageID != nil }, set: { if !$0 { unsendMessageID = nil } }
-        ), titleVisibility: .visible, presenting: unsendMessageID) { id in
+        .confirmationDialog("Unsend this message?", item: $unsendMessageID, titleVisibility: .visible) { id in
             Button("Unsend", role: .destructive) {
                 Task { await model.unsend(messageID: id) }
                 if editing?.id == id { cancelEditing() }
-                unsendMessageID = nil
             }
-            Button("Cancel", role: .cancel) { unsendMessageID = nil }
+            Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
