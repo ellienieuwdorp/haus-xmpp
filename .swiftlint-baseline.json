@@ -4642,12 +4642,6 @@
   ]
  },
  "Packages/MessagingCore/Sources/MessagingCore/NotificationPlanner.swift": {
-  "function_body_length": [
-   [
-    "public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true) -> NotificationPlan {",
-    62
-   ]
-  ],
   "function_parameter_count": [
    [
     "private static func communication(accountID: String, thread: String, chatName: String, chatAvatarHash: String?, isGroup: Bool,",
@@ -5291,7 +5285,7 @@
   "cyclomatic_complexity": [
    [
     "private func receiveLocked(account: String, message: XMPPEncryptedMessage, sentAt: Date?, transport: any OMEMOTransport) async throws -> Bool {",
-    37
+    36
    ],
    [
     "public func retryPendingIncoming(account: String, transport: any OMEMOTransport,",
@@ -5355,10 +5349,6 @@
    ],
    [
     "guard selected.profiles[update.chatID] == profile else { throw update.kind == .retraction || update.kind == .correction ? OMEMOError.unsupportedMessageUpdate : .unsupportedEncryptedReactions }",
-    0
-   ],
-   [
-    "guard try await recordDecryptFailure(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt) else { return false }",
     0
    ],
    [
@@ -5791,7 +5781,7 @@
   "file_length": [
    [
     "",
-    1495
+    1454
    ]
   ],
   "force_unwrapping": [
@@ -5843,10 +5833,6 @@
    ],
    [
     "do { _ = try await f.b.receive(account: f.bob, message: f.message(unknown, id: \"second\"), transport: OfflineTransport()); XCTFail(\"Device unknown\") } catch {}",
-    0
-   ],
-   [
-    "do { _ = try await f.b.receive(account: f.bob, message: message, transport: CountingTransport(base: f.bTransport, log: log)); XCTFail(\"A new identity decrypted under the old approval\") }",
     0
    ],
    [
@@ -5922,10 +5908,6 @@
     0
    ],
    [
-    "let xml = \"<envelope xmlns='urn:xmpp:sce:1'><content><body xmlns='jabber:client'>Not really Alice</body></content><rpad>padding</rpad><from jid='alice@localhost'/><to jid='bob@localhost'/></envelope>\"",
-    0
-   ],
-   [
     "private func expectNotEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotEqual(a, b, file: file, line: line) }",
     0
    ]
@@ -5983,7 +5965,7 @@
   "type_body_length": [
    [
     "final class ServiceTests: XCTestCase {",
-    1267
+    1226
    ]
   ],
   "unneeded_throws_rethrows": [
