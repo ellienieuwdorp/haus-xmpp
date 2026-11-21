@@ -1035,7 +1035,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.backgroundColor = .clear
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
-        textView.textContainerInset = .init(top: 10, left: 12, bottom: 3, right: 12)
+        textView.textContainerInset = .init(top: 10, left: 12, bottom: Self.textBottomInset, right: 12)
         textView.textContainer.lineFragmentPadding = 0
         // Links are found once by LinkDetection (shared with the Mac and the preview rules) and drawn as attributes; the
         // view stays non-interactive and the bubble hit-tests them, so selection, the menu and the reply swipe keep working.
@@ -1158,6 +1158,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             linkCard.fit(width: width - 2 * LinkPreviewCardView.bubbleInset)
         }
         bubbleWidth.constant = width
+        fitFooterToLastLine()
         fitReactions(cellWidth: layoutAttributes.size.width)
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
@@ -1629,7 +1630,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let text: UIColor = message.isOutgoing ? theme.bubbleText : .label
         let meta: UIColor = message.isOutgoing ? theme.bubbleText.withAlphaComponent(0.75) : .secondaryLabel
         bubble.backgroundColor = message.isOutgoing ? theme.bubble : Self.incomingBubble
-        textView.textColor = text
         quote.backgroundColor = theme.panelFill(outgoing: message.isOutgoing)
         quoteBar.backgroundColor = message.isOutgoing ? theme.bubbleText : theme.tint
         quoteAuthor.textColor = text
@@ -1690,6 +1690,20 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         status.tintColor = meta
         status.show(message.statusGlyph)
         setNeedsLayout()
+    }
+}
+
+extension MessageBubbleCell {
+    private static let textBottomInset: CGFloat = 3
+
+    // TextKit adds the font's leading below the last line, so it comes out of the gap to the footer: a font that
+    // carries leading sits as close to the time row as one that does not. Measured while sizing, after a Dynamic Type
+    // change has given the text view its new font.
+    private func fitFooterToLastLine() {
+        let leading = max(0, textView.font?.leading ?? 0)
+        let inset = max(0, Self.textBottomInset - leading)
+        if textView.textContainerInset.bottom != inset { textView.textContainerInset.bottom = inset }
+        footerAfterText.constant = textView.isHidden ? 0 : min(0, Self.textBottomInset - leading)
     }
 }
 

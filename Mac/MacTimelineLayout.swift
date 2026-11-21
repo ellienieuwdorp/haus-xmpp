@@ -343,7 +343,9 @@ final class MacRowMeasurer: @unchecked Sendable {
         if input.hasText {
             let size = measureText(input.text, width: contentWidth)
             textFrame = CGRect(x: bubbleX + M.bubblePaddingH, y: inner, width: contentWidth, height: size.height)
-            inner += size.height + M.partSpacing
+            // TextKit adds the font's leading below the last line; the footer moves up into it, so a font that carries
+            // leading sits as close to the time row as one that does not.
+            inner += size.height - max(0, metrics.body.leading) + M.partSpacing
         }
         let footerFrame = CGRect(x: bubbleX + M.bubblePaddingH, y: inner, width: contentWidth, height: footerHeight)
         let bubbleFrame = CGRect(x: bubbleX, y: bubbleTop, width: bubbleWidth, height: footerFrame.maxY + M.bubbleBottom - bubbleTop)
