@@ -775,7 +775,7 @@
   "file_length": [
    [
     "",
-    742
+    741
    ]
   ],
   "line_length": [
@@ -789,10 +789,6 @@
    ],
    [
     "Text(messages.isEmpty ? \"No results in this conversation\" : \"\\(messages.count) \\(messages.count == 1 ? \"message\" : \"messages\") found\")",
-    0
-   ],
-   [
-    "if !model.isDemo { NavigationLink(value: encryptionRoute) { Label(isGroup ? \"Group details\" : \"Encryption\", systemImage: isGroup ? \"person.2\" : \"lock.shield\") } }",
     0
    ],
    [

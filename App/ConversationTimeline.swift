@@ -135,6 +135,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
         // Clear: the container paints the chat background once.
         collectionView.backgroundColor = .clear
+        // The bar has no background, so this edge is all that dissolves the messages; on iOS 27 automatic is not soft.
+        collectionView.topEdgeEffect.style = .soft
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.delegate = self
@@ -147,7 +149,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(at: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
-        collectionView.frame = container.bounds
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(collectionView)
         // SwiftUI's banner bar is invisible to UIKit, so this clear, touch-transparent container spans bar plus banners

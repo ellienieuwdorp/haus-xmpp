@@ -81,7 +81,7 @@ final class ConversationUITests: XCTestCase {
         }
 
         XCTContext.runActivity(named: "Search reaches past the loaded pages") { _ in
-            app.buttons["Conversation options"].tap()
+            app.openConversationOptions()
             app.buttons["Search messages"].tap()
             let search = app.searchFields["messageSearch"]
             XCTAssertTrue(search.waitForExistence(timeout: 4))
