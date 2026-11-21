@@ -150,6 +150,8 @@ targets:
           - ComposerIntake.swift
           - ConversationTimeline.swift
           - ComposerDock.swift
+          - JumpToNewestButton.swift
+          - LoadingEarlierCell.swift
           - ConversationSearchBar.swift
           - DateChipView.swift
           - MessageActionsOverlay.swift

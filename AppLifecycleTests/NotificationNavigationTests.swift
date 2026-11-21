@@ -16,4 +16,17 @@ import MessagingCore
         let buffered = await iterator.next()
         XCTAssertEqual(buffered, latest)
     }
+
+    // A chat is pushed; its details, and the pages under them, open in a sheet over it with that page already pushed.
+    func testARouteToAChatsPageOpensItsDetailsWithThatPageOnTop() throws {
+        XCTAssertNil(ChatDetailsRequest(.chat("alex@example.org")))
+        let details = try XCTUnwrap(ChatDetailsRequest(.details("alex@example.org")))
+        XCTAssertEqual(details.chatID, "alex@example.org")
+        XCTAssertEqual(details.path, [])
+        for page in [ChatRoute.encryption("alex@example.org"), .groupDetails("trail@rooms.example.org")] {
+            let request = try XCTUnwrap(ChatDetailsRequest(page))
+            XCTAssertEqual(request.path, [page])
+        }
+        XCTAssertEqual(ChatDetailsRequest(.groupDetails("trail@rooms.example.org"))?.chatID, "trail@rooms.example.org")
+    }
 }

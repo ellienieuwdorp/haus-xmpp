@@ -100,7 +100,7 @@ struct PendingAttachment: Identifiable {
 struct ConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
-    // Still in the navigation path: a pushed details screen hides the chat without leaving it.
+    // Still in the navigation path: a chat pushed over this one hides it without leaving it.
     let routed: () -> Bool
     @State private var composerState = ComposerState()
     @State private var showingPhotoPicker = false
@@ -118,8 +118,10 @@ struct ConversationView: View {
     @State private var reviewDismissed = false
     @State private var bannerHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.chatBehindDetails) private var chatBehindDetails
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var underDetails: Bool { chatBehindDetails == chatID }
     private var title: String { model.chatName(for: chatID) }
     private var isGroup: Bool { model.isGroup(chatID) }
     @State private var lastSeenClock = Date.now
@@ -236,7 +238,7 @@ struct ConversationView: View {
             }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onReport: { id in
                 composerState.focused = false
                 blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
-            }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
+            }, onOpenEncryption: { showDetails(encryptionRoute) }, onDisplayed: { id in
                 guard presenter.marksDisplayed(id) else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.showKeyboard() }, onReachTop: { Task { await model.loadOlderMessages() } },
@@ -252,7 +254,7 @@ struct ConversationView: View {
                 return true
             },
             // Without "+" (a group, or a server with no upload service) there is no panel to warm up.
-            attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard)
+            attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard, covered: underDetails)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: [.top, .bottom])
@@ -278,7 +280,7 @@ struct ConversationView: View {
         // bubble stays: pinning the bar's scheme left a black title on the dimmed accent.
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(value: ChatRoute.details(chatID)) {
+                Button { showDetails(.details(chatID)) } label: {
                     // Name only: trust lives in Chat Details and the review card, so the header never flickers.
                     ConversationHeaderPill(
                         avatar: ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup,
@@ -314,17 +316,13 @@ struct ConversationView: View {
             }
         }
         .modifier(FixedNavigationBar())
-        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
-            get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
-        ), titleVisibility: .visible, presenting: retryMessageID) { id in
+        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", item: $retryMessageID,
+                            titleVisibility: .visible) { id in
             if retryIsImpossible {
-                Button("OK", role: .cancel) { retryMessageID = nil }
+                Button("OK", role: .cancel) {}
             } else {
-                Button("Send again") {
-                    Task { await model.retryMessage(id) }
-                    retryMessageID = nil
-                }
-                Button("Cancel", role: .cancel) { retryMessageID = nil }
+                Button("Send again") { Task { await model.retryMessage(id) } }
+                Button("Cancel", role: .cancel) {}
             }
         } message: { id in
             if retryIsImpossible {
@@ -335,15 +333,12 @@ struct ConversationView: View {
                 Text("The recipient may already have it. Sending again could create a duplicate.")
             }
         }
-        .confirmationDialog("Unsend this message?", isPresented: Binding(
-            get: { unsendMessageID != nil }, set: { if !$0 { unsendMessageID = nil } }
-        ), titleVisibility: .visible, presenting: unsendMessageID) { id in
+        .confirmationDialog("Unsend this message?", item: $unsendMessageID, titleVisibility: .visible) { id in
             Button("Unsend", role: .destructive) {
                 Task { await model.unsend(messageID: id) }
                 if editing?.id == id { cancelEditing() }
-                unsendMessageID = nil
             }
-            Button("Cancel", role: .cancel) { unsendMessageID = nil }
+            Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
@@ -358,7 +353,8 @@ struct ConversationView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { joiningGroup = nil } } }
             }
         }
-        .onChange(of: model.conversationIntent) { _, intent in
+        // Search focuses its field, which it can only do once the details sheet has gone.
+        .onChange(of: underDetails ? nil : model.conversationIntent) { _, intent in
             switch intent {
             case .search(let id) where id == chatID: model.conversationIntent = nil; composerState.focused = false; showingSearch = true
             case .starred(let id) where id == chatID: model.conversationIntent = nil; starredOnly = true
@@ -401,13 +397,20 @@ struct ConversationView: View {
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
-    // Buttons, not navigation links: the system overflow menu is a UIKit menu, and a route request pushes from either.
+    // Buttons, not navigation links: the system overflow menu is a UIKit menu, and a route request presents from either.
     @ViewBuilder private var conversationOptions: some View {
         Button("Search messages", systemImage: "magnifyingglass") { composerState.focused = false; showingSearch = true }
         Button("Starred messages", systemImage: "star") { starredOnly = true }
         if !model.isDemo {
-            Button(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") { model.requestRoute(encryptionRoute) }
+            Button(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") { showDetails(encryptionRoute) }
         }
+    }
+
+    // The details sheet leaves the chat on screen, so nothing puts the keyboard or the attachment panel away for it.
+    private func showDetails(_ route: ChatRoute) {
+        composerState.closeAttachments()
+        composerState.focused = false
+        model.requestRoute(route)
     }
 
     private var showsReview: Bool { !model.isDemo && (model.encryptionNeedsReview || model.encryptionIncomingReview) && !reviewDismissed }
@@ -473,7 +476,7 @@ struct ConversationView: View {
                 }
             }
             HStack(spacing: 8) {
-                NavigationLink(value: encryptionRoute) { Text("Review device").frame(maxWidth: .infinity).padding(.vertical, 4) }
+                Button { showDetails(encryptionRoute) } label: { Text("Review device").frame(maxWidth: .infinity).padding(.vertical, 4) }
                     .buttonStyle(.borderedProminent)
                 Button { reviewDismissed = true } label: { Text("Later").frame(maxWidth: .infinity).padding(.vertical, 4) }
                     .buttonStyle(.bordered)

@@ -114,6 +114,50 @@ final class TimelinePositionTests: XCTestCase {
         }
     }
 
+    // The threshold is `TimelineScrollPolicyTests`'; this checks the controller asks with its own position and follow
+    // state, and that the button lands on the newest message.
+    func testTheJumpButtonShowsUpInHistoryAndReturnsToTheNewestMessage() throws {
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        XCTAssertFalse(controller.showsJumpToNewest, "a chat opens at its newest message")
+        collectionView.contentOffset.y -= 2000
+        collectionView.layoutIfNeeded()
+        XCTAssertFalse(controller.showsJumpToNewest, "a programmatic move leaves the list following")
+        let reader = ReaderScroll()
+        reader.fingerDown = true
+        collectionView.delegate?.scrollViewDidScroll?(reader)
+        XCTAssertTrue(controller.showsJumpToNewest, "the reader scrolled into history")
+
+        controller.jumpToNewest()
+        let bottom = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+        XCTAssertEqual(collectionView.contentOffset.y, bottom, accuracy: 0.5)
+        XCTAssertFalse(controller.showsJumpToNewest)
+        let newest = try XCTUnwrap(dataSource?.indexPath(for: "m100"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(newest))
+    }
+
+    // While a sheet covers the chat nothing counts as read; what is on screen when it closes does.
+    func testNothingCountsAsDisplayedWhileTheChatIsCovered() throws {
+        var displayed: Set<String> = []
+        var shown = messages(1...3)
+        let show = { self.controller.update(messages: shown, onToggleStar: { _ in }, onDisplayed: { displayed.insert($0) }) }
+        show()
+        collectionView.layoutIfNeeded()
+        XCTAssertTrue(displayed.contains("m2"), "received messages on screen are displayed")
+
+        controller.setCovered(true)
+        displayed = []
+        shown.append(TimelineMessage(id: "arrived", body: "While the details were open", isOutgoing: false, isStarred: false))
+        show()
+        collectionView.layoutIfNeeded()
+        let arrived = try XCTUnwrap(dataSource?.indexPath(for: "arrived"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(arrived))
+        XCTAssertTrue(displayed.isEmpty, "\(displayed)")
+
+        controller.setCovered(false)
+        XCTAssertTrue(displayed.contains("arrived"))
+        XCTAssertFalse(displayed.contains("m3"), "an own message is never marked")
+    }
+
     func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })

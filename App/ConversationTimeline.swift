@@ -33,6 +33,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onOpenChat: (String) -> Void = { _ in }
     var onOpenGroup: (String) -> Bool = { _ in false }
     var attachmentKeyboard: AttachmentKeyboard? = nil
+    // A sheet over the chat: its messages are not being read meanwhile.
+    var covered = false
     // Observed so a stored accent change re-renders visible bubbles.
     private var accent: String { AccentTheme.current.rawValue }
 
@@ -51,6 +53,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         controller.onOpenGroup = onOpenGroup
         controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onReport: onReport,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
+        controller.setCovered(covered)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
         controller.attachmentKeyboard = attachmentKeyboard
@@ -91,7 +94,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
-    private var followsBottom = true
+    private var followsBottom = true { didSet { updateJumpToNewest() } }
+    private let jump = JumpToNewestControl()
+    private var covered = false
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
     private let composerDock = ComposerDock()
     var onRestoreComposerFocus: () -> Void = {}
@@ -427,6 +432,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         reservedPopGesture = nil
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        jump.install(in: self, container: view, riding: composerHost.view) { [weak self] in self?.jumpToNewest() }
+    }
+
     // After the push settles, so the first "+" finds the panel built.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -454,6 +464,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
         composerDock.edge.isHidden = composer == nil
+        jump.ridesComposer(composer != nil)
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.
         if let composer {
@@ -535,7 +546,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
         if row.message.wantsLinkPreview { onLinkPreviewDisplayed(id) }
         if let attachment = row.message.attachment, attachment.localURL == nil, !row.message.showsPlaceholder { onAttachmentDisplayed(id) }
-        guard !row.message.isOutgoing else { return }
+        guard !row.message.isOutgoing, !covered else { return }
         onDisplayed(id)
     }
 
@@ -552,6 +563,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         if abs(collectionView.safeAreaInsets.bottom - knownSafeBottom) < 0.5 { recordBottomEdge() }
         // Before the guard: page loads and inset changes move a chip that is already up, without ever raising it.
         updateDateChip()
+        updateJumpToNewest()
         // Deceleration crawls for a second or more below a point a frame; the chip's second starts when the eye sees rest.
         if scrollView.isDecelerating, abs(scrollView.contentOffset.y - dateChipMovingY) >= 0.5 {
             dateChipMovingY = scrollView.contentOffset.y
@@ -722,7 +734,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     // A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
     private func followBottom() { if !sliding { scrollToBottom() } }
+}
 
+extension ConversationTimelineController {
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height. A cell that
         // self-sizes as it comes on screen changes that height again, so settle until it holds (usually at once).
@@ -739,6 +753,32 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         recordBottomEdge()
     }
 
+    var showsJumpToNewest: Bool { jump.isShown }
+
+    // Every assignment to `followsBottom` comes after the view loaded.
+    private func updateJumpToNewest() {
+        jump.show(TimelineScrollPolicy.showsJumpToNewest(in: viewport, followsBottom: followsBottom))
+    }
+
+    // A jump, as on the Mac: a slide from up in history would cross cells that were never drawn.
+    func jumpToNewest() {
+        followsBottom = true
+        scrollToBottom()
+        // VoiceOver's focus was on the button, which goes; it lands on the newest message instead.
+        guard UIAccessibility.isVoiceOverRunning, let id = rows.last?.message.id, let path = dataSource.indexPath(for: id) else { return }
+        UIAccessibility.post(notification: .layoutChanged, argument: collectionView.cellForItem(at: path))
+    }
+
+    // Nothing counts as read while another screen covers the chat; what is on screen when it uncovers does.
+    func setCovered(_ covered: Bool) {
+        guard covered != self.covered else { return }
+        self.covered = covered
+        guard !covered, isViewLoaded else { return }
+        for path in collectionView.indexPathsForVisibleItems.sorted() {
+            guard let id = dataSource.itemIdentifier(for: path), rowsByID[id]?.message.isOutgoing == false else { continue }
+            onDisplayed(id)
+        }
+    }
 }
 
 @MainActor
@@ -1035,7 +1075,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.backgroundColor = .clear
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
-        textView.textContainerInset = .init(top: 10, left: 12, bottom: 3, right: 12)
+        textView.textContainerInset = .init(top: 10, left: 12, bottom: Self.textBottomInset, right: 12)
         textView.textContainer.lineFragmentPadding = 0
         // Links are found once by LinkDetection (shared with the Mac and the preview rules) and drawn as attributes; the
         // view stays non-interactive and the bubble hit-tests them, so selection, the menu and the reply swipe keep working.
@@ -1158,6 +1198,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             linkCard.fit(width: width - 2 * LinkPreviewCardView.bubbleInset)
         }
         bubbleWidth.constant = width
+        fitFooterToLastLine()
         fitReactions(cellWidth: layoutAttributes.size.width)
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
@@ -1629,7 +1670,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let text: UIColor = message.isOutgoing ? theme.bubbleText : .label
         let meta: UIColor = message.isOutgoing ? theme.bubbleText.withAlphaComponent(0.75) : .secondaryLabel
         bubble.backgroundColor = message.isOutgoing ? theme.bubble : Self.incomingBubble
-        textView.textColor = text
         quote.backgroundColor = theme.panelFill(outgoing: message.isOutgoing)
         quoteBar.backgroundColor = message.isOutgoing ? theme.bubbleText : theme.tint
         quoteAuthor.textColor = text
@@ -1693,49 +1733,17 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 }
 
-final class LoadingEarlierCell: UICollectionViewCell {
-    static let label = "Loading earlier messages"
-    private let spinner = UIActivityIndicatorView(style: .medium)
-    private let text = UILabel()
+extension MessageBubbleCell {
+    private static let textBottomInset: CGFloat = 3
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        spinner.hidesWhenStopped = false
-        spinner.color = .secondaryLabel
-        text.text = Self.label + "…"
-        text.font = .preferredFont(forTextStyle: .footnote)
-        text.adjustsFontForContentSizeCategory = true
-        text.textColor = .secondaryLabel
-        text.numberOfLines = 0
-        text.textAlignment = .center
-        let row = UIStackView(arrangedSubviews: [spinner, text])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = 8
-        row.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(row)
-        let height = contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
-        NSLayoutConstraint.activate([
-            height,
-            row.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            row.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            row.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
-            row.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 8),
-        ])
-        isAccessibilityElement = true
-        accessibilityLabel = Self.label
-        accessibilityTraits = [.updatesFrequently]
-        accessibilityIdentifier = "timeline.loadingEarlier"
-        spinner.startAnimating()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    func startAnimating() { spinner.startAnimating() }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window != nil { spinner.startAnimating() }
+    // TextKit adds the font's leading below the last line, so it comes out of the gap to the footer: a font that
+    // carries leading sits as close to the time row as one that does not. Measured while sizing, after a Dynamic Type
+    // change has given the text view its new font.
+    private func fitFooterToLastLine() {
+        let leading = max(0, textView.font?.leading ?? 0)
+        let inset = max(0, Self.textBottomInset - leading)
+        if textView.textContainerInset.bottom != inset { textView.textContainerInset.bottom = inset }
+        footerAfterText.constant = textView.isHidden ? 0 : min(0, Self.textBottomInset - leading)
     }
 }
 
